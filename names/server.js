@@ -325,13 +325,22 @@ async function settleLoop() {
     }
   }
 }
-// retry queued forwards (e.g. after the float is topped up)
+// retry queued forwards (e.g. after the float is topped up). Each failure
+// backs off exponentially (1m → 1h cap): a stuck forward must not fire an
+// offer request — and push-wake the recipient's devices — every minute
+// forever.
 setInterval(async () => {
   const q = state.pending || [];
   if (!q.length || !fwd) return;
   const still = [];
   for (const p of q) {
-    try { await forward(p.name, p.sat); } catch { still.push(p); }
+    if (p.next && Date.now() < p.next) { still.push(p); continue; }
+    try { await forward(p.name, p.sat); }
+    catch {
+      p.tries = (p.tries || 0) + 1;
+      p.next = Date.now() + Math.min(3_600_000, 60_000 * 2 ** Math.min(p.tries - 1, 6));
+      still.push(p);
+    }
   }
   state.pending = still;
   persist();

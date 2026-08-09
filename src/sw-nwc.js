@@ -86,8 +86,13 @@ self.addEventListener('push', (e) => {
       return;
     }
     if (handled) return;
-    await self.registration.showNotification('Payment request', {
-      body: 'An app is asking your wallet to pay. Open Coinos to approve.',
+    // A kind-21001 offer request is money coming IN (someone asking us to
+    // mint an invoice) — "an app wants to pay" would read as the opposite.
+    const incoming = data.event && data.event.kind === 21001;
+    await self.registration.showNotification(incoming ? 'Incoming payment' : 'Payment request', {
+      body: incoming
+        ? 'Someone is trying to send you money. Open coinos so your wallet can receive it.'
+        : 'An app is asking your wallet to pay. Open Coinos to approve.',
       icon: 'icon-192.png', badge: 'icon-192.png',
       tag: 'nwc-' + (data.servicePubkey || 'req'), renotify: false,
       data: { url: './' },

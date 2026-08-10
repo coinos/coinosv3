@@ -350,9 +350,11 @@ export class ArkManager {
         if (action.type === 'ln-recv') await this._driveLnRecv(action);
         if (action.lastError) { delete action.lastError; this._save(); }
       } catch (e) {
-        // transient errors leave the action where it is; a later sync retries
-        if (!(e instanceof GrpcError)) throw e;
-        if (action.type.startsWith('ln-')) { action.lastError = e.message; this._save(); }
+        // transient errors leave the action where it is; a later sync retries.
+        // Recorded and swallowed for EVERY type: one broken action rethrowing
+        // here would starve everything queued behind it, forever and silently.
+        action.lastError = e.message;
+        this._save();
       }
     }
   }
@@ -1209,10 +1211,14 @@ export class ArkManager {
     if (action.step === 'created') return; // waiting for funding txid
     const keys = this._key(action.keyIndex);
     if (action.step === 'funded') {
+      const need = this.info.requiredBoardConfirmations;
       const status = await this.chain.getTxStatus(action.fundingTxid);
-      if (!status?.confirmed) return; // wait for confirmations; retried on sync
-      const tip = await this.chain.tipHeight();
-      if (tip - status.block_height + 1 < this.info.requiredBoardConfirmations) return;
+      // record progress so the UI can say WHERE the wait is (n/need confs)
+      const confs = status?.confirmed ? (await this.chain.tipHeight()) - status.block_height + 1 : 0;
+      if (confs !== action.confs || need !== action.needConfs) { action.confs = confs; action.needConfs = need; this._save(); }
+      // NB not `confs < need`: a failed tip fetch makes confs NaN, which must
+      // wait for the next sync rather than slip past the comparison
+      if (!(confs >= need)) return; // retried on sync
 
       const fundingOutpointRaw = new Uint8Array(36);
       fundingOutpointRaw.set(hex.decode(action.fundingTxid).reverse(), 0); // vout 0

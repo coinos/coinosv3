@@ -2098,16 +2098,28 @@ export function arkFeature(ctx) {
       const b = arkBalance();
       if (!b) return [];
       // Money mid-move: it has left Saving but hasn't landed in Spending, so
-      // say where it went rather than letting it vanish for a confirmation.
-      return b.boardingSat > 0 ? [{ label: t('movingLabel'), sat: b.boardingSat }] : [];
+      // say where it went rather than letting it vanish for a confirmation —
+      // with the confirmation count, so the wait has a visible reason.
+      if (!(b.boardingSat > 0)) return [];
+      const a = ((arkStateNow() || {}).actions || []).find(
+        (x) => x.type === 'board' && x.fundingTxid && !['done', 'failed'].includes(x.step) && x.needConfs);
+      const prog = a ? ` · ${Math.min(a.confs || 0, a.needConfs)}/${a.needConfs}` : '';
+      return [{ label: t('movingLabel') + prog, sat: b.boardingSat }];
     },
     walletNotices() {
-      if (!arkRenewWarn || wallet.watchOnly) return [];
-      return [h('div', { class: 'notice err', style: 'margin:12px 0 0' },
+      const out = [];
+      // A pending move that keeps erroring would otherwise wait in silence.
+      for (const a of ((arkStateNow() || {}).actions || [])) {
+        if (a.type === 'board' && a.lastError && !['done', 'failed'].includes(a.step))
+          out.push(h('div', { class: 'notice err', style: 'margin:12px 0 0' },
+            t('arkBoardStuck', { error: a.lastError })));
+      }
+      if (arkRenewWarn && !wallet.watchOnly) out.push(h('div', { class: 'notice err', style: 'margin:12px 0 0' },
         t('arkRenewWarn', {
           amount: fmtAmount(arkRenewWarn.sat) + ' ' + unitLabel(),
           date: new Date(arkRenewWarn.deadlineMs).toLocaleDateString(),
-        }))];
+        })));
+      return out;
     },
     decorateTxRow(tx) {
       const s = arkStateNow();

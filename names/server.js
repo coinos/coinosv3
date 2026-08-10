@@ -218,6 +218,9 @@ if (CFG.forwarder?.mnemonic) {
     },
     arkUrl: CFG.forwarder.ark, esploraUrl: CFG.forwarder.esplora, network: CFG.forwarder.network || 'mainnet',
   }).init();
+  // Read the mailbox before reporting: a top-up sent while we were down (or
+  // between syncs) lives there, and balance() only counts what state has seen.
+  await fwd.sync().catch(() => {});
   log(`forwarder ark wallet ready — float ${fwd.balance().spendableSat} sat, receive ${fwd.address().slice(0, 24)}…`);
 }
 
@@ -332,6 +335,9 @@ async function settleLoop() {
 setInterval(async () => {
   const q = state.pending || [];
   if (!q.length || !fwd) return;
+  // a float top-up arrives as ark mail; without this the queue would keep
+  // failing on a balance that's already been refilled
+  await fwd.sync().catch(() => {});
   const still = [];
   for (const p of q) {
     if (p.next && Date.now() < p.next) { still.push(p); continue; }

@@ -573,23 +573,29 @@ function unitTag(cls = '') {
 }
 
 // ================================================================ UNLOCK
+// The create/import card on its own — the unlock screen wraps it in the
+// classic chrome, the onboarding wizard's "Get started" step shows it bare.
+function unlockCard() {
+  return h(
+    'div',
+    { class: 'card col' },
+    h(
+      'div',
+      { class: 'tabs' },
+      tabBtn(t('createNew'), ui.unlockTab === 'create', () => { ui.unlockTab = 'create'; ui.unlockError = ''; render(); }),
+      tabBtn(t('importExisting'), ui.unlockTab === 'import', () => { ui.unlockTab = 'import'; ui.unlockError = ''; render(); })
+    ),
+    ui.unlockTab === 'create' ? createPane() : importPane(),
+    ui.unlockError && h('div', { class: 'notice err' }, ui.unlockError)
+  );
+}
+
 function unlockScreen() {
   return h(
     'div',
     { class: 'col', style: 'gap:16px' },
     brandHeader(false),
-    h(
-      'div',
-      { class: 'card col' },
-      h(
-        'div',
-        { class: 'tabs' },
-        tabBtn(t('createNew'), ui.unlockTab === 'create', () => { ui.unlockTab = 'create'; ui.unlockError = ''; render(); }),
-        tabBtn(t('importExisting'), ui.unlockTab === 'import', () => { ui.unlockTab = 'import'; ui.unlockError = ''; render(); })
-      ),
-      ui.unlockTab === 'create' ? createPane() : importPane(),
-      ui.unlockError && h('div', { class: 'notice err' }, ui.unlockError)
-    ),
+    unlockCard(),
     featureHook('unlockExtra'),
     ui.fromWallet && accounts.length
       ? h('button', { class: 'btn-ghost btn-block', onClick: () => { ui.fromWallet = false; ui.screen = 'wallet'; ui.unlockError = ''; render(); } }, t('back'))
@@ -2137,20 +2143,27 @@ function vaultScreen() {
 }
 
 // ================================================================ onboarding
-// First visit on a fresh device: a full-screen wizard — welcome, nostr
-// yes/no (sign in or silently mint a wallet), username, avatar, confetti —
-// then a three-stop coach-mark tour of the home screen. Shown whenever the
-// device has no wallet — deleting every wallet brings it back.
-// The wizard mints the wallet on its first step, so "an account exists" stops
-// meaning "wizard done". The current step is persisted so a refresh (or the
-// legacy-migration round trip) resumes exactly where it left off instead of
-// dropping into the half-set-up wallet.
+// First visit on a fresh device: a full-screen wizard — welcome, then either
+// create/import a seed or sign in with nostr — that ends the moment a wallet
+// exists, dropping the user into their on-chain Savings account and the
+// three-stop coach-mark tour. Naming yourself no longer gates the door: once
+// the tour is over (or skipped), an optional "set up a spending account"
+// prompt offers the username claim, avatar, and confetti. Shown whenever the
+// device has no wallet — deleting every wallet brings it back. The current
+// step is persisted so a refresh (or the legacy-migration round trip) resumes
+// exactly where it left off.
 const ONB_STEP_KEY = 'btc-wallet-onb-step';
+// Queued when the wizard hands over to the wallet, consumed when the tour
+// ends — so the spending prompt survives a mid-tour refresh.
+const SPEND_PROMPT_KEY = 'btc-wallet-spend-prompt';
 function onbInProgress() {
   try { return !!localStorage.getItem(ONB_STEP_KEY); } catch { return false; }
 }
+function spendPromptDue() {
+  try { return localStorage.getItem(SPEND_PROMPT_KEY) === '1'; } catch { return false; }
+}
 function shouldOnboard() {
-  return !ui.onbSkip && accounts.length === 0 && !hasVault();
+  return accounts.length === 0 && !hasVault();
 }
 
 const PUNK_PICKS = [7, 14, 21, 3, 33, 40, 47, 36, 61, 26, 12, 50];
@@ -2180,29 +2193,35 @@ function onboardScreen() {
     let saved = null;
     try { saved = localStorage.getItem(ONB_STEP_KEY); } catch {}
     // a saved step past wallet creation only makes sense if the wallet is here
-    if (saved && saved !== 'welcome' && saved !== 'signin' && !activeAccount()) saved = 'welcome';
+    if (saved && !['welcome', 'signin', 'seed'].includes(saved) && !activeAccount()) saved = 'welcome';
     ui.onb = { step: saved || 'welcome' };
     if (saved === 'signin') ui.nostrLoginOpen = true; // reopen the login card
   }
   const o = ui.onb;
-  // Steps that were waiting on something advance the moment it exists — unless
-  // the user explicitly stepped back from username (heldFor remembers which
-  // wallet they backed away from); only a different wallet re-advances then.
-  // A nostr login in flight holds the step: the wallet opens mid-login, but
-  // whether the wizard should end (a restored account) isn't known until the
-  // login finishes — advancing now flashes "Choose your username" at people
-  // who chose one long ago.
-  if ((o.step === 'welcome' || o.step === 'signin') && ui.screen === 'wallet' && activeAccount()
-      && activeAccount().id !== o.heldFor && !ui.nostrLoginBusy) {
-    o.step = 'username';
-    o.enterAddr = featureHook('namesAddress') || null;
+  // The wizard's whole job ends the moment a wallet exists: hand the user
+  // their on-chain Savings account with the tour running, and queue the
+  // optional spending-account prompt for after it. A nostr login in flight
+  // holds this: the wallet opens mid-login, but whether the wizard should
+  // even continue (a restored account has onboarded elsewhere) isn't known
+  // until the login finishes.
+  if ((o.step === 'welcome' || o.step === 'seed' || o.step === 'signin')
+      && ui.screen === 'wallet' && activeAccount() && !ui.nostrLoginBusy) {
+    ui.onb = null;
+    try { localStorage.removeItem(ONB_STEP_KEY); } catch {}
+    try { localStorage.setItem(SPEND_PROMPT_KEY, '1'); } catch {}
+    // Savings first: the wizard's promise is "your keys, your coins" — the
+    // on-chain account is where that story starts.
+    ui.account = 'savings';
+    try { localStorage.setItem(ACCOUNT_KEY, 'savings'); } catch {}
+    ui.tab = 'receive';
+    ui.tour = 0;
+    return null; // the caller falls through to the wallet itself
   }
-  if (o.step === 'username') {
+  if (o.step === 'spend') {
     const addr = featureHook('namesAddress');
     if (o.enterAddr === undefined) o.enterAddr = addr || null;
     // Only a real (custom) name advances by itself — the background
-    // auto-claim of the npub-shaped default just makes the Keep button
-    // appear. A restored login whose custom name recovers skips ahead too.
+    // auto-claim of the npub-shaped default doesn't count as setting up.
     if (addr && addr !== o.enterAddr && !/^npub1/.test(addr)) o.step = 'avatar';
   }
   try { localStorage.setItem(ONB_STEP_KEY, o.step); } catch {}
@@ -2236,7 +2255,7 @@ function onboardScreen() {
         class: 'btn-primary btn-block', style: 'padding:14px',
         disabled: !!o.legacyBusy, onClick: goLegacy,
       }, o.legacyBusy ? h('span', { class: 'spinner sm' }) : t('onbLegacyGo')),
-      h('button', { class: 'btn-block', style: 'padding:14px', onClick: () => { o.step = 'username'; render(); } },
+      h('button', { class: 'btn-block', style: 'padding:14px', onClick: () => { o.step = 'spend'; render(); } },
         o.wentToLegacy ? t('onbLegacyDone') : t('back')),
       ui.onbError ? h('div', { class: 'notice err' }, ui.onbError) : null,
     ]);
@@ -2247,13 +2266,12 @@ function onboardScreen() {
       title(t('onbWelcomeTitle')),
       // Starting is the primary path; bringing a nostr account is the
       // alternative, offered here rather than as a question of its own.
-      h('button', { class: 'btn-primary btn-block', style: 'font-size:17px;padding:14px', disabled: ui.onbBusy, onClick: async () => {
-        // back-tracked from username: the wallet is already minted, continue with it
-        if (activeAccount()) { o.heldFor = null; render(); return; }
-        ui.onbBusy = true; render();
-        try { await enterWallet(newMnemonic(), '', { generated: true }); } catch (e) { ui.onbError = e.message; }
-        ui.onbBusy = false; render();
-      } }, ui.onbBusy ? h('span', { class: 'spinner sm' }) : t('onbStart')),
+      h('button', { class: 'btn-primary btn-block', style: 'font-size:17px;padding:14px', onClick: () => {
+        ui.unlockTab = 'create';
+        ui.unlockError = '';
+        o.step = 'seed';
+        render();
+      } }, t('onbStart')),
       // Same shape as the sign-in button on the unlock screen: .btn-block
       // forces display:block, so the flex centering goes on an inner wrapper.
       h('button', { class: 'btn-block', style: 'padding:14px', onClick: () => {
@@ -2264,7 +2282,16 @@ function onboardScreen() {
         h('span', { style: 'display:flex;flex-shrink:0', html: NOSTR_MARK }),
         t('nlSignIn'))),
       ui.onbError ? h('div', { class: 'notice err' }, ui.onbError) : null,
-      h('button', { class: 'linklike small', onClick: () => { ui.onbSkip = true; ui.onb = null; try { localStorage.removeItem(ONB_STEP_KEY); } catch {} render(); } }, t('onbHaveWallet')),
+    ]);
+  }
+  if (o.step === 'seed') {
+    // The classic create/import card, inside the wizard: getting started
+    // means seeing (or bringing) your seed phrase, not a wallet minted
+    // behind your back. Opening one ends the wizard into the wallet + tour.
+    return page([
+      title(t('onbSeedTitle')),
+      unlockCard(),
+      h('button', { class: 'linklike small', onClick: () => { ui.unlockError = ''; o.step = 'welcome'; render(); } }, t('back')),
     ]);
   }
   if (o.step === 'signin') {
@@ -2272,20 +2299,20 @@ function onboardScreen() {
       h('div', { class: 'onb-mark', html: NOSTR_MARK }),
       title(t('onbSigninTitle')),
       featureHook('unlockExtra') || h('div', { class: 'notice err' }, 'nostr login unavailable'),
-      h('button', { class: 'linklike small', onClick: () => { o.heldFor = activeAccount()?.id; o.step = 'welcome'; render(); } }, t('back')),
+      h('button', { class: 'linklike small', onClick: () => { o.step = 'welcome'; render(); } }, t('back')),
     ]);
   }
-  if (o.step === 'username') {
-    const addr = featureHook('namesAddress');
+  if (o.step === 'spend') {
     return page([
-      title(t('onbNameTitle')),
-      h('p', { class: 'muted', style: 'margin:0' }, t('onbNameBody')),
+      title(t('onbSpendTitle')),
+      h('p', { class: 'muted', style: 'margin:0' }, t('onbSpendBody')),
       featureHook('namesClaimForm') || h('div', { class: 'row gap6', style: 'align-items:center' }, h('span', { class: 'spinner sm' }), h('span', { class: 'small muted' }, t('onbNameWait'))),
-      // A way past without naming yourself, but not one that shows the
-      // npub-shaped default address — nobody wants to be offered that.
-      h('div', { class: 'row gap6' },
-        h('button', { class: 'btn-ghost grow', onClick: () => { o.heldFor = activeAccount()?.id; o.step = 'welcome'; render(); } }, t('back')),
-        addr ? h('button', { class: 'grow', onClick: () => { o.step = 'avatar'; render(); } }, t('onbSkipName')) : null),
+      // Optional means optional: one tap back to the wallet, no questions.
+      h('button', { class: 'btn-ghost btn-block', onClick: () => {
+        ui.onb = null;
+        try { localStorage.removeItem(ONB_STEP_KEY); } catch {}
+        render();
+      } }, t('onbNotNow')),
       // Most people are new. The ones who aren't know it, and can say so here
       // rather than everyone being asked first.
       h('button', { class: 'linklike small', onClick: () => { ui.onbError = ''; o.step = 'legacy'; render(); } }, t('onbHaveCoinos')),
@@ -2345,10 +2372,10 @@ function onboardScreen() {
         ui.onbBusy = false; render();
       } }, ui.onbBusy ? h('span', { class: 'spinner sm' }) : (o.avatar ? t('onbContinue') : t('onbSkipAvatar'))),
       h('button', { class: 'btn-ghost btn-block', disabled: ui.onbBusy, onClick: () => {
-        // re-anchor the username step's "name changed" detector to the name
+        // re-anchor the spend step's "name changed" detector to the name
         // as it stands NOW, or a just-claimed name bounces us right back here
         o.enterAddr = featureHook('namesAddress') || null;
-        o.step = 'username'; render();
+        o.step = 'spend'; render();
       } }, t('back')),
     ]);
   }
@@ -2361,7 +2388,10 @@ function onboardScreen() {
     h('button', { class: 'btn-primary btn-block', style: 'padding:14px', onClick: () => {
       try { localStorage.removeItem(ONB_STEP_KEY); } catch {}
       ui.onb = null;
-      ui.tour = 0;
+      // They just set it up — land on the Spending face, new address showing.
+      // The tour already ran before this prompt, so no coach marks here.
+      ui.account = 'spending';
+      try { localStorage.setItem(ACCOUNT_KEY, 'spending'); } catch {}
       ui.tab = 'receive';
       render();
     } }, t('onbEnter')),
@@ -2428,7 +2458,21 @@ function tourOverlay() {
 }
 
 function walletScreen() {
-  if (ui.onb || onbInProgress()) return onboardScreen();
+  if (ui.onb || onbInProgress()) {
+    const s = onboardScreen();
+    if (s) return s; // null = the wizard just handed over; fall through
+  }
+  // Once the tour is over (or skipped), the queued spending-account prompt
+  // takes the stage — unless a real name arrived already (a legacy migration,
+  // a restored profile), in which case there's nothing left to offer.
+  if (ui.tour == null && spendPromptDue() && activeAccount()) {
+    try { localStorage.removeItem(SPEND_PROMPT_KEY); } catch {}
+    const addr = featureHook('namesAddress');
+    if (!addr || /^npub1/.test(addr)) {
+      ui.onb = { step: 'spend' };
+      return onboardScreen();
+    }
+  }
   // A feature can hold the wallet behind a required onboarding step (picking
   // a username). Imported wallets skip it once their name is recovered.
   const ob = featureHook('onboardingView');
@@ -3645,12 +3689,11 @@ const ctx = {
   // Open (or create) a wallet from a mnemonic — used by nostr login.
   openMnemonic: async (mnemonic, passphrase, opts) => enterWallet(mnemonic, passphrase, opts),
   // A nostr login that lands mid-wizard: a restored wallet has been through
-  // onboarding elsewhere, so the wizard ends; a fresh one just releases the
-  // back-button hold so the wizard advances to naming it.
+  // onboarding elsewhere, so the wizard ends without tour or prompts; a fresh
+  // one falls through to the wallet + tour on the next render.
   onbNostrLogin: (restored) => {
     if (!ui.onb) return;
     if (restored) { ui.onb = null; try { localStorage.removeItem(ONB_STEP_KEY); } catch {} }
-    else ui.onb.heldFor = null;
   },
 };
 const FEATURES = buildFeatures(ctx);

@@ -71,7 +71,7 @@ const ui = {
   createStep: 'gen', // 'gen' | 'confirm'
   draftMnemonic: '',
   confirm: [], // [{ index, value }]
-  confirmPass: '', // re-entered passphrase on the verify step
+  confirmPass: '', // re-entered passphrase (confirm field, shown once one is typed)
   importText: '',
   passphrase: '',
   showPass: false,
@@ -712,8 +712,12 @@ function createPane() {
         {
           class: 'btn-primary btn-block',
           onClick: () => {
+            // catch a mistyped passphrase here, while the field to fix it is
+            // still on screen — the verify step only samples the words
+            if (ui.passphrase && ui.confirmPass !== ui.passphrase) {
+              ui.unlockError = t('passphraseMismatch'); render(); return;
+            }
             ui.confirm = pickConfirm(words);
-            ui.confirmPass = '';
             ui.unlockError = '';
             ui.createStep = 'confirm';
             render();
@@ -730,7 +734,6 @@ function createPane() {
   }
 
   // confirm step (optional — reachable via "Verify backup")
-  const hasPass = !!ui.passphrase;
   return h(
     'div',
     { class: 'col' },
@@ -751,20 +754,6 @@ function createPane() {
         })
       )
     ),
-    // Only verify the passphrase if one was actually entered.
-    hasPass &&
-      h(
-        'label',
-        { class: 'field' },
-        h('span', { class: 'lab' }, t('reenterPassphrase')),
-        h('input', {
-          type: 'password',
-          class: 'mono-input',
-          autocomplete: 'off',
-          value: ui.confirmPass,
-          onInput: (e) => (ui.confirmPass = e.target.value),
-        })
-      ),
     h('div', { class: 'row gap6' },
       h('button', { class: 'btn-ghost', onClick: () => { ui.createStep = 'gen'; render(); } }, t('back')),
       h('button', {
@@ -773,9 +762,6 @@ function createPane() {
           const words = ui.draftMnemonic.split(' ');
           const ok = ui.confirm.every((c) => c.value.toLowerCase() === words[c.index]);
           if (!ok) { ui.unlockError = t('wordsMismatch'); render(); return; }
-          if (hasPass && ui.confirmPass !== ui.passphrase) {
-            ui.unlockError = t('passphraseMismatch'); render(); return;
-          }
           openWallet(ui.draftMnemonic, { generated: true });
         },
       }, t('openWallet'))
@@ -814,7 +800,7 @@ function importPane() {
 }
 
 function optionsPanel() {
-  return h(
+  const pass = h(
     'label',
     { class: 'field' },
     h('span', { class: 'lab' },
@@ -834,11 +820,31 @@ function optionsPanel() {
         class: 'mono-input',
         autocomplete: 'off',
         value: ui.passphrase,
-        onInput: (e) => (ui.passphrase = e.target.value),
+        // rendering mid-keystroke is safe (focus + caret are preserved), but
+        // only the empty↔non-empty flip changes what's on screen (the confirm
+        // field below), so only that flip pays for a rebuild
+        onInput: (e) => { const had = !!ui.passphrase; ui.passphrase = e.target.value; if (had !== !!ui.passphrase) render(); },
       }),
       h('button', { class: 'btn-sm', type: 'button', onClick: () => { ui.showPass = !ui.showPass; render(); } }, ui.showPass ? t('hide') : t('show'))
     )
   );
+  // A typo here IS a different wallet, silently — so once a passphrase is
+  // typed, it's typed twice. (Not needed when it's empty, which is most people.)
+  const confirm = ui.passphrase
+    ? h(
+        'label',
+        { class: 'field' },
+        h('span', { class: 'lab' }, t('reenterPassphrase')),
+        h('input', {
+          type: ui.showPass ? 'text' : 'password',
+          class: 'mono-input',
+          autocomplete: 'off',
+          value: ui.confirmPass,
+          onInput: (e) => (ui.confirmPass = e.target.value),
+        })
+      )
+    : null;
+  return [pass, confirm];
 }
 
 // Import accepts a recovery phrase, an xpub/zpub (watch-only), or an xprv/zprv
@@ -847,7 +853,14 @@ async function openWallet(input, opts = {}) {
   ui.unlockError = '';
   const raw = (input || '').trim();
   const m = raw.replace(/\s+/g, ' ');
-  if (isValidMnemonic(m)) { await enterWallet(m, ui.passphrase, { generated: opts.generated }); ui.draftMnemonic = ''; return; } // discard the used draft so the next "Add wallet" generates a fresh seed
+  if (isValidMnemonic(m)) {
+    // last line of defense — the panes with the confirm field on screen also
+    // check before handing off, so this error always lands somewhere fixable
+    if (ui.passphrase && ui.confirmPass !== ui.passphrase) { ui.unlockError = t('passphraseMismatch'); render(); return; }
+    await enterWallet(m, ui.passphrase, { generated: opts.generated });
+    ui.draftMnemonic = ''; // discard the used draft so the next "Add wallet" generates a fresh seed
+    return;
+  }
   let pk;
   try { pk = parseExtendedKey(raw); } catch { ui.unlockError = t('invalidImport'); render(); return; }
   const acc = pk.kind === 'xpub'
@@ -1486,6 +1499,7 @@ function lock({ offerPassword = false } = {}) {
   ui.draftMnemonic = '';
   ui.importText = '';
   ui.passphrase = '';
+  ui.confirmPass = '';
   ui.confirm = [];
   ui.revealShown = false;
   ui.pubkeyShown = false;
@@ -1962,7 +1976,7 @@ function accountsScreen() {
           );
         })
       ),
-      h('button', { class: 'btn-block', onClick: () => { ui.draftMnemonic = ''; ui.createStep = 'gen'; ui.confirm = []; ui.screen = 'unlock'; ui.unlockTab = 'create'; ui.fromWallet = true; ui.unlockError = ''; render(); } }, t('addWallet')),
+      h('button', { class: 'btn-block', onClick: () => { ui.draftMnemonic = ''; ui.createStep = 'gen'; ui.confirm = []; ui.passphrase = ''; ui.confirmPass = ''; ui.showPass = false; ui.screen = 'unlock'; ui.unlockTab = 'create'; ui.fromWallet = true; ui.unlockError = ''; render(); } }, t('addWallet')),
       hasVault() ? h('button', { class: 'btn-ghost btn-block', onClick: startChangePw }, t('changePassword')) : null,
       h('button', { class: 'btn-ghost btn-block', onClick: () => { ui.confirmClear = true; render(); } }, t('clearAll'))
     ),
@@ -2438,9 +2452,10 @@ function claimMigratedName() {
 // ---- the coach-mark tour: three stops, measured against the live DOM ----
 const TOUR = [
   { sel: '.header-avatar', key: 'tourAvatar' },
-  { sel: '.balance-seg', key: 'tourBalance' },
+  { sel: '.card.balance', key: 'tourBalance' },
   { sel: '.tabs', key: 'tourTabs' },
 ];
+let _tourPos = {}; // per-stop last measured spot, so re-renders don't flash
 function tourOverlay() {
   const step = TOUR[ui.tour];
   if (!step) return null;
@@ -2454,13 +2469,26 @@ function tourOverlay() {
       } }, ui.tour + 1 < TOUR.length ? t('tourNext') : t('done'))));
   const ring = h('div', { class: 'tour-ring' });
   const wrap = h('div', { class: 'tour-overlay' }, ring, card);
+  // The overlay is rebuilt on EVERY render, and a fresh wallet's first seconds
+  // are busy ones (scans, feature init, balance pushes). Replaying the fade-in
+  // and re-measuring from scratch each time reads as flashing — so the
+  // entrance plays only when the stop changes, and the last measured position
+  // holds until the next frame's measurement lands.
+  applyAnim(wrap, 'anim-tour', animWindow('tour', ui.tour, 250));
+  const place = (r) => {
+    ring.style.cssText = `top:${r.top - 6}px;left:${r.left - 6}px;width:${r.width + 12}px;height:${r.height + 12}px`;
+    const below = r.bottom + 12;
+    card.style.top = (below + 180 < innerHeight ? below : Math.max(12, r.top - 130)) + 'px';
+  };
+  if (_tourPos[ui.tour]) place(_tourPos[ui.tour]);
+  else wrap.style.visibility = 'hidden'; // never show an unpositioned ring
   requestAnimationFrame(() => {
     const el = document.querySelector(step.sel);
     if (!el || !wrap.isConnected) return;
     const r = el.getBoundingClientRect();
-    ring.style.cssText = `top:${r.top - 6}px;left:${r.left - 6}px;width:${r.width + 12}px;height:${r.height + 12}px`;
-    const below = r.bottom + 12;
-    card.style.top = (below + 180 < innerHeight ? below : Math.max(12, r.top - 130)) + 'px';
+    _tourPos[ui.tour] = { top: r.top, left: r.left, width: r.width, height: r.height, bottom: r.bottom };
+    place(_tourPos[ui.tour]);
+    wrap.style.visibility = '';
   });
   return wrap;
 }

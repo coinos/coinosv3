@@ -530,7 +530,7 @@ body::after {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .anim-page, .anim-menu, .anim-unfold, .anim-tab-left, .anim-tab-right, .anim-tour, .amt-flash, .check-badge { animation: none !important; }
+  .anim-page, .anim-menu, .anim-unfold, .anim-tab-left, .anim-tab-right, .amt-flash, .check-badge { animation: none !important; }
   *, *::before, *::after { transition-duration: .01ms !important; }
 }
 /* tab carousel: only the content pane moves, with a soft cross-fade */
@@ -568,11 +568,6 @@ body::after {
 .onb-confetti i:nth-child(15) { left: 15%; animation-delay: .8s; } .onb-confetti i:nth-child(16) { left: 45%; animation-delay: .9s; }
 .onb-confetti i:nth-child(17) { left: 70%; animation-delay: 1s; } .onb-confetti i:nth-child(18) { left: 30%; animation-delay: 1.1s; }
 @keyframes confetti-fall { 0% { transform: translateY(-10px) rotate(0); } 100% { transform: translateY(105vh) rotate(560deg); } }
-.tour-overlay { position: fixed; inset: 0; z-index: 80; background: rgba(0, 0, 0, .45); }
-.anim-tour { animation: rise-in .25s both; }
-.tour-ring { position: fixed; border-radius: 14px; box-shadow: 0 0 0 3px #f7931a, 0 0 0 9999px rgba(0, 0, 0, .45); background: transparent; }
-.tour-overlay { background: transparent; }
-.tour-card { position: fixed; left: 50%; transform: translateX(-50%); width: min(90vw, 360px); background: var(--paper); color: var(--ink); border: 1px solid var(--line-strong); border-radius: 14px; padding: 14px 16px; box-shadow: var(--shadow); z-index: 81; }
 @media (prefers-reduced-motion: reduce) { .onb-confetti i { animation: none; display: none; } }
 .onb-check { width: 96px; height: 96px; font-size: 52px; align-self: center; margin: 6px 0; }
 /* the nostr mark heading the sign-in steps: big, centered, gently afloat */

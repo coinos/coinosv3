@@ -1715,16 +1715,6 @@ function advancedSettingsView() {
         : h('button', { onClick: () => { ui.addrScan = true; ui.addrScanPage = 0; render(); } }, t('rescanAddresses'))
     ),
     a ? autolockCard(a) : null,
-    // replay the first-run coach marks (the wizard itself only runs once)
-    h('div', { class: 'card col' },
-      h('h3', {}, t('tourReplayTitle')),
-      h('p', { class: 'small muted', style: 'margin:0' }, t('tourReplayDesc')),
-      h('button', { onClick: () => {
-        ui.settingsPage = null;
-        ui.tab = 'receive';
-        ui.tour = 0;
-        render();
-      } }, t('tourReplay'))),
     h('button', { class: 'btn-ghost btn-block', onClick: () => { ui.settingsPage = null; render(); } }, t('back'))
   );
 }
@@ -2167,22 +2157,15 @@ function vaultScreen() {
 // ================================================================ onboarding
 // First visit on a fresh device: a full-screen wizard — welcome, then either
 // create/import a seed or sign in with nostr — that ends the moment a wallet
-// exists, dropping the user into their on-chain Savings account and the
-// three-stop coach-mark tour. Naming yourself no longer gates the door: once
-// the tour is over (or skipped), an optional "set up a spending account"
-// prompt offers the username claim, avatar, and confetti. Shown whenever the
-// device has no wallet — deleting every wallet brings it back. The current
-// step is persisted so a refresh (or the legacy-migration round trip) resumes
-// exactly where it left off.
+// exists, dropping the user into a plain on-chain wallet. Spending is opt-in:
+// the same wizard machinery serves the "set up a spending account" flow
+// (username, avatar, confetti), but only when the user asks for it from the
+// balance card. Shown whenever the device has no wallet — deleting every
+// wallet brings it back. The current step is persisted so a refresh (or the
+// legacy-migration round trip) resumes exactly where it left off.
 const ONB_STEP_KEY = 'btc-wallet-onb-step';
-// Queued when the wizard hands over to the wallet, consumed when the tour
-// ends — so the spending prompt survives a mid-tour refresh.
-const SPEND_PROMPT_KEY = 'btc-wallet-spend-prompt';
 function onbInProgress() {
   try { return !!localStorage.getItem(ONB_STEP_KEY); } catch { return false; }
-}
-function spendPromptDue() {
-  try { return localStorage.getItem(SPEND_PROMPT_KEY) === '1'; } catch { return false; }
 }
 function shouldOnboard() {
   return accounts.length === 0 && !hasVault();
@@ -2221,22 +2204,19 @@ function onboardScreen() {
   }
   const o = ui.onb;
   // The wizard's whole job ends the moment a wallet exists: hand the user
-  // their on-chain Savings account with the tour running, and queue the
-  // optional spending-account prompt for after it. A nostr login in flight
-  // holds this: the wallet opens mid-login, but whether the wizard should
-  // even continue (a restored account has onboarded elsewhere) isn't known
-  // until the login finishes.
+  // their on-chain wallet, receive page up. A nostr login in flight holds
+  // this: the wallet opens mid-login, but whether the wizard should even
+  // continue (a restored account has onboarded elsewhere) isn't known until
+  // the login finishes.
   if ((o.step === 'welcome' || o.step === 'seed' || o.step === 'signin')
       && ui.screen === 'wallet' && activeAccount() && !ui.nostrLoginBusy) {
     ui.onb = null;
     try { localStorage.removeItem(ONB_STEP_KEY); } catch {}
-    try { localStorage.setItem(SPEND_PROMPT_KEY, '1'); } catch {}
-    // Savings first: the wizard's promise is "your keys, your coins" — the
-    // on-chain account is where that story starts.
+    // On-chain first: the wizard's promise is "your keys, your coins", and
+    // Spending stays out of sight until the user sets it up.
     ui.account = 'savings';
     try { localStorage.setItem(ACCOUNT_KEY, 'savings'); } catch {}
     ui.tab = 'receive';
-    ui.tour = 0;
     return null; // the caller falls through to the wallet itself
   }
   if (o.step === 'spend') {
@@ -2410,8 +2390,11 @@ function onboardScreen() {
     h('button', { class: 'btn-primary btn-block', style: 'padding:14px', onClick: () => {
       try { localStorage.removeItem(ONB_STEP_KEY); } catch {}
       ui.onb = null;
-      // They just set it up — land on the Spending face, new address showing.
-      // The tour already ran before this prompt, so no coach marks here.
+      // Spending exists now — latch it on the account (the claimed name
+      // usually proves it, but the flag survives a names hiccup) and land
+      // on the Spending face with the new address showing.
+      const acc = activeAccount();
+      if (acc && !acc.spendingSetup) { acc.spendingSetup = true; persistAccounts(); }
       ui.account = 'spending';
       try { localStorage.setItem(ACCOUNT_KEY, 'spending'); } catch {}
       ui.tab = 'receive';
@@ -2449,65 +2432,10 @@ function claimMigratedName() {
   attempt();
 }
 
-// ---- the coach-mark tour: three stops, measured against the live DOM ----
-const TOUR = [
-  { sel: '.header-avatar', key: 'tourAvatar' },
-  { sel: '.card.balance', key: 'tourBalance' },
-  { sel: '.tabs', key: 'tourTabs' },
-];
-let _tourPos = {}; // per-stop last measured spot, so re-renders don't flash
-function tourOverlay() {
-  const step = TOUR[ui.tour];
-  if (!step) return null;
-  const card = h('div', { class: 'tour-card' },
-    h('div', {}, t(step.key)),
-    h('div', { class: 'row gap6', style: 'justify-content:flex-end;margin-top:10px' },
-      h('button', { class: 'btn-sm', onClick: () => { ui.tour = null; render(); } }, t('tourSkip')),
-      h('button', { class: 'btn-sm btn-primary', onClick: () => {
-        ui.tour = ui.tour + 1 < TOUR.length ? ui.tour + 1 : null;
-        render();
-      } }, ui.tour + 1 < TOUR.length ? t('tourNext') : t('done'))));
-  const ring = h('div', { class: 'tour-ring' });
-  const wrap = h('div', { class: 'tour-overlay' }, ring, card);
-  // The overlay is rebuilt on EVERY render, and a fresh wallet's first seconds
-  // are busy ones (scans, feature init, balance pushes). Replaying the fade-in
-  // and re-measuring from scratch each time reads as flashing — so the
-  // entrance plays only when the stop changes, and the last measured position
-  // holds until the next frame's measurement lands.
-  applyAnim(wrap, 'anim-tour', animWindow('tour', ui.tour, 250));
-  const place = (r) => {
-    ring.style.cssText = `top:${r.top - 6}px;left:${r.left - 6}px;width:${r.width + 12}px;height:${r.height + 12}px`;
-    const below = r.bottom + 12;
-    card.style.top = (below + 180 < innerHeight ? below : Math.max(12, r.top - 130)) + 'px';
-  };
-  if (_tourPos[ui.tour]) place(_tourPos[ui.tour]);
-  else wrap.style.visibility = 'hidden'; // never show an unpositioned ring
-  requestAnimationFrame(() => {
-    const el = document.querySelector(step.sel);
-    if (!el || !wrap.isConnected) return;
-    const r = el.getBoundingClientRect();
-    _tourPos[ui.tour] = { top: r.top, left: r.left, width: r.width, height: r.height, bottom: r.bottom };
-    place(_tourPos[ui.tour]);
-    wrap.style.visibility = '';
-  });
-  return wrap;
-}
-
 function walletScreen() {
   if (ui.onb || onbInProgress()) {
     const s = onboardScreen();
     if (s) return s; // null = the wizard just handed over; fall through
-  }
-  // Once the tour is over (or skipped), the queued spending-account prompt
-  // takes the stage — unless a real name arrived already (a legacy migration,
-  // a restored profile), in which case there's nothing left to offer.
-  if (ui.tour == null && spendPromptDue() && activeAccount()) {
-    try { localStorage.removeItem(SPEND_PROMPT_KEY); } catch {}
-    const addr = featureHook('namesAddress');
-    if (!addr || /^npub1/.test(addr)) {
-      ui.onb = { step: 'spend' };
-      return onboardScreen();
-    }
   }
   // A feature can hold the wallet behind a required onboarding step (picking
   // a username). Imported wallets skip it once their name is recovered.
@@ -2551,8 +2479,7 @@ function walletScreen() {
     ui.offlineFallback && wallet.offline ? offlineBanner() : null,
     ...featureAll('walletNotices'),
     tabsBar(),
-    pane,
-    ui.tour != null ? tourOverlay() : null
+    pane
   );
 }
 
@@ -2570,8 +2497,21 @@ function offlineBanner() {
 // Lightning) or Savings (on-chain). The balance card headline, the Receive
 // pane, and the gift source all follow it.
 const ACCOUNT_KEY = 'btc-wallet-account';
+// Spending is opt-in: a wallet is born on-chain only, and the second balance
+// (with its toggle, swipe, and Move money) appears once the user sets it up —
+// or the moment money is already there (a restored wallet, a claimed gift),
+// because a balance must never hide. Setting up = claiming a username, so a
+// name claimed anywhere counts; the account flag latches it for accounts
+// whose name lookup isn't available right now.
+function spendingActive() {
+  if (!featureHook('arkReady')) return false;
+  if (activeAccount()?.spendingSetup) return true;
+  if ((featureHook('spendingSat') || 0) > 0) return true;
+  const addr = featureHook('namesAddress');
+  return !!addr && !/^npub1/.test(addr);
+}
 function accountSel() {
-  if (!featureHook('arkReady')) return 'savings'; // no ark, no choice
+  if (!spendingActive()) return 'savings'; // one balance, no choice
   if (!ui.account) {
     let saved = null;
     try { saved = localStorage.getItem(ACCOUNT_KEY); } catch {}
@@ -2604,8 +2544,8 @@ function balanceCard() {
   // is the on-chain one. The headline is simply everything you have.
   const spending = featureHook('spendingSat') || 0;
   const saving = wallet.spendable;
-  const hasArk = !!featureHook('arkReady');
-  const sel = hasArk ? accountSel() : 'savings';
+  const hasSpending = spendingActive();
+  const sel = hasSpending ? accountSel() : 'savings';
   const isSpending = sel === 'spending';
   // One balance at a time, full size: the card IS the account you're in, and
   // everything (receive, gifts) follows it. Swipe or tap the dots to flip.
@@ -2613,17 +2553,24 @@ function balanceCard() {
   const face = h('div', { class: 'balance-face' },
     h('div', { class: 'row between', style: 'align-items:center' },
       h('div', { class: 'small faint', style: 'text-transform:uppercase;letter-spacing:.06em' },
-        hasArk ? (isSpending ? t('spendingLabel') : t('savingLabel')) : t('balance')),
+        hasSpending ? (isSpending ? t('spendingLabel') : t('savingLabel')) : t('balance')),
       // Swiping only helps on touch, and dots are an indicator rather than a
       // target — so the switch is a real button that names where it goes.
-      hasArk
+      // Before Spending exists, its spot offers to set it up — the one
+      // doorway into the optional spending-account flow.
+      hasSpending
         ? h('button', {
             class: 'balance-switch',
             onClick: () => setAccountSel(isSpending ? 'savings' : 'spending', isSpending ? 'left' : 'right'),
           },
             h('span', { html: SWAP_ICON }),
             h('span', { class: 'bsw-label' }, isSpending ? t('savingLabel') : t('spendingLabel')))
-        : null),
+        : featureHook('arkReady') && !wallet.watchOnly
+          ? h('button', {
+              class: 'balance-switch',
+              onClick: () => { ui.onbError = ''; ui.onb = { step: 'spend' }; render(); },
+            }, h('span', { class: 'bsw-label' }, t('spendSetup')))
+          : null),
     h('div', { class: 'amt', style: firstLoad ? 'opacity:.3' : '' },
       firstLoad ? h('span', { class: 'spinner sm', style: 'margin-right:8px' }) : null,
       animatedAmount('bal:' + sel, isSpending ? spending : saving), ' ', unitTag('unit')),
@@ -2643,11 +2590,13 @@ function balanceCard() {
     'div',
     { class: 'card balance' },
     face,
-    // "Move money" and friends: the only door between the two balances.
-    ...featureAll('balanceActions').map((a2) =>
+    // "Move money" and friends: the only door between the two balances —
+    // pointless (and confusing) while there's only one.
+    ...(hasSpending ? featureAll('balanceActions') : []).map((a2) =>
       h('button', { class: 'btn-sm', style: 'margin-top:10px', onClick: a2.onClick }, a2.label)),
     // A feature can unfold UI right on the card (ark's inline move panel).
     (() => {
+      if (!hasSpending) return null;
       const dt = animWindow('unfold', !!ui.arkMoveOpen, 300);
       const extra = featureHook('balanceExtra');
       if (!extra) return null;
@@ -3775,7 +3724,7 @@ applyDir();
     // a swipe that began on the balance card flips the account instead
     if (onBalance) {
       const want = dx < 0 ? 'savings' : 'spending';
-      if (featureHook('arkReady')) setAccountSel(want, dx < 0 ? 'left' : 'right');
+      if (spendingActive()) setAccountSel(want, dx < 0 ? 'left' : 'right');
       return;
     }
     const next = ORDER[ORDER.indexOf(ui.tab) + (dx < 0 ? 1 : -1)];

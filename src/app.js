@@ -817,7 +817,15 @@ function optionsPanel() {
   return h(
     'label',
     { class: 'field' },
-    h('span', { class: 'lab' }, t('passphrase')),
+    h('span', { class: 'lab' },
+      t('passphrase'),
+      // People assume a password logs in or encrypts; a BIP39 passphrase does
+      // neither, and getting that wrong loses money — worth a sentence here.
+      h('button', {
+        class: 'linklike small', type: 'button', style: 'margin-left:8px',
+        onClick: (e) => { e.preventDefault(); ui.passInfoOpen = !ui.passInfoOpen; render(); },
+      }, t('passWhatsThis'))),
+    ui.passInfoOpen ? h('p', { class: 'small muted', style: 'margin:0 0 6px' }, t('passInfo')) : null,
     h(
       'div',
       { class: 'input-group' },

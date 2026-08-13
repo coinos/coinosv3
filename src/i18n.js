@@ -116,6 +116,8 @@ const STR = {
     seedPhrase: 'Seed phrase',
     seedPlaceholder: 'enter your seed words separated by spaces',
     passphrase: 'Passphrase',
+    passWhatsThis: 'What’s this?',
+    passInfo: 'An optional 13th word: if someone gets hold of your 12 seed words, they still can’t open your wallet without this one. It’s not a login password and it doesn’t encrypt anything — each passphrase opens its own separate wallet, so to recover your funds you’ll need your seed words and this passphrase, exactly as written.',
     show: 'Show',
     hide: 'Hide',
     invalidSeed: 'Invalid seed phrase — check the spelling and word order.',

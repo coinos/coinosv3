@@ -207,6 +207,34 @@ function requestInvoiceFromWallet(offerPk, { amountSat, description, zap }) {
 }
 
 const ln = CFG.ln ? lnBackend(CFG.ln) : null;
+
+// -- routing-fee quotes (the /lnquote endpoint) ------------------------------
+
+let _ourNodeId = null;
+async function ourNodeId() {
+  if (!_ourNodeId) _ourNodeId = (await ln.call('getinfo')).id;
+  return _ourNodeId;
+}
+
+// Ask askrene (the router xpay itself uses) what delivering amountMsat to
+// dest would cost from here. The maxfee passed in is only the SEARCH cap —
+// generous on purpose, since the user sees and approves the quoted fee
+// before anything is locked.
+async function routeFeeMsat(our, dest, amountMsat, finalCltv) {
+  const cap = Math.max(50_000, Math.ceil(amountMsat * 0.05));
+  const r = await ln.call('getroutes', {
+    source: our, destination: dest, amount_msat: amountMsat,
+    // localchans FIRST: it re-adds our channels with their advertised fees,
+    // so sourcefree must come after it to zero our own hops (verified live —
+    // the other order quotes 1 sat on a direct-peer payment).
+    layers: ['auto.localchans', 'auto.sourcefree'],
+    maxfee_msat: cap, final_cltv: finalCltv,
+  });
+  if (!r.routes || !r.routes.length) throw new Error('no route found');
+  const sent = r.routes.reduce((s, rt) => s + Number(rt.path[0].amount_msat), 0);
+  const delivered = r.routes.reduce((s, rt) => s + Number(rt.amount_msat), 0);
+  return Math.max(0, sent - delivered);
+}
 let fwd = null; // the float ark wallet
 if (CFG.forwarder?.mnemonic) {
   const account = HDKey.fromMasterSeed(mnemonicToSeedSync(CFG.forwarder.mnemonic)).derive("m/86'/0'/9'");
@@ -445,6 +473,55 @@ Bun.serve({
         floatAddress: fwd ? fwd.address() : null,
         pendingForwards: (state.pending || []).length,
       });
+    }
+
+    // Routing-fee quote for an outgoing lightning payment. The wallet locks
+    // amount + this fee into its HTLC and the ASP hands the whole surplus to
+    // CLN as the routing budget, so the number returned here is exactly what
+    // the user pays — zero for invoices minted on our own node (every
+    // coinos-to-coinos payment) and for direct peers. Informational only:
+    // a wrong quote fails the payment (refunded in full) or overpays a route,
+    // it can never spend more than the user chose to lock.
+    if (url.pathname === '/lnquote' && req.method === 'GET') {
+      if (!ln) return json({ error: 'no lightning backend' }, 503);
+      if (!rateOk(ip, 30)) return json({ error: 'rate limited' }, 429);
+      try {
+        const invoice = (url.searchParams.get('invoice') || '').trim().toLowerCase();
+        if (!invoice || invoice.length > 4000) return json({ error: 'invoice required' }, 400);
+        const dec = await ln.call('decode', { string: invoice });
+        if (dec.valid === false) return json({ error: 'invalid invoice' }, 400);
+        const dest = dec.payee || dec.invoice_node_id;
+        const amountMsat = Math.floor(Number(url.searchParams.get('amount_msat')) || 0)
+          || Number(dec.amount_msat || dec.invoice_amount_msat || 0);
+        if (!dest) return json({ error: 'no destination in invoice' }, 400);
+        if (!amountMsat || amountMsat < 0) return json({ error: 'amount required' }, 400);
+        const our = await ourNodeId();
+        if (dest === our) return json({ feeMsat: 0, feeSat: 0, direct: true });
+        const finalCltv = dec.min_final_cltv_expiry || 18;
+        try {
+          const feeMsat = await routeFeeMsat(our, dest, amountMsat, finalCltv);
+          return json({ feeMsat, feeSat: Math.ceil(feeMsat / 1000), direct: false });
+        } catch (e) {
+          // Private recipient: not in gossip, reachable only via the
+          // invoice's route hints. Quote = route to the hint's public entry
+          // node + the hint hops' advertised fees.
+          const hint = (dec.routes || [])[0];
+          if (!hint || !hint.length) throw e;
+          let hintFeeMsat = 0;
+          let carried = amountMsat;
+          for (const hop of [...hint].reverse()) {
+            const f = (hop.fee_base_msat || 0) + Math.ceil(carried * (hop.fee_proportional_millionths || 0) / 1_000_000);
+            hintFeeMsat += f; carried += f;
+          }
+          const entry = hint[0].pubkey;
+          const toEntry = entry === our ? 0
+            : await routeFeeMsat(our, entry, amountMsat + hintFeeMsat, finalCltv);
+          const feeMsat = toEntry + hintFeeMsat;
+          return json({ feeMsat, feeSat: Math.ceil(feeMsat / 1000), direct: false, hinted: true });
+        }
+      } catch (e) {
+        return json({ error: e.message || 'no route found' }, 404);
+      }
     }
 
     // Prefix search over registered names — powers recipient search in the

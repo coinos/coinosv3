@@ -603,14 +603,19 @@ export function messagesFeature(ctx) {
   // off by default: a busy room would otherwise buzz a phone all day for
   // conversations that aren't addressed to anyone in particular.
   function pushWatch() {
-    const on = st().notify;
+    const s = st();
+    const on = s.notify;
     const authors = [];
     for (const jm of communities()) {
       if (!on[jm.community_id]) continue;
       const root = hexToBytes(jm.community_root);
       for (const c of (jm.channels || []).slice(0, 8)) authors.push(channelKey(root, c.id, EPOCH).pk);
     }
-    return { ptags: myPubkeys(), authors };
+    // per-category opt-outs travel with the registration so the notifier
+    // never sends what the user turned off (a suppressed-but-delivered push
+    // would earn Chrome's generic "updated in background" nag instead)
+    const reasons = { payment: s.reasons?.payment !== false, dm: s.reasons?.dm !== false };
+    return { ptags: myPubkeys(), authors, reasons };
   }
 
   const roomNotify = (cid) => !!st().notify[cid];
@@ -629,6 +634,43 @@ export function messagesFeature(ctx) {
       toast(t('msgPushFailed'));
       render();
     }
+  }
+
+  // Settings → Notifications: the master switch for this device plus the
+  // per-category choices the registration carries to the notifier.
+  function notifyCard() {
+    const supported = typeof Notification !== 'undefined'
+      && typeof navigator !== 'undefined' && 'serviceWorker' in navigator
+      && typeof window !== 'undefined' && 'PushManager' in window;
+    const perm = supported ? Notification.permission : 'unsupported';
+    const s = st();
+    const on = (k) => s.reasons?.[k] !== false;
+    const flip = async (k) => {
+      const s2 = st();
+      s2.reasons = { ...(s2.reasons || {}), [k]: !on(k) };
+      save(s2); render();
+      const ok = await registerPush({ interactive: true });
+      if (!ok) toast(t('msgPushFailed'));
+    };
+    const rowT = (label, k) => h('div', { class: 'row between' },
+      h('span', { class: 'small' }, label),
+      h('button', { class: 'btn-sm', onClick: () => flip(k) }, on(k) ? t('nwcOn') : t('nwcOff')));
+    return h('div', { class: 'card col', style: 'gap:10px' },
+      h('h3', { style: 'margin:0' }, t('notifTitle')),
+      !supported
+        ? h('div', { class: 'small faint' }, t('nwcNoPush'))
+        : perm === 'denied'
+          ? h('div', { class: 'notice err' }, t('nwcNotifBlocked'))
+          : perm !== 'granted' || !s.push
+            ? h('button', { class: 'btn-primary btn-block', onClick: async () => {
+                const ok = await registerPush({ interactive: true });
+                toast(ok ? t('notifEnabled') : t('msgPushFailed'));
+                render();
+              } }, t('notifEnable'))
+            : h('div', { class: 'small faint' }, t('notifOnDevice')),
+      rowT(t('notifPayRecv'), 'payment'),
+      rowT(t('notifDm'), 'dm'),
+      h('div', { class: 'small faint' }, t('notifChatHint')));
   }
 
   // Hand the service worker what it needs to tell a friend's DM from a
@@ -1816,6 +1858,7 @@ export function messagesFeature(ctx) {
     },
     // Conversations waiting on us, for the header's message button.
     unreadMessages() { return unreadCount(); },
+    notifySettingsCards() { return [notifyCard()]; },
     screenView() {
       if (ui.screen !== 'wallet') return null;
       if (ui.profilePk) return profileScreen();

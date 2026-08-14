@@ -1662,6 +1662,7 @@ function settingsTab() {
     case 'payments': return page(featureAll('settingsCards').reverse());
     case 'network': return page([networkCard(), explorerCard()]);
     case 'nostr': return nostrSettingsView();
+    case 'notifications': return page(featureAll('notifySettingsCards'));
     case 'advanced': return advancedSettingsView();
   }
   const nav = (id, label) =>
@@ -1676,6 +1677,7 @@ function settingsTab() {
     nav('payments', t('settingsPayments')),
     nav('network', t('settingsNetwork')),
     nav('nostr', t('nostrSettings')),
+    nav('notifications', t('settingsNotifications')),
     nav('advanced', t('advancedSettings')),
     h('button', { class: 'btn-ghost btn-block', style: 'margin-top:6px', onClick: () => { ui.tab = wallet.offline ? 'settings' : 'receive'; render(); } }, t('back'))
   );

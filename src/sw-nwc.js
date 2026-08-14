@@ -47,7 +47,7 @@ self.addEventListener('push', (e) => {
       const [title, body] = T[data.reason] || T.chat;
       await self.registration.showNotification(title, {
         body,
-        icon: 'icon-192.png', badge: 'icon-192.png',
+        icon: 'icon-192.png', badge: 'badge-96.png',
         tag: 'notify-' + (data.reason || 'chat'), renotify: data.reason === 'payment',
         data: { url: './' },
       });
@@ -79,7 +79,7 @@ self.addEventListener('push', (e) => {
     if (handled && handled.notify) {
       await self.registration.showNotification(handled.notify.title, {
         body: handled.notify.body,
-        icon: 'icon-192.png', badge: 'icon-192.png',
+        icon: 'icon-192.png', badge: 'badge-96.png',
         tag: handled.notify.tag || 'nwc-incoming', renotify: true,
         data: { url: './' },
       });
@@ -93,7 +93,7 @@ self.addEventListener('push', (e) => {
       body: incoming
         ? 'Someone is trying to send you money. Open coinos so your wallet can receive it.'
         : 'An app is asking your wallet to pay. Open Coinos to approve.',
-      icon: 'icon-192.png', badge: 'icon-192.png',
+      icon: 'icon-192.png', badge: 'badge-96.png',
       tag: 'nwc-' + (data.servicePubkey || 'req'), renotify: false,
       data: { url: './' },
     });

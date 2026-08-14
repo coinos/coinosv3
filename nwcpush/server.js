@@ -150,6 +150,7 @@ function onNotifyEvent(ev) {
 }
 
 async function pushNotify(id, r, reason, extra) {
+  if (r.reasons && r.reasons[reason] === false) return; // opted out of this category
   const key = id + ':' + reason;
   const last = lastPush.get(key) || 0;
   if (Date.now() - last < (COOLDOWN[reason] || 10_000)) return;
@@ -356,10 +357,16 @@ const server = Bun.serve({
       if (body?.notify && sub_?.endpoint) {
         const hex = (a, cap) => [...new Set((a || []).filter((p) => /^[0-9a-f]{64}$/.test(p)))].slice(0, cap);
         const id = Bun.hash(sub_.endpoint).toString(36);
+        // per-category opt-outs; absent means everything on (older clients)
+        const reasons = {};
+        for (const k of ['payment', 'dm', 'chat']) {
+          if (typeof body.notify.reasons?.[k] === 'boolean') reasons[k] = body.notify.reasons[k];
+        }
         notifyRegs[id] = {
           sub: sub_, updated: Date.now(),
           ptags: hex(body.notify.ptags, 8),
           authors: hex(body.notify.authors, 64),
+          reasons,
         };
         persist();
         resubscribeNotify();

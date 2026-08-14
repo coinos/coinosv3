@@ -481,12 +481,13 @@ export function arkFeature(ctx) {
   // connections/offer belong to the nwc feature; when it isn't the caller
   // (an auto-withdraw setting changed, say) carry forward what's mirrored
   // rather than blanking someone's wallet connections.
-  async function writeBgMirror(connections, offer) {
+  async function writeBgMirror(connections, offer, prefs) {
     const cfg = getArkConfig();
     if (!cfg || !ark || !ark.info || !ark.state) return;
     const prev = await loadBg(wallet._cacheKey());
     if (connections === undefined) connections = (prev && prev.connections) || [];
     if (offer === undefined) offer = (prev && prev.offer) || null;
+    if (prefs === undefined) prefs = (prev && prev.prefs) || undefined;
     const rec = buildBg({
       ark: { arkUrl: cfg.ark, esploraUrl: cfg.esplora, network: getNetwork(), serverPubkey: ark.info.serverPubkey },
       mgrState: ark.state,
@@ -496,6 +497,7 @@ export function arkFeature(ctx) {
       autowithdraw: await awMirror(prev),
     });
     if (prev) rec.spends = prev.spends; // the worker's log survives rewrites
+    if (prefs) rec.prefs = prefs; // notification choices the worker honours
     await saveBg(wallet._cacheKey(), rec);
   }
 
@@ -2056,7 +2058,7 @@ export function arkFeature(ctx) {
     arkBgReady() { return !!(ark && ark.info && ark.state); },
     // nwc.js calls this (with its connections) whenever the mirror should
     // refresh: on enable, on connection changes, after payments, on a timer.
-    async arkBgWrite(connections, offer) { return writeBgMirror(connections, offer); },
+    async arkBgWrite(connections, offer, prefs) { return writeBgMirror(connections, offer, prefs); },
     async arkBgSpendableSat() {
       const rec = await loadBg(wallet._cacheKey());
       return ((rec && rec.mgr && rec.mgr.vtxos) || [])

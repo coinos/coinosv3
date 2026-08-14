@@ -216,13 +216,14 @@ export function nwcFeature(ctx) {
   // worker — surface it the same way. A visible tab already shows it live.
   async function notifySent(c, amountSat, feeSat) {
     try {
+      if (load().paySentNotify === false) return;
       if (typeof document === 'undefined' || !document.hidden) return;
       if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
       const reg = await navigator.serviceWorker.ready;
       await reg.showNotification(t('nwcPaidTitle'), {
         body: t('nwcPaidBody', { amount: amountSat.toLocaleString(), name: c.name || 'app' })
           + (feeSat ? ` (+${feeSat} fee)` : ''),
-        icon: 'icon-192.png', badge: 'icon-192.png',
+        icon: 'icon-192.png', badge: 'badge-96.png',
         tag: 'nwc-sent', renotify: true, data: { url: './' },
       });
     } catch {}
@@ -699,7 +700,8 @@ export function nwcFeature(ctx) {
     bgTimer = setTimeout(async () => {
       try {
         if (!hook('arkBgReady')) return;
-        await hook('arkBgWrite', conns(), load().offer || null);
+        await hook('arkBgWrite', conns(), load().offer || null,
+          { paySent: load().paySentNotify !== false });
       } catch (e) { console.warn('nwc: could not write background state', e.message); }
     }, 1500);
   }
@@ -850,5 +852,15 @@ export function nwcFeature(ctx) {
     init() { listen(); startWatchdog(); refreshRegistration(); reconcileBg(); ensureBackground(false); },
     stop() { stop(); if (watchdog) { clearInterval(watchdog); watchdog = null; } },
     nostrSettingsCards() { return [nwcCard()]; },
+    notifySettingsCards() {
+      const on = load().paySentNotify !== false;
+      return [h('div', { class: 'card col', style: 'gap:10px' },
+        h('div', { class: 'row between' },
+          h('span', { class: 'small' }, t('notifPaySent')),
+          h('button', { class: 'btn-sm', onClick: () => {
+            const s = load(); s.paySentNotify = !on; save(s); writeBg(); render();
+          } }, on ? t('nwcOn') : t('nwcOff'))),
+        h('div', { class: 'small faint' }, t('notifPaySentHint')))];
+    },
   };
 }

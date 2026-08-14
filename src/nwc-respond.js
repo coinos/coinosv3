@@ -280,8 +280,9 @@ export async function respondFromBg(data, {
     result: { preimage: a.preimage, fees_paid: (a.feeSat || 0) * 1000 },
   });
   log(`paid ${a.amountSat || dec.amountSat} sat via the ASP from the background mirror`);
-  // Money left while the app was closed — that always deserves a heads-up,
-  // whether it was a zap from a nostr app or any other connected spender.
+  // Money left while the app was closed — that deserves a heads-up, unless
+  // the user turned "payments sent" notifications off in Settings.
+  if (rec.prefs && rec.prefs.paySent === false) return true;
   const paidSat = a.amountSat || dec.amountSat;
   const feeNote = a.feeSat ? ` (+${a.feeSat} fee)` : '';
   return {

@@ -92,6 +92,19 @@ export function lnSendFee(amountSat, fees, inputs, tip) {
 export const lnReceiveFee = (amountSat, fees) =>
   (fees.baseFeeSat || 0) + Math.ceil((amountSat * (fees.ppm || 0)) / 1_000_000);
 
+// Ask the quote service what the network will charge to deliver this payment
+// (it runs askrene against the ASP's own CLN). The wallet locks
+// amount + schedule fee + this on the HTLC and the server hands the whole
+// surplus to CLN as the routing budget, so this number is the user's entire
+// network cost — 0 between wallets on this ASP and to direct peers.
+export async function fetchLnRouteFee(quoteUrl, invoice, amountSat) {
+  const r = await fetch(`${quoteUrl}?invoice=${encodeURIComponent(invoice)}&amount_msat=${amountSat * 1000}`);
+  if (!r.ok) throw new Error(`quote failed: ${r.status}`);
+  const d = await r.json();
+  if (d.error) throw new Error(d.error);
+  return d.feeSat | 0;
+}
+
 // ---------------------------------------------------------------------------
 // pay (HTLC-out)
 // ---------------------------------------------------------------------------

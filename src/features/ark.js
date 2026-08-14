@@ -570,17 +570,26 @@ export function arkFeature(ctx) {
     // payment picks the stale coin and the ASP rejects it ("state: spent").
     await mgr.reconcile().catch(() => {});
 
-    const id = await mgr.payLnInvoice(invoice);
-    for (let i = 0; i < 60; i++) {
+    // Up to three attempts: each failure refunds in full, and the next try
+    // brings one extra sat of routing budget for liquidity that shifted
+    // between the quote and the send.
+    let last = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const routingFeeSat = attempt === 0 ? undefined : (last?.routingFeeSat ?? 0) + 1;
+      const id = await mgr.payLnInvoice(invoice, { routingFeeSat });
+      for (let i = 0; i < 60; i++) {
+        const a = mgr.lnAction(id);
+        if (!a || ['done', 'failed'].includes(a.step)) break;
+        await new Promise((r) => setTimeout(r, 2000));
+        await mgr.driveLn(id).catch(() => {});
+      }
       const a = mgr.lnAction(id);
-      if (!a || a.step === 'done') break;
-      if (a.step === 'failed') throw new Error(a.error || 'payment failed');
-      await new Promise((r) => setTimeout(r, 2000));
-      await mgr.driveLn(id).catch(() => {});
+      if (a && a.step === 'done') return { preimage: a.preimage, feeSat: a.feeSat, amountSat: a.amountSat };
+      last = a;
+      if (a && a.step === 'failed' && !lnRetryable(a)) break;
+      if (!a || a.step !== 'failed') break; // still pending after 2 min — don't double-pay
     }
-    const a = mgr.lnAction(id);
-    if (!a || a.step !== 'done') throw new Error(a?.error || a?.lastError || 'payment did not complete');
-    return { preimage: a.preimage, feeSat: a.feeSat, amountSat: a.amountSat };
+    throw new Error(last?.error || last?.lastError || 'payment did not complete');
   }
 
   // A bolt11 lands in Send (via the swaps feature's delegation hook, or
@@ -614,11 +623,15 @@ export function arkFeature(ctx) {
     if (!p || p.invoice !== invoice) return;
     if (!p.amountSat) { p.status = 'ready'; render(); return; }
     const tip = await mgr.chain.tipHeight();
+    // what the lightning network itself will charge (0 for coinos-to-coinos)
+    const routing = await mgr.lnRouteFee(invoice, p.amountSat);
+    if (!ui.arkLnPay || ui.arkLnPay !== p || p.invoice !== invoice) return;
+    p.routingFeeSat = routing;
     const candidates = mgr.vtxos().filter((v) => v.state === 'spendable')
       .sort((a, b) => a.amountSat - b.amountSat);
     let fee = null;
     for (const v of candidates) {
-      const f = lnSendFee(p.amountSat, mgr.info.lnSendFees, [v], tip);
+      const f = lnSendFee(p.amountSat, mgr.info.lnSendFees, [v], tip) + routing;
       if (v.amountSat >= p.amountSat + f) { fee = f; break; }
     }
     if (fee == null) {
@@ -650,25 +663,45 @@ export function arkFeature(ctx) {
     ui.busy = true; ui.sendError = ''; render();
     try {
       const mgr = await connectArk();
-      const id = await mgr.payLnInvoice(p.invoice, { amountSat: sats });
+      // Routing conditions can shift between quote and send: a failed
+      // (and fully refunded) attempt re-tries with one extra sat of routing
+      // budget before giving up — askrene fees are exact, liquidity isn't.
+      let tries = 0;
+      const attempt = async (routingFeeSat) => {
+        const id = await mgr.payLnInvoice(p.invoice, { amountSat: sats, routingFeeSat });
+        const a = mgr.lnAction(id);
+        if (['done', 'failed'].includes(a.step)) settle(a);
+        else { p.actionId = id; p.status = 'paying'; pollArkLn(id, settle); }
+      };
       const settle = (a) => {
         if (a.step === 'done') {
           ui.arkLnPaid = { amountSat: a.amountSat, meta: p.meta };
           if (p.meta && p.meta.pk) noteZap('inv:' + p.invoice, p.meta.pk);
           ui.arkLnPay = null;
         } else if (ui.arkLnPay) {
+          if (tries < 2 && lnRetryable(a)) {
+            tries += 1;
+            attempt((a.routingFeeSat ?? 0) + 1).catch((e) => {
+              ui.arkLnPay.status = 'ready'; ui.sendError = e.message; render();
+            });
+            return;
+          }
           ui.arkLnPay.status = 'ready';
           ui.sendError = a.error === 'payment failed' ? t('arkLnRefunded') : (a.error || t('arkLnPayFailed'));
         }
         render();
       };
-      const a = mgr.lnAction(id);
-      if (['done', 'failed'].includes(a.step)) settle(a);
-      else { p.actionId = id; p.status = 'paying'; pollArkLn(id, settle); }
+      await attempt(p.routingFeeSat);
     } catch (e) {
       ui.sendError = e.message;
     }
     ui.busy = false; render();
+  }
+
+  // A failed lightning pay is worth re-trying with a bumped routing budget
+  // unless the error says the attempt itself was ill-formed.
+  function lnRetryable(a) {
+    return !a?.error || !/already|invalid|expired|unpayable|insufficient|consolidate|no amount|exceeds/i.test(a.error);
   }
 
   function arkLnPayView() {

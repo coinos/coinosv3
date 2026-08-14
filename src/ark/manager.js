@@ -29,7 +29,7 @@ import {
   genUserNonces, cosignPartBytes, combineCosign,
 } from './send.js';
 import {
-  decodeBolt11, lnSendFee, lnReceiveFee,
+  decodeBolt11, lnSendFee, lnReceiveFee, fetchLnRouteFee,
   requestLightningPayHtlcCosign, initiateLightningPayment, checkLightningPayment,
   requestLightningPayHtlcRevocation, startLightningReceive, checkLightningReceive,
   prepareLightningReceiveClaim, claimLightningReceive, cancelLightningReceive,
@@ -63,12 +63,15 @@ const EMPTY_STATE = () => ({
 });
 
 export class ArkManager {
-  constructor({ account, storage, arkUrl, esploraUrl, network = 'regtest', onUpdate }) {
+  constructor({ account, storage, arkUrl, esploraUrl, network = 'regtest', onUpdate, lnQuoteUrl }) {
     this.account = account;       // HDKey node; ark keys derived beneath it
     this.storage = storage;       // { load(): obj|null, save(obj): void }
     this.arkUrl = arkUrl;
     this.esploraUrl = esploraUrl;
     this.network = network;
+    // where to ask what a lightning payment's route will cost (names /lnquote)
+    this.lnQuoteUrl = lnQuoteUrl !== undefined ? lnQuoteUrl
+      : (network === 'mainnet' ? 'https://names.halwallet.app/lnquote' : null);
     this.onUpdate = onUpdate || (() => {});
     this.state = null;
     this.info = null;
@@ -630,9 +633,23 @@ export class ArkManager {
     return a;
   }
 
+  // Routing fee the user must bring for this payment. Non-zero only when the
+  // server prices lightning sends at zero — then whatever the HTLC locks
+  // beyond the amount becomes CLN's routing budget, and the quote service
+  // reports what the route actually costs (0 between wallets on this ASP and
+  // to direct peers). When the quote can't be reached we fall back to the old
+  // flat pricing so payments keep working, at worst overpaying a few sats.
+  async lnRouteFee(invoice, amountSat) {
+    const f = this.info.lnSendFees || {};
+    const zeroPriced = !f.minFeeSat && !f.baseFeeSat && !(f.ppmExpiryTable || []).length;
+    if (!zeroPriced || !this.lnQuoteUrl) return 0;
+    try { return await fetchLnRouteFee(this.lnQuoteUrl, invoice, amountSat); }
+    catch { return Math.max(3, Math.ceil(amountSat / 1000)); }
+  }
+
   // Pay a bolt11 invoice with ark funds. Returns the action id; drive to a
   // terminal step ('done' | 'failed') via driveLn()/sync.
-  async payLnInvoice(invoice, { amountSat: userAmountSat } = {}) {
+  async payLnInvoice(invoice, { amountSat: userAmountSat, routingFeeSat } = {}) {
     const dec = decodeBolt11(invoice);
     const expectNet = { bitcoin: 'mainnet', regtest: 'regtest', signet: 'signet', testnet: 'testnet' }[this.info.network];
     if (expectNet && dec.network !== expectNet) throw new Error(`invoice is for ${dec.network}, wallet is on ${expectNet}`);
@@ -643,13 +660,14 @@ export class ArkManager {
       throw new Error('this invoice was already paid or is being paid');
     }
     const tip = await this.chain.tipHeight();
-    // smallest single vtxo that covers amount + its expiry-dependent fee
+    const routing = routingFeeSat != null ? routingFeeSat : await this.lnRouteFee(invoice, amountSat);
+    // smallest single vtxo that covers amount + routing + its expiry-dependent fee
     const candidates = this.state.vtxos
       .filter((v) => v.state === 'spendable')
       .sort((a, b) => a.amountSat - b.amountSat);
     let input = null, feeSat = 0;
     for (const v of candidates) {
-      const fee = lnSendFee(amountSat, this.info.lnSendFees, [v], tip);
+      const fee = lnSendFee(amountSat, this.info.lnSendFees, [v], tip) + routing;
       if (v.amountSat >= amountSat + fee) { input = v; feeSat = fee; break; }
     }
     if (!input) {
@@ -660,7 +678,7 @@ export class ArkManager {
     }
     const action = {
       id: `lnpay-${Date.now()}`, type: 'ln-pay', step: 'created',
-      invoice, paymentHash: dec.paymentHash, amountSat, feeSat,
+      invoice, paymentHash: dec.paymentHash, amountSat, feeSat, routingFeeSat: routing,
       inputId: input.id,
       htlcKeyIndex: this.state.nextKeyIndex++, // HTLC lock key, reused for change (bark does the same)
       revKeyIndex: this.state.nextKeyIndex++,

@@ -571,11 +571,16 @@ export function nwcFeature(ctx) {
     });
     const pks1 = conns().map((c) => c.servicePk);
     if (load().offer) pks1.push(load().offer.pk);
-    const r = await fetch(`${NOTIFIER}/register`, {
-      method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ subscription: sub.toJSON(), servicePubkeys: pks1 }),
-    });
-    if (!r.ok) throw new Error(`notifier refused: ${r.status}`);
+    // Arming can precede the first connection (creation requires it) — the
+    // notifier rejects an empty watch list, so defer that POST to the
+    // refreshRegistration() the creation triggers moments later.
+    if (pks1.length) {
+      const r = await fetch(`${NOTIFIER}/register`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ subscription: sub.toJSON(), servicePubkeys: pks1 }),
+      });
+      if (!r.ok) throw new Error(`notifier refused: ${r.status}`);
+    }
     const st = load(); st.background = true; save(st);
     writeBg();
     return true;
@@ -600,6 +605,27 @@ export function nwcFeature(ctx) {
       await reconcileBg();
       render();
     } catch (e) { console.log('nwc: background answering not armed:', e.message); }
+  }
+
+  // A connection that only answers while a tab happens to be open is a broken
+  // promise — creating one REQUIRES the background path. Throws a
+  // user-readable reason when it can't be armed; the caller shows it and
+  // does not create the connection.
+  async function requireBackground() {
+    if (load().background) return;
+    if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)
+      || typeof window === 'undefined' || !('PushManager' in window)
+      || typeof Notification === 'undefined') throw new Error(t('nwcNoPush'));
+    if (Notification.permission === 'denied') throw new Error(t('nwcNotifBlocked'));
+    try {
+      await enableBackground();
+    } catch (e) {
+      // Denied at the prompt (or dismissed it) — anything else is a real
+      // failure whose message is more useful than a permissions lecture.
+      if (Notification.permission !== 'granted') throw new Error(t('nwcNotifNeeded'));
+      throw e;
+    }
+    const s = load(); delete s.backgroundOff; save(s);
   }
 
   // Keep the notifier's view of our service pubkeys current. It can only
@@ -779,9 +805,16 @@ export function nwcFeature(ctx) {
             h('label', { class: 'field' }, h('span', { class: 'lab' }, t('nwcDailyBudget')),
               h('input', { type: 'number', min: '1', value: st.dailySat,
                 onInput: (e) => { st.dailySat = e.target.value; } })),
+            (typeof Notification === 'undefined' || Notification.permission !== 'granted')
+              ? h('div', { class: 'small faint' }, t('nwcNotifHint'))
+              : null,
             h('div', { class: 'row gap6' },
               h('button', { class: 'btn-ghost', onClick: () => { ui.nwcNew = null; render(); } }, t('cancel')),
-              h('button', { class: 'btn-primary grow', onClick: () => {
+              h('button', { class: 'btn-primary grow', onClick: async () => {
+                // No notifications, no connection: it would sit dead the
+                // moment the tab closes, spinning in the other app.
+                try { await requireBackground(); }
+                catch (e) { toast(e.message); return; }
                 const c = createConn({
                   name: st.name, maxSat: parseInt(st.maxSat, 10) || 10000,
                   dailySat: parseInt(st.dailySat, 10) || 50000,

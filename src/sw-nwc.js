@@ -80,7 +80,7 @@ self.addEventListener('push', (e) => {
       await self.registration.showNotification(handled.notify.title, {
         body: handled.notify.body,
         icon: 'icon-192.png', badge: 'icon-192.png',
-        tag: 'nwc-incoming', renotify: true,
+        tag: handled.notify.tag || 'nwc-incoming', renotify: true,
         data: { url: './' },
       });
       return;

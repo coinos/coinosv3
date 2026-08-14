@@ -212,6 +212,22 @@ export function nwcFeature(ctx) {
     ? nip44.encrypt(txt, nip44.getConversationKey(sk, pk))
     : nip04.encrypt(sk, pk, txt));
 
+  // A pay answered by a hidden tab is as invisible as one paid by the
+  // worker — surface it the same way. A visible tab already shows it live.
+  async function notifySent(c, amountSat, feeSat) {
+    try {
+      if (typeof document === 'undefined' || !document.hidden) return;
+      if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
+      const reg = await navigator.serviceWorker.ready;
+      await reg.showNotification(t('nwcPaidTitle'), {
+        body: t('nwcPaidBody', { amount: amountSat.toLocaleString(), name: c.name || 'app' })
+          + (feeSat ? ` (+${feeSat} fee)` : ''),
+        icon: 'icon-192.png', badge: 'icon-192.png',
+        tag: 'nwc-sent', renotify: true, data: { url: './' },
+      });
+    } catch {}
+  }
+
   // Every request gets a reply, including failures — a client that never
   // hears back just hangs.
   async function reply(c, ev, scheme, payload) {
@@ -358,6 +374,7 @@ export function nwcFeature(ctx) {
       const res = await hook('arkPayInvoice', invoice, { maxAmountSat: c.maxSat });
       // the ark seam throws on failure, so reaching here means it settled
       recordSpend(c, (res.amountSat || 0) + (res.feeSat || 0));
+      notifySent(c, res.amountSat || 0, res.feeSat || 0);
       return { result: { preimage: res.preimage, fees_paid: (res.feeSat || 0) * 1000 } };
     }
 

@@ -280,5 +280,14 @@ export async function respondFromBg(data, {
     result: { preimage: a.preimage, fees_paid: (a.feeSat || 0) * 1000 },
   });
   log(`paid ${a.amountSat || dec.amountSat} sat via the ASP from the background mirror`);
-  return true;
+  // Money left while the app was closed — that always deserves a heads-up,
+  // whether it was a zap from a nostr app or any other connected spender.
+  const paidSat = a.amountSat || dec.amountSat;
+  const feeNote = a.feeSat ? ` (+${a.feeSat} fee)` : '';
+  return {
+    notify: {
+      title: 'Payment sent', tag: 'nwc-sent',
+      body: `-${paidSat.toLocaleString()} sats${feeNote} via ${conn.name || 'a connected app'}`,
+    },
+  };
 }

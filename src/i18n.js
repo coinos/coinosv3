@@ -663,6 +663,8 @@ const STR = {
     nwcOff: 'Off',
     nwcBackgroundOn: 'Requests will be answered in the background',
     nwcBackgroundOff: 'Background answering turned off',
+    nwcPaidTitle: 'Payment sent',
+    nwcPaidBody: '-{amount} sats via {name}',
     nwcNotifHint: 'You’ll be asked to allow notifications — the connection uses them to answer when Coinos is closed.',
     nwcNotifNeeded: 'Without notifications the connection couldn’t answer when Coinos is closed, so it wasn’t added. Allow notifications and try again.',
     nwcNotifBlocked: 'Notifications are blocked for this site. Allow them in your browser settings, then add the connection again.',

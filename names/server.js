@@ -210,11 +210,13 @@ const ln = CFG.ln ? lnBackend(CFG.ln) : null;
 
 // -- routing-fee quotes (the /lnquote endpoint) ------------------------------
 
-// Sub-sat route fees round DOWN to a free quote: Ark locks are sat-granular,
-// and captaind passes a 0 maxfee as an absent proto field, so xpay falls back
-// to its default ~1% cap and the ASP absorbs the msats (which land on our own
-// node whenever the route goes through it). Anything >= 1 sat rounds up.
-const quoteSat = (msat) => (msat < 1000 ? 0 : Math.ceil(msat / 1000));
+// Ark locks are sat-granular and the locked surplus IS xpay's maxfee, which
+// binds hard — a 9 msat route under a 0 budget fails outright (verified live:
+// "Could not find route without excessive cost", then the +1-sat retry paid).
+// So sub-sat fees round UP: the honest minimum a client can bring is 1 sat.
+// Making those truly free needs the ASP to bring the msats itself (captaind
+// patch: floor max_routing_fee at 1 sat), not a rounder-down here.
+const quoteSat = (msat) => Math.ceil(msat / 1000);
 
 let _ourNodeId = null;
 async function ourNodeId() {

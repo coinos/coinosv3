@@ -3,8 +3,8 @@
 // encrypted 23194
 // requests in, encrypted 23195 responses out, both nip04 and nip44.
 import { hex } from '@scure/base';
-import { nwcFeature } from '/home/adam/halwallet/src/features/nwc.js';
-import { nip04, nip44, getPublicKey, finalizeEvent, generateSecretKey } from '/home/adam/halwallet/src/nostr.js';
+import { nwcFeature } from '../src/features/nwc.js';
+import { nip04, nip44, getPublicKey, finalizeEvent, generateSecretKey } from '../src/nostr.js';
 
 let ok = true;
 const check = (n, c, d='') => { console.log(` ${c?'✓':'✗'} ${n}${d?' — '+d:''}`); if(!c) ok=false; };

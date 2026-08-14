@@ -124,6 +124,9 @@ export function nwcFeature(ctx) {
     publishInfo(c).catch(() => {});
     listen();
     refreshRegistration(); // the notifier must learn the new service pubkey
+    // Arm background answering off the same click — creating a connection is
+    // the one moment a permission prompt is both allowed and expected.
+    ensureBackground(true);
     return c;
   }
 
@@ -578,6 +581,27 @@ export function nwcFeature(ctx) {
     return true;
   }
 
+  // Background answering should be the norm, not a setting the user has to
+  // find: try to arm it whenever a connection exists. `interactive` marks a
+  // call made from a user gesture (creating a connection), where the browser
+  // allows the permission prompt; elsewhere we only proceed when permission
+  // was already granted, so the user is never nagged. An explicit Off on the
+  // toggle (backgroundOff) is final — auto-arming never overrides it.
+  async function ensureBackground(interactive) {
+    const st = load();
+    if (st.background || st.backgroundOff) return;
+    if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)
+      || typeof window === 'undefined' || !('PushManager' in window)
+      || typeof Notification === 'undefined') return;
+    if (!conns().length) return;
+    if (!interactive && Notification.permission !== 'granted') return;
+    try {
+      await enableBackground();
+      await reconcileBg();
+      render();
+    } catch (e) { console.log('nwc: background answering not armed:', e.message); }
+  }
+
   // Keep the notifier's view of our service pubkeys current. It can only
   // wake this device for connections it was told about, and a registration
   // made before a connection existed (or after one was revoked) watches the
@@ -730,8 +754,17 @@ export function nwcFeature(ctx) {
             h('span', { class: 'small' }, t('nwcBackground')),
             h('button', { class: 'btn-sm', onClick: async () => {
               try {
-                if (load().background) { await disableBackground(); toast(t('nwcBackgroundOff')); }
-                else { await enableBackground(); await reconcileBg(); toast(t('nwcBackgroundOn')); }
+                if (load().background) {
+                  await disableBackground();
+                  // an explicit Off is a decision — auto-arming must not undo it
+                  const s = load(); s.backgroundOff = true; save(s);
+                  toast(t('nwcBackgroundOff'));
+                } else {
+                  await enableBackground();
+                  const s = load(); delete s.backgroundOff; save(s);
+                  await reconcileBg();
+                  toast(t('nwcBackgroundOn'));
+                }
               } catch (e) { toast(e.message); }
               render();
             } }, load().background ? t('nwcOn') : t('nwcOff')))
@@ -764,7 +797,7 @@ export function nwcFeature(ctx) {
     id: 'nwc',
     nwcOfferPubkey() { return (hook('arkReady') && !wallet.watchOnly) ? offerKeys().pk : null; },
     nwcOfferString() { return hook('arkReady') && !wallet.watchOnly ? offerString() : null; },
-    init() { listen(); startWatchdog(); refreshRegistration(); reconcileBg(); },
+    init() { listen(); startWatchdog(); refreshRegistration(); reconcileBg(); ensureBackground(false); },
     stop() { stop(); if (watchdog) { clearInterval(watchdog); watchdog = null; } },
     nostrSettingsCards() { return [nwcCard()]; },
   };

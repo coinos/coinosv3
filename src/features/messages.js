@@ -1166,13 +1166,11 @@ export function messagesFeature(ctx) {
           : showAbout && !ui.profEdit ? h('p', { class: 'small', style: 'margin:0;white-space:pre-wrap' }, about.slice(0, 1000)) : null,
         // your own npub stays out of the editor — it means nothing to most
         // people, and the account settings still show it to those who care
-        mine ? null : h('div', { class: 'addr-box break npub-box', style: 'font-size:11px' },
-          h('span', { class: 'grow', style: 'min-width:0' }, npub),
-          h('button', {
-            class: 'copy-ico', title: t('copy'),
-            onClick: async () => { try { await navigator.clipboard.writeText(npub); toast(t('copied')); } catch {} },
-            html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>',
-          })),
+        mine ? null : h('button', {
+          class: 'addr-box break npub-box', title: t('copy'),
+          style: 'font-size:11px;cursor:pointer;text-align:left;width:100%',
+          onClick: async () => { try { await navigator.clipboard.writeText(npub); toast(t('copied')); } catch {} },
+        }, npub),
         ui.profEdit
           ? h('div', { class: 'col', style: 'gap:8px' },
               field(t('profName'), 'name'),

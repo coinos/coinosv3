@@ -3028,7 +3028,8 @@ function destReady(a) {
 
 // Recipient search under the destination input: usernames and npubs resolve
 // to candidates with avatars; picking one runs the same path as pasting.
-const sendSearch = { rows: null };
+const sendSearch = { rows: null, sync: null };
+let sendRevealTimer = null;
 // With the phone keyboard up, the space under the recipient field is scarce —
 // park the field at the top of the view so the candidate list gets what's
 // left. Runs on focus and again whenever fresh candidates land (the list
@@ -3039,7 +3040,15 @@ function parkSendField() {
   const el = document.activeElement;
   if (el && el.isConnected && el.tagName === 'INPUT') el.scrollIntoView({ block: 'start', behavior: 'smooth' });
 }
-const sendSearcher = makeSearcher((q, rows) => { sendSearch.rows = rows; render(); if (rows && rows.length) setTimeout(parkSendField, 50); });
+// Results update the panel IMPERATIVELY (sendSearch.sync, set by the mounted
+// recipient row) rather than via render(): a full render swaps the focused
+// input for a fresh node, which resets Android's keyboard session and cancels
+// key auto-repeat — holding backspace deleted one character per press.
+const sendSearcher = makeSearcher((q, rows) => {
+  sendSearch.rows = rows;
+  if (sendSearch.sync) sendSearch.sync(); else render();
+  if (rows && rows.length) setTimeout(parkSendField, 50);
+});
 
 // One recipient: address + amount. Max is only offered for a single recipient.
 function recipientRow(s, r, i) {
@@ -3059,6 +3068,16 @@ function recipientRow(s, r, i) {
     check.replaceChildren(...nodes);
     check.style.display = a ? '' : 'none';
   };
+  // The suggestions panel gets the same imperative treatment — see the
+  // sendSearcher note: a render between key repeats kills backspace-hold.
+  const suggest = i === 0 ? h('div', { class: 'list send-suggest', style: 'display:none' }) : null;
+  const syncSuggest = () => {
+    if (!suggest) return;
+    const show = sendSearch.rows && sendSearch.rows.length && searchable(r.address);
+    suggest.replaceChildren(...(show ? resultRows(h, sendSearch.rows, pickRecipient) : []));
+    suggest.style.display = show ? '' : 'none';
+  };
+  if (i === 0) sendSearch.sync = syncSuggest;
 
   // A pasted/typed/scanned payload a feature recognizes (e.g. a bolt11) jumps
   // straight to that feature's own confirmation flow.
@@ -3077,8 +3096,14 @@ function recipientRow(s, r, i) {
       if (i === 0) sendSearcher.update(v); // candidates render when results land
       if (tryFeature(v, true)) return;              // a bolt11 advances to its own confirmation
       // reveal/hide amount + controls as validity flips, an annotation
-      // (zap button) appears/disappears, or an error clears
-      if (hadError || destReady(v) !== r._ready || !!featureHook('sendFormNote', v) !== r._note) render();
+      // (zap button) appears/disappears, or an error clears — but only after
+      // typing pauses: an immediate render swaps this input for a fresh node,
+      // and Android cancels key auto-repeat when the focused field resets
+      // (holding backspace deleted a single character).
+      if (hadError || destReady(v) !== r._ready || !!featureHook('sendFormNote', v) !== r._note) {
+        clearTimeout(sendRevealTimer);
+        sendRevealTimer = setTimeout(render, 250);
+      }
     },
   });
   const pickRecipient = (cand) => {
@@ -3104,9 +3129,7 @@ function recipientRow(s, r, i) {
       !single && h('button', { type: 'button', class: 'btn-sm', title: t('remove'), onClick: () => { s.recipients.splice(i, 1); render(); } }, '✕')
     ),
     check,
-    i === 0 && sendSearch.rows && sendSearch.rows.length && searchable(r.address)
-      ? h('div', { class: 'list send-suggest' }, resultRows(h, sendSearch.rows, pickRecipient))
-      : null,
+    suggest,
     r._ready ? h('div', { class: 'input-group' },
       h('input', {
         type: 'number', step: unit === 'sats' ? '1' : '0.00000001', min: '0',
@@ -3133,6 +3156,7 @@ function recipientRow(s, r, i) {
     ) : null
   );
   syncCheck();
+  syncSuggest();
   return row;
 }
 

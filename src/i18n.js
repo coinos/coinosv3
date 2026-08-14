@@ -372,6 +372,8 @@ const STR = {
     giftRevoke: 'Revoke now',
     giftRevokeConfirm: 'Revoke this gift now? This spends the coin back into your wallet and disables the link.',
     giftRevoked: 'Gift revoked',
+    giftRevokedTag: 'revoked',
+    giftCopyLinkAgain: 'Copy gift link',
     copyLink: 'Copy link',
     claimBody: 'Claim it into a brand-new wallet that only you control.',
     claimBodyExisting: 'Claim it into your wallet \u201c{name}\u201d.',

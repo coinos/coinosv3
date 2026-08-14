@@ -150,6 +150,28 @@ export class ArkManager {
   _movement(m) {
     this.state.movements.push({ id: `${Date.now()}-${this.state.movements.length}`, ts: Date.now(), ...m });
   }
+
+  // When did a mailbox vtxo come into being? Its expiry counts down from the
+  // server's vtxo lifetime, so (lifetime - blocksLeft) blocks have passed
+  // since the sender created it. At ~10 minutes a block that dates a backlog
+  // claimed at first sign-in as the old payments they are — instead of a wall
+  // of "seconds ago" receives and a bogus celebration.
+  _estimateReceiveTs(v, tip) {
+    const life = (this.info && this.info.vtxoExpiryDelta) || 0;
+    if (!life || !tip || !v.expiryHeight) return Date.now();
+    const age = life - (v.expiryHeight - tip);
+    if (age <= 0) return Date.now();
+    return Date.now() - age * 600_000;
+  }
+
+  async _tipMemo() {
+    if (this._tipAt && Date.now() - this._tipAt < 60_000) return this._tipH;
+    try {
+      this._tipH = await this.chain.tipHeight();
+      this._tipAt = Date.now();
+    } catch { /* keep whatever we had */ }
+    return this._tipH || 0;
+  }
   _vtxo(id) { return this.state.vtxos.find((v) => v.id === id); }
   _addVtxo(decoded, bytes, keyIndex, state = 'spendable') {
     if (this._vtxo(decoded.id)) return false;
@@ -264,6 +286,7 @@ export class ArkManager {
     }
     if (m.kind !== 'arkoor') return changed;
     const ourKeys = [hex.encode(this._key(0).pubkey)];
+    const tip = await this._tipMemo();
     for (const v of m.vtxos) {
       if (this._vtxo(v.id)) continue;
       try {
@@ -280,7 +303,10 @@ export class ArkManager {
       // same message concurrently (validation awaits in between), and only the
       // copy that actually added the vtxo may record the receive movement.
       if (!this._addVtxo(v, v._raw.bytes, 0)) continue;
-      this._movement({ type: 'receive', amountSat: v.amountSat, status: 'complete', vtxoId: v.id });
+      this._movement({
+        type: 'receive', amountSat: v.amountSat, status: 'complete', vtxoId: v.id,
+        ts: this._estimateReceiveTs(v, tip),
+      });
       changed = true;
     }
     return changed;

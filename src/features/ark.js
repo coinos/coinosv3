@@ -808,7 +808,13 @@ export function arkFeature(ctx) {
         : h('div', { class: `ico ${incoming ? 'in' : 'out'}`, html: ARK_MARK(15) }),
       h('div', { class: 'grow' },
         h('div', { class: 'row gap6', style: 'align-items:center' },
-          label,
+          (() => {
+            const g = giftForMovement(m);
+            if (!g) return label;
+            return h('span', {}, '🎁 ' + t('giftHistoryTitle'), ' ',
+              h('span', { class: g.claimed ? 'tag conf' : 'tag' },
+                g.claimed ? t('giftClaimedTag') : g.revoked ? t('giftRevokedTag') : t('giftUnclaimedTag')));
+          })(),
           (() => { const pk = zapNoteFor(m); return pk ? ctx.hook('profileChip', pk) : null; })(),
           m.status !== 'complete' ? h('span', { class: 'tag pending' }, m.status) : null),
         h('div', { class: 'small faint' }, timeAgo(m.ts / 1000))),
@@ -847,6 +853,30 @@ export function arkFeature(ctx) {
       m.to ? row(t('arkPayTo'), shortAddr(m.to, 16, 12)) : null,
       m.vtxoId ? row(t('arkVtxoId'), shortTxid(m.vtxoId)) : null,
       m.detail ? row(t('detailsLabel'), m.detail) : null,
+      // A send that funded a bearer gift: show its fate, and while unclaimed
+      // offer the link again plus the sweep-back — same powers the gift card
+      // has, where the sender will actually go looking for them: history.
+      (() => {
+        const g = giftForMovement(m);
+        if (!g) return null;
+        refreshArkGiftRecords();
+        const open = !g.claimed && !g.revoked;
+        const code = encodeArkGiftCode(getNetwork(), g.amountSat, hex.decode(g.secretHex));
+        return h('div', { class: 'col', style: 'gap:8px;border-top:1px solid var(--border,rgba(128,128,128,.2));padding-top:10px' },
+          h('div', { class: 'row gap6', style: 'align-items:center' },
+            h('span', {}, '🎁 ' + t('giftHistoryTitle')),
+            h('span', { class: g.claimed ? 'tag conf' : 'tag' },
+              g.claimed ? t('giftClaimedTag') : g.revoked ? t('giftRevokedTag') : t('giftUnclaimedTag'))),
+          open ? copyBtn(`${location.origin}/g/${code}`, t('giftCopyLinkAgain')) : null,
+          open ? (ui.busy && ui.revokeId === g.id
+            ? h('button', { class: 'btn-block', disabled: true }, h('span', { class: 'spinner sm' }))
+            : h('button', { class: 'btn-block', onClick: async () => {
+                ui.revokeId = g.id; ui.busy = true; render();
+                try { await doArkGiftRevoke(g.id); toast(t('giftArkRevoked')); }
+                catch (e) { toast(e.message); }
+                ui.busy = false; ui.revokeId = null; render();
+              } }, t('giftRevoke'))) : null);
+      })(),
       m.txid
         ? h('div', { class: 'col', style: 'gap:6px' },
             h('div', { class: 'small muted' }, t('transactionId')),
@@ -1601,6 +1631,11 @@ export function arkFeature(ctx) {
     return (ark.state.gifts = ark.state.gifts || []);
   }
 
+  // A gift's record id IS the destination vtxo of the send that funded it, so
+  // the history row and detail view can recognise their own gift sends.
+  const giftForMovement = (m) => (m && m.type === 'send' && m.vtxoId
+    ? arkGiftRecords().find((g) => g.id === m.vtxoId) : null);
+
   // Lazily mark records whose vtxo the server reports spent (claimed — or our
   // own revoke). Throttled: this is called from the gift card's render path.
   let arkGiftsCheckedAt = 0;
@@ -2236,24 +2271,26 @@ export function arkFeature(ctx) {
       return arkGiftRecords().filter((g) => !g.revoked && !g.claimed)
         .map((g) => ({ id: g.id, amountSat: g.amountSat, created: g.created }));
     },
-    async arkGiftRevoke(id) {
-      const g = arkGiftRecords().find((x) => x.id === id);
-      if (!g) throw new Error('unknown gift');
-      const mine = await connectArk();
-      const code = encodeArkGiftCode(getNetwork(), g.amountSat, hex.decode(g.secretHex));
-      let amount;
-      try {
-        amount = await sweepArkGift(code, mine.address());
-      } catch (e) {
-        // beaten by the claimer — record it so the row self-heals immediately
-        if (e && e.giftTaken) { g.claimed = true; mine._save(); }
-        throw e;
-      }
-      g.revoked = true;
-      mine._save();
-      await mine.sync().catch(() => {});
-      mine.ackReceives(); // our own sweep-back isn't a "payment received"
-      return amount;
-    },
+    async arkGiftRevoke(id) { return doArkGiftRevoke(id); },
   };
+
+  async function doArkGiftRevoke(id) {
+    const g = arkGiftRecords().find((x) => x.id === id);
+    if (!g) throw new Error('unknown gift');
+    const mine = await connectArk();
+    const code = encodeArkGiftCode(getNetwork(), g.amountSat, hex.decode(g.secretHex));
+    let amount;
+    try {
+      amount = await sweepArkGift(code, mine.address());
+    } catch (e) {
+      // beaten by the claimer — record it so the row self-heals immediately
+      if (e && e.giftTaken) { g.claimed = true; mine._save(); }
+      throw e;
+    }
+    g.revoked = true;
+    mine._save();
+    await mine.sync().catch(() => {});
+    mine.ackReceives(); // our own sweep-back isn't a "payment received"
+    return amount;
+  }
 }

@@ -210,6 +210,12 @@ const ln = CFG.ln ? lnBackend(CFG.ln) : null;
 
 // -- routing-fee quotes (the /lnquote endpoint) ------------------------------
 
+// Sub-sat route fees round DOWN to a free quote: Ark locks are sat-granular,
+// and captaind passes a 0 maxfee as an absent proto field, so xpay falls back
+// to its default ~1% cap and the ASP absorbs the msats (which land on our own
+// node whenever the route goes through it). Anything >= 1 sat rounds up.
+const quoteSat = (msat) => (msat < 1000 ? 0 : Math.ceil(msat / 1000));
+
 let _ourNodeId = null;
 async function ourNodeId() {
   if (!_ourNodeId) _ourNodeId = (await ln.call('getinfo')).id;
@@ -500,7 +506,7 @@ Bun.serve({
         const finalCltv = dec.min_final_cltv_expiry || 18;
         try {
           const feeMsat = await routeFeeMsat(our, dest, amountMsat, finalCltv);
-          return json({ feeMsat, feeSat: Math.ceil(feeMsat / 1000), direct: false });
+          return json({ feeMsat, feeSat: quoteSat(feeMsat), direct: false });
         } catch (e) {
           // Private recipient: not in gossip, reachable only via the
           // invoice's route hints. Quote = route to the hint's public entry
@@ -517,7 +523,7 @@ Bun.serve({
           const toEntry = entry === our ? 0
             : await routeFeeMsat(our, entry, amountMsat + hintFeeMsat, finalCltv);
           const feeMsat = toEntry + hintFeeMsat;
-          return json({ feeMsat, feeSat: Math.ceil(feeMsat / 1000), direct: false, hinted: true });
+          return json({ feeMsat, feeSat: quoteSat(feeMsat), direct: false, hinted: true });
         }
       } catch (e) {
         return json({ error: e.message || 'no route found' }, 404);

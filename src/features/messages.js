@@ -2086,13 +2086,11 @@ export function messagesFeature(ctx) {
     // one header avatar, so the node itself is reused until the profile
     // (or account) actually changes.
     headerAvatar(pk) {
-      const p = profileOf(pk);
-      const key = pk + '|' + (p === null ? 'loading' : p.picture || 'fb:' + (p.name || ''));
-      if (!this._headerAva || this._headerAvaKey !== key) {
-        this._headerAvaKey = key;
-        this._headerAva = avatar(pk, 'chat-avatar header-ava', false);
-      }
-      return this._headerAva;
+      // A fresh node every render: the morph keeps the live element (and its
+      // loaded image) in place when nothing changed, which is exactly what
+      // the old cached-node trick faked — and reusing one node in two trees
+      // let the morph strip its children when positions paired it wrong.
+      return avatar(pk, 'chat-avatar header-ava', false);
     },
     // Conversations waiting on us, for the header's message button.
     unreadMessages() { return unreadCount(); },

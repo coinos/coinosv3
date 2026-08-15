@@ -1054,20 +1054,49 @@ export function messagesFeature(ctx) {
   // ---- profiles: view + own kind-0 editor ---------------------------------
 
   const fullProfiles = new Map(); // pk -> { raw kind0 content object, fetched_at }
+  function fetchFullProfile(pk) {
+    if (fullProfiles.has(pk)) return;
+    fullProfiles.set(pk, undefined); // claimed: one fetch per pk
+    queryOn([...new Set([...PROFILE_RELAYS, ...DM_RELAYS])], { kinds: [0], authors: [pk] }, 3500).then((evs) => {
+      const newest = evs.sort((a, b) => b.created_at - a.created_at)[0];
+      let m = {};
+      try { m = newest ? JSON.parse(newest.content) : {}; } catch {}
+      fullProfiles.set(pk, m);
+      profiles.set(pk, { name: m.display_name || m.name || null, picture: m.picture || null });
+      if (ui.profilePk === pk) render();
+    }).catch(() => fullProfiles.set(pk, {}));
+  }
+
+  // Warm a profile PAGE (full kind-0 + latest notes + relay list) before
+  // anyone taps it, so the page opens complete instead of behind spinners.
+  // Queued with a small concurrency cap: likely tap-targets only, never a
+  // whole room's member list at once.
+  const prefetched = new Set();
+  const prefetchQueue = [];
+  let prefetching = 0;
+  function prefetchProfilePage(pk) {
+    if (!pk || prefetched.has(pk)) return;
+    prefetched.add(pk);
+    prefetchQueue.push(pk);
+    drainPrefetch();
+  }
+  function drainPrefetch() {
+    while (prefetching < 2 && prefetchQueue.length) {
+      const pk = prefetchQueue.shift();
+      prefetching++;
+      Promise.allSettled([
+        Promise.resolve(fetchFullProfile(pk)),
+        Promise.resolve(notesFor(pk)),
+      ]).finally(() => { prefetching--; drainPrefetch(); });
+    }
+  }
+
   function openProfile(pk) {
     ui.profilePk = pk;
     ui.profEdit = null;
     render();
-    if (!fullProfiles.has(pk)) {
-      queryOn([...new Set([...PROFILE_RELAYS, ...DM_RELAYS])], { kinds: [0], authors: [pk] }, 3500).then((evs) => {
-        const newest = evs.sort((a, b) => b.created_at - a.created_at)[0];
-        let m = {};
-        try { m = newest ? JSON.parse(newest.content) : {}; } catch {}
-        fullProfiles.set(pk, m);
-        profiles.set(pk, { name: m.display_name || m.name || null, picture: m.picture || null });
-        if (ui.profilePk === pk) render();
-      }).catch(() => fullProfiles.set(pk, {}));
-    }
+    fetchFullProfile(pk);
+    notesFor(pk);
   }
 
   // ---- profile notes: latest public posts & replies -----------------------
@@ -1185,6 +1214,7 @@ export function messagesFeature(ctx) {
   // style: rows share a scrollable container and are split by hairlines
   // rather than floating in their own cards. Tapping a row opens its thread.
   function noteRow(pk, ev, name, { open = true, focus = false } = {}) {
+    prefetchProfilePage(pk); // rows are tap-targets: have the page warm
     const isReply = ev.tags.some((x) => x[0] === 'e');
     const canZap = !isMe(pk) && !!(hook('arkReady') || hook('canLnZap'));
     return h('div', {
@@ -1407,10 +1437,9 @@ export function messagesFeature(ctx) {
             h('div', { class: 'chat-title' }, name),
             nip05 ? h('div', { class: 'muted small break' }, nip05) : null,
             showLud ? h('div', { class: 'muted small break' }, '⚡ ' + lud16) : null)),
-        full === undefined
-          ? h('div', { class: 'row gap6', style: 'align-items:center' }, h('span', { class: 'spinner sm' }))
-          // the editor's About textarea IS the bio here — no static copy above it
-          : showAbout && !ui.profEdit ? h('p', { class: 'small', style: 'margin:0;white-space:pre-wrap' }, about.slice(0, 1000)) : null,
+        // no spinner while the kind 0 loads — prefetch keeps this rare, and
+        // an empty beat reads calmer than a spinner
+        showAbout && !ui.profEdit ? h('p', { class: 'small', style: 'margin:0;white-space:pre-wrap' }, about.slice(0, 1000)) : null,
         // your own npub stays out of the editor — it means nothing to most
         // people, and the account settings still show it to those who care
         mine ? null : h('button', {
@@ -1449,8 +1478,7 @@ export function messagesFeature(ctx) {
       // Their latest public notes, zappable in place.
       (() => {
         const c = notesFor(pk);
-        if (c.status === 'loading')
-          return h('div', { class: 'card col', style: 'align-items:center;padding:18px' }, h('span', { class: 'spinner sm' }));
+        if (c.status === 'loading') return null; // prefetched almost always; never a spinner
         if (!c.notes.length)
           return h('div', { class: 'small faint', style: 'text-align:center' }, t('profNotesNone'));
         return h('div', { class: 'col', style: 'gap:8px' },
@@ -1472,6 +1500,7 @@ export function messagesFeature(ctx) {
   // lands here again since the search state survives.
   const userSearcher = makeSearcher((q, rows) => {
     if (ui.userSearch && ui.userSearch.q === q) { ui.userSearch.rows = rows; render(); }
+    for (const r of rows || []) if (r.pk) prefetchProfilePage(r.pk);
   });
   function userSearchScreen() {
     const s = ui.userSearch;
@@ -1663,6 +1692,7 @@ export function messagesFeature(ctx) {
     syncInbox().catch(() => {});
     for (const jm of communities()) ensureRoom(jm);
 
+    for (const peer of threads.keys()) prefetchProfilePage(peer);
     const dmRows = [...threads.entries()]
       .map(([peer, m]) => {
         const last = [...m.values()].sort((a, b) => a.rumor.created_at - b.rumor.created_at).at(-1);
@@ -2156,6 +2186,10 @@ export function messagesFeature(ctx) {
         h('span', { class: big ? '' : 'small' }, displayName(pk)));
     },
     init() {
+      // your own profile is the likeliest first tap — warm it early
+      setTimeout(() => {
+        try { const me = ctx.shownPubkey && ctx.shownPubkey(); if (me) prefetchProfilePage(me); } catch {}
+      }, 2500);
       if (urlInvite && !pendingLink) {
         loadLinkInvite(urlInvite);
         setTimeout(() => { ui.chatOpen = true; ui.msgView = 'home'; render(); }, 0);

@@ -24,7 +24,7 @@ import {
   getVtxoStatus, VTXO_STATE_SPENT,
 } from './proto.js';
 import {
-  buildArkoorSend, cosignWithServer, buildAllSignedVtxos,
+  buildArkoorSend, cosignWithServer, cosignPackageWithServer, buildAllSignedVtxos,
   registerVtxoTransactions, postArkoorMessage, txid,
   genUserNonces, cosignPartBytes, combineCosign,
 } from './send.js';
@@ -528,6 +528,27 @@ export class ArkManager {
     return candidates[0];
   }
 
+  // Cover `amountSat` with as few coins as possible: the smallest single vtxo
+  // that covers it, else largest-first until the sum does. A balance scattered
+  // by many small receives stays spendable — the package cosign spends all
+  // the inputs atomically and the recipient just receives several vtxos.
+  _selectInputs(amountSat) {
+    const spendable = this.state.vtxos.filter((v) => v.state === 'spendable');
+    const single = spendable
+      .filter((v) => v.amountSat >= amountSat)
+      .sort((a, b) => a.amountSat - b.amountSat)[0];
+    if (single) return [single];
+    const picked = [];
+    let sum = 0;
+    for (const v of [...spendable].sort((a, b) => b.amountSat - a.amountSat)) {
+      picked.push(v); sum += v.amountSat;
+      if (sum >= amountSat) break;
+    }
+    if (sum < amountSat) throw new Error('insufficient ark balance');
+    if (picked.length > 24) throw new Error('balance is spread over too many coins for one send');
+    return picked;
+  }
+
   async send(addrString, amountSat) {
     const dest = decodeAddress(addrString);
     if (dest.arkId !== hex.encode(arkIdFromServerPubkey(this.serverPub))) {
@@ -536,47 +557,69 @@ export class ArkManager {
     const mailboxDelivery = dest.delivery.find((d) => d.type === 1);
     if (!mailboxDelivery) throw new Error('address has no mailbox delivery mechanism');
 
-    const input = this._selectInput(amountSat);
-    const changeSat = input.amountSat - amountSat;
+    const inputs = this._selectInputs(amountSat);
+    // Each input funds its own arkoor: the first n-1 are consumed whole, the
+    // last carries the remainder plus any change.
+    let remaining = amountSat;
+    const parts = inputs.map((v) => {
+      const destSat = Math.min(remaining, v.amountSat);
+      remaining -= destSat;
+      const changeSat = v.amountSat - destSat;
+      return {
+        inputId: v.id, destSat, changeSat,
+        changeIndex: changeSat > 0 ? this.state.nextKeyIndex++ : null,
+      };
+    });
     const action = {
       id: `send-${Date.now()}`, type: 'send', step: 'created',
-      inputId: input.id, amountSat, destAddress: addrString,
+      parts, amountSat, destAddress: addrString,
       destPubkey: dest.userPubkey, destBlindedId: mailboxDelivery.data,
-      changeIndex: changeSat > 0 ? this.state.nextKeyIndex++ : null, changeSat,
     };
-    input.state = 'pending';
+    for (const v of inputs) v.state = 'pending';
     this.state.actions.push(action);
     this._save();
     await this._driveSend(action);
     return action.id;
   }
 
-  _sendOutputs(action) {
-    const outputs = [{ amountSat: action.amountSat, userPubkey: hex.decode(action.destPubkey) }];
-    if (action.changeSat > 0) {
-      outputs.push({ amountSat: action.changeSat, userPubkey: this._key(action.changeIndex).pubkey });
-    }
-    return outputs;
+  // pre-multi-input actions carried the single part in flat fields
+  _sendParts(action) {
+    return action.parts || [{
+      inputId: action.inputId, destSat: action.amountSat,
+      changeSat: action.changeSat || 0, changeIndex: action.changeIndex,
+    }];
   }
 
   async _driveSend(action) {
     if (action.step === 'created') {
-      const inputRec = this._vtxo(action.inputId);
-      const input = this._decoded(inputRec);
-      const keys = this._keyForVtxo(inputRec);
-      const outputs = this._sendOutputs(action);
-      await registerVtxoTransactions(this.arkUrl, [input._raw.bytes]);
-      const build = buildArkoorSend({ input, outputs, serverPubkey: this.serverPub, vtxoKeys: keys });
-      let sigs;
+      const parts = this._sendParts(action);
+      const inputRecs = parts.map((p) => this._vtxo(p.inputId));
+      const decoded = inputRecs.map((r) => this._decoded(r));
+      const keysList = inputRecs.map((r) => this._keyForVtxo(r));
+      await registerVtxoTransactions(this.arkUrl, decoded.map((d) => d._raw.bytes));
+      const builds = parts.map((p, i) => buildArkoorSend({
+        input: decoded[i],
+        outputs: [
+          { amountSat: p.destSat, userPubkey: hex.decode(action.destPubkey) },
+          ...(p.changeSat > 0 ? [{ amountSat: p.changeSat, userPubkey: this._key(p.changeIndex).pubkey }] : []),
+        ],
+        serverPubkey: this.serverPub, vtxoKeys: keysList[i],
+      }));
+      let sigsList;
       try {
-        sigs = await cosignWithServer(this.arkUrl, build, { input, outputs, vtxoKeys: keys, serverPubkey: this.serverPub });
+        // one atomic package: the server signs every part or none
+        sigsList = await cosignPackageWithServer(this.arkUrl,
+          builds.map((b, i) => ({ build: b, input: decoded[i], vtxoKeys: keysList[i] })),
+          this.serverPub);
       } catch (e) {
         const spent = e instanceof GrpcError && /already spent|not spendable/i.test(e.message);
         if (spent || (e instanceof GrpcError && e.grpcStatus === 3)) {
-          // "already spent": the input is gone (possibly a prior crashed
-          // attempt). Status 3: the server rejected the cosign outright, so
-          // the input is untouched and returns to spendable. Neither retries.
-          inputRec.state = spent ? 'spent' : 'spendable';
+          // Status 3: the server rejected the whole package — nothing was
+          // spent, everything returns to spendable. "already spent" names ONE
+          // stale input but not which: optimistically free them all and let
+          // reconcile() flip the truly-gone one back to spent.
+          for (const r of inputRecs) r.state = 'spendable';
+          if (spent) this.reconcile().catch(() => {});
           action.step = 'failed';
           action.error = e.message;
           this._movement({ type: 'send', amountSat: action.amountSat, status: 'failed', detail: e.message });
@@ -585,17 +628,25 @@ export class ArkManager {
         }
         throw e;
       }
-      // the input is spent server-side from this moment: persist immediately.
-      // Dust padding may SPLIT the destination or change across two vtxos —
+      // the inputs are spent server-side from this moment: persist immediately.
+      // Dust padding may SPLIT a destination or change across two vtxos —
       // classify results by policy key rather than by output index.
-      const all = buildAllSignedVtxos({ input, build, finalSigs: sigs, serverPubkey: this.serverPub })
-        .map((bytes) => ({ bytes, v: decodeVtxo(bytes) }));
-      const dest = all.filter((x) => x.v.policy.userPubkey === action.destPubkey);
-      const change = all.filter((x) => x.v.policy.userPubkey !== action.destPubkey);
-      action.destBytesList = dest.map((x) => hex.encode(x.bytes));
-      action.changeBytesList = change.map((x) => hex.encode(x.bytes));
-      for (const x of change) this._addVtxo(x.v, x.bytes, action.changeIndex, 'pending');
-      inputRec.state = 'spent';
+      const destBytesList = [];
+      const changeBytesList = [];
+      for (let i = 0; i < parts.length; i++) {
+        const all = buildAllSignedVtxos({ input: decoded[i], build: builds[i], finalSigs: sigsList[i], serverPubkey: this.serverPub })
+          .map((bytes) => ({ bytes, v: decodeVtxo(bytes) }));
+        for (const x of all) {
+          if (x.v.policy.userPubkey === action.destPubkey) destBytesList.push(hex.encode(x.bytes));
+          else {
+            changeBytesList.push(hex.encode(x.bytes));
+            this._addVtxo(x.v, x.bytes, parts[i].changeIndex, 'pending');
+          }
+        }
+        inputRecs[i].state = 'spent';
+      }
+      action.destBytesList = destBytesList;
+      action.changeBytesList = changeBytesList;
       action.step = 'cosigned';
       this._save();
     }

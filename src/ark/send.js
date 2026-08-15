@@ -461,13 +461,25 @@ export function combineCosign({ build, nonces, serverResp, vtxoKeys, serverPubke
 
 // full MuSig2 ceremony over the ASP's RequestArkoorCosign
 export async function cosignWithServer(ark, build, { input, vtxoKeys, serverPubkey, preimage }) {
-  const nonces = genUserNonces(build, vtxoKeys);
+  const [sigs] = await cosignPackageWithServer(ark, [{ build, input, vtxoKeys, preimage }], serverPubkey);
+  return sigs;
+}
+
+// Same ceremony for a PACKAGE of arkoor parts (one per input vtxo) in a single
+// atomic request — the server cosigns all or none, so a multi-input send can't
+// half-spend. Returns one finalSigs array per part, in order.
+export async function cosignPackageWithServer(ark, parts, serverPubkey) {
+  const noncesList = parts.map((p) => genUserNonces(p.build, p.vtxoKeys));
   const req = pbWriter();
-  req.bytesField(1, cosignPartBytes({ build, input, vtxoKeys, nonces, preimage }));
+  parts.forEach((p, i) => req.bytesField(1, cosignPartBytes({
+    build: p.build, input: p.input, vtxoKeys: p.vtxoKeys, nonces: noncesList[i], preimage: p.preimage,
+  })));
   const respBytes = await grpcCall(ark, 'bark_server.ArkService/RequestArkoorCosign', req.finish());
-  const [serverResp] = parsePackageCosignResponse(respBytes);
-  if (!serverResp) throw new Error('empty cosign response');
-  return combineCosign({ build, nonces, serverResp, vtxoKeys, serverPubkey });
+  const resps = parsePackageCosignResponse(respBytes);
+  if (resps.length !== parts.length) throw new Error('bad cosign response count');
+  return parts.map((p, i) => combineCosign({
+    build: p.build, nonces: noncesList[i], serverResp: resps[i], vtxoKeys: p.vtxoKeys, serverPubkey,
+  }));
 }
 
 // assemble the final signed Vtxo<Full> bytes for output `idx`, where idx

@@ -4068,6 +4068,10 @@ const ctx = {
   // full sign-out (distinct from the padlock's lock-in-place): clear the
   // session and leave — offering a password if none protects the vault yet
   logout: () => { lock({ offerPassword: true }); },
+  // the identity the header avatar currently wears (login > seed key >
+  // remembered) — profile "mine"-ness must match what the user clicked
+  shownPubkey: () => (featureHook('nostrLoginIdentity') || {}).pubkey
+    || (wallet.nostrPubkey && wallet.nostrPubkey()) || (activeAccount() || {}).nostrPk || null,
   getAccount: () => accountSel(),
   setAccount: (a, dir) => setAccountSel(a, dir),
   // Open (or create) a wallet from a mnemonic — used by nostr login.

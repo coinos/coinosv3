@@ -1363,7 +1363,7 @@ export function messagesFeature(ctx) {
 
   function profileScreen() {
     const pk = ui.profilePk;
-    const mine = isMe(pk);
+    const mine = isMe(pk) || (ctx.shownPubkey && pk === ctx.shownPubkey());
     const full = fullProfiles.get(pk);
     // Your own profile IS the editor — the form appears prefilled as soon as
     // the published kind 0 arrives, no Edit step.

@@ -2393,7 +2393,7 @@ function vaultScreen() {
       h('input', { type: 'password', placeholder: t('password'), value: ui.vaultPw,
         onInput: (e) => (ui.vaultPw = e.target.value), onKeyDown: (e) => { if (e.key === 'Enter') unlockVault(); } }),
       h('div', { class: 'row between', style: 'align-items:center;gap:10px' },
-        h('span', { class: 'small muted' }, t('unlockForLabel')),
+        h('span', { class: 'small muted', style: 'white-space:nowrap;flex-shrink:0' }, t('unlockForLabel')),
         h('select', { onChange: (e) => { ui.unlockFor = Number(e.target.value) || 0; } },
           UNLOCK_FOR_OPTIONS.map((o) => h('option', {
             value: String(o.ms),

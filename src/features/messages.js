@@ -1054,17 +1054,52 @@ export function messagesFeature(ctx) {
   // ---- profiles: view + own kind-0 editor ---------------------------------
 
   const fullProfiles = new Map(); // pk -> { raw kind0 content object, fetched_at }
+  const fullFetched = new Set();  // fetched from relays this session
+
+  // The profile-page cache SURVIVES refreshes: bios and recent posts serve
+  // instantly from storage while a background fetch freshens them. Bounded:
+  // the last handful of viewed/warmed pages, notes trimmed to what the rows
+  // render.
+  const PROF_PAGE_CACHE = 'profPages';
+  const pageCache = () => {
+    try {
+      const c = wallet.loadFeatureState(PROF_PAGE_CACHE, {}) || {};
+      return { full: c.full || {}, notes: c.notes || {} };
+    } catch { return { full: {}, notes: {} }; }
+  };
+  function persistPage(kind, pk, value) {
+    try {
+      const c = pageCache();
+      c[kind][pk] = { t: Date.now(), v: value };
+      for (const k of ['full', 'notes']) {
+        const keys = Object.keys(c[k]).sort((a, b) => c[k][b].t - c[k][a].t);
+        for (const drop of keys.slice(10)) delete c[k][drop];
+      }
+      wallet.saveFeatureState(PROF_PAGE_CACHE, c);
+    } catch {}
+  }
+  const slimNote = (ev) => ({
+    id: ev.id, pubkey: ev.pubkey, kind: 1, created_at: ev.created_at,
+    content: String(ev.content || '').slice(0, 3000),
+    tags: (ev.tags || []).filter((x) => x[0] === 'e' || x[0] === 'p'),
+  });
+
   function fetchFullProfile(pk) {
-    if (fullProfiles.has(pk)) return;
-    fullProfiles.set(pk, undefined); // claimed: one fetch per pk
+    if (!fullProfiles.has(pk)) {
+      const cached = pageCache().full[pk];
+      if (cached) fullProfiles.set(pk, cached.v);
+    }
+    if (fullFetched.has(pk)) return;
+    fullFetched.add(pk);
     queryOn([...new Set([...PROFILE_RELAYS, ...DM_RELAYS])], { kinds: [0], authors: [pk] }, 3500).then((evs) => {
       const newest = evs.sort((a, b) => b.created_at - a.created_at)[0];
       let m = {};
       try { m = newest ? JSON.parse(newest.content) : {}; } catch {}
       fullProfiles.set(pk, m);
+      persistPage('full', pk, m);
       profiles.set(pk, { name: m.display_name || m.name || null, picture: m.picture || null });
       if (ui.profilePk === pk) render();
-    }).catch(() => fullProfiles.set(pk, {}));
+    }).catch(() => { if (!fullProfiles.has(pk)) fullProfiles.set(pk, {}); });
   }
 
   // Warm a profile PAGE (full kind-0 + latest notes + relay list) before
@@ -1126,15 +1161,23 @@ export function messagesFeature(ctx) {
   function notesFor(pk) {
     let c = notesCache.get(pk);
     if (c) return c;
-    c = { status: 'loading', notes: [] };
+    // stored posts paint the page instantly; the relay fetch below freshens
+    const stored = pageCache().notes[pk];
+    c = stored
+      ? { status: 'ready', notes: stored.v }
+      : { status: 'loading', notes: [] };
     notesCache.set(pk, c);
     (async () => {
       const evs = await queryOn(await notesRelays(pk), { kinds: [1], authors: [pk], limit: 30 }, 4500);
       const seen = new Set();
-      c.notes = (evs || [])
+      const fresh = (evs || [])
         .filter((e) => !seen.has(e.id) && seen.add(e.id))
         .sort((a, b) => b.created_at - a.created_at)
         .slice(0, 20);
+      if (fresh.length || !c.notes.length) {
+        c.notes = fresh;
+        persistPage('notes', pk, fresh.map(slimNote));
+      }
     })().catch(() => {}).finally(() => {
       c.status = 'ready';
       if (ui.profilePk === pk) render();

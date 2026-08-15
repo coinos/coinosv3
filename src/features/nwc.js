@@ -638,10 +638,13 @@ export function nwcFeature(ctx) {
     try {
       await enableBackground();
     } catch (e) {
-      // Denied at the prompt (or dismissed it) — anything else is a real
-      // failure whose message is more useful than a permissions lecture.
+      // Denied at the prompt (or dismissed it): that's the user's call and
+      // the connection is refused. But permission GRANTED with the plumbing
+      // failing (notifier down, a self-hosted build with no notifier at all)
+      // must not hold the connection hostage — it still answers from open
+      // tabs, and ensureBackground keeps retrying the arming on every start.
       if (Notification.permission !== 'granted') throw new Error(t('nwcNotifNeeded'));
-      throw e;
+      console.warn('nwc: background arming failed, creating the connection anyway:', e.message);
     }
     const s = load(); delete s.backgroundOff; save(s);
   }

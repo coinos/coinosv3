@@ -1454,6 +1454,10 @@ export function messagesFeature(ctx) {
               noteRow(pk, ev, name),
             ])));
       })(),
+      mine ? h('button', {
+        class: 'btn-ghost btn-block', style: 'color:var(--red,#c0392b)',
+        onClick: () => { ui.profilePk = null; ui.profEdit = null; ctx.logout && ctx.logout(); },
+      }, t('logout')) : null,
       h('button', { class: 'btn-ghost btn-block', onClick: () => { ui.profilePk = null; ui.profEdit = null; render(); } }, t('back')));
   }
 

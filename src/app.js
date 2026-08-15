@@ -4065,6 +4065,9 @@ const ctx = {
   // support) — lazy so it resolves against the final FEATURES list, and a
   // build without the target feature simply gets null back
   hook: (name, ...args) => featureHook(name, ...args),
+  // full sign-out (distinct from the padlock's lock-in-place): clear the
+  // session and leave — offering a password if none protects the vault yet
+  logout: () => { lock({ offerPassword: true }); },
   getAccount: () => accountSel(),
   setAccount: (a, dir) => setAccountSel(a, dir),
   // Open (or create) a wallet from a mnemonic — used by nostr login.

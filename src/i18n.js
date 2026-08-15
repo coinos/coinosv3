@@ -671,6 +671,7 @@ const STR = {
     spendingName: 'Spending',
     manageAccounts: 'Wallets',
     lockedToast: 'Locked',
+    logout: 'Log out',
     lockedTitle: 'Locked',
     lockedDesc: 'Your wallets are locked on this device. Enter your password to open them again.',
     settingsWalletDesc: 'Name, keys, backup',

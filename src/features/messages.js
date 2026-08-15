@@ -1364,6 +1364,12 @@ export function messagesFeature(ctx) {
   function profileScreen() {
     const pk = ui.profilePk;
     const mine = isMe(pk) || (ctx.shownPubkey && pk === ctx.shownPubkey());
+    const logoutBtn = () => h('button', {
+      class: 'btn-block', style: 'color:var(--red,#c0392b);display:flex;align-items:center;justify-content:center;gap:8px',
+      onClick: () => { ui.profilePk = null; ui.profEdit = null; ctx.logout && ctx.logout(); },
+    },
+      h('span', { style: 'display:flex', html: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>' }),
+      t('logout'));
     const full = fullProfiles.get(pk);
     // Your own profile IS the editor — the form appears prefilled as soon as
     // the published kind 0 arrives, no Edit step.
@@ -1418,9 +1424,10 @@ export function messagesFeature(ctx) {
               field(t('profAbout'), 'about', '', true),
               field(t('profPicture'), 'picture', 'https://…'),
               h('button', { class: 'btn-primary btn-block', disabled: ui.profSaving, onClick: saveProfile },
-                ui.profSaving ? h('span', { class: 'spinner sm' }) : t('save')))
+                ui.profSaving ? h('span', { class: 'spinner sm' }) : t('save')),
+              logoutBtn())
           : mine
-            ? null // the editor renders above once the kind 0 loads
+            ? logoutBtn() // the editor renders above once the kind 0 loads
             : h('div', { class: 'row gap6 wrap' },
                 h('button', { class: 'btn-primary grow', onClick: () => {
                   const peer = pk;
@@ -1454,10 +1461,6 @@ export function messagesFeature(ctx) {
               noteRow(pk, ev, name),
             ])));
       })(),
-      mine ? h('button', {
-        class: 'btn-ghost btn-block', style: 'color:var(--red,#c0392b)',
-        onClick: () => { ui.profilePk = null; ui.profEdit = null; ctx.logout && ctx.logout(); },
-      }, t('logout')) : null,
       h('button', { class: 'btn-ghost btn-block', onClick: () => { ui.profilePk = null; ui.profEdit = null; render(); } }, t('back')));
   }
 

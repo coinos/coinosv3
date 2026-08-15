@@ -1877,7 +1877,7 @@ function settingsTab() {
   const tile = (id, label, desc) =>
     h('button', {
       class: 'card col settings-tile',
-      style: 'align-items:flex-start;gap:6px;text-align:left;padding:14px;cursor:pointer',
+      style: 'align-items:flex-start;gap:6px;text-align:left;padding:14px;cursor:pointer;margin:0',
       onClick: () => { ui.settingsPage = id; render(); },
     },
       h('span', { class: 'st-ico', style: 'color:var(--muted)', html: TILE_ICONS[id] || '' }),

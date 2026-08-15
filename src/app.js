@@ -128,18 +128,92 @@ function h(tag, attrs = {}, ...children) {
   for (const [k, v] of Object.entries(attrs || {})) {
     if (v == null || v === false) continue;
     if (k === 'class') e.className = v;
-    else if (k === 'html') e.innerHTML = v;
+    else if (k === 'html') { e.innerHTML = v; e._html = v; }
     else if (k === 'value') e.value = v;
     else if (k === 'checked' || k === 'disabled' || k === 'selected') e[k] = !!v;
-    else if (k.startsWith('on') && typeof v === 'function')
-      e.addEventListener(k.slice(2).toLowerCase(), v);
-    else e.setAttribute(k, v);
+    else if (k.startsWith('on') && typeof v === 'function') {
+      // assigned as an on* PROPERTY (not addEventListener) so the morph can
+      // transplant handlers between renders: assignment replaces, and _evs
+      // records which slots this render claimed
+      const n = 'on' + k.slice(2).toLowerCase();
+      e[n] = v;
+      (e._evs || (e._evs = new Set())).add(n);
+    } else e.setAttribute(k, v);
   }
   for (const c of children.flat()) {
     if (c == null || c === false || c === true) continue;
     e.append(c.nodeType ? c : document.createTextNode(String(c)));
   }
   return e;
+}
+
+// ---------------------------------------------------------------- morphing
+// render() builds a fresh tree exactly as before, but instead of replacing
+// the document we PATCH the live DOM into its shape. Nodes keep their
+// identity across renders, so :hover, focus, text selection, CSS transitions
+// and scroll positions survive every background repaint — the strobing that
+// full replacement caused (and that focus/scroll bookkeeping only papered
+// over) is gone at the root. Escape hatch: a node carrying data-fresh is
+// swapped wholesale whenever the new render produced a different one (used
+// where a detached node runs its own animation frames).
+function morph(a, b) {
+  if (a === b) return;
+  if (a.nodeType === 3 && b.nodeType === 3) {
+    if (a.data !== b.data) a.data = b.data;
+    return;
+  }
+  if (a.nodeType !== 1 || b.nodeType !== 1 || a.nodeName !== b.nodeName
+    || b.hasAttribute?.('data-fresh')) {
+    a.replaceWith(b);
+    return;
+  }
+  // attributes (className and style strings ride along as attributes)
+  for (const at of [...a.attributes]) if (!b.hasAttribute(at.name)) a.removeAttribute(at.name);
+  for (const at of [...b.attributes]) if (a.getAttribute(at.name) !== at.value) a.setAttribute(at.name, at.value);
+  // event handler slots claimed via h()
+  if (a._evs) for (const n of a._evs) if (!(b._evs && b._evs.has(n))) a[n] = null;
+  if (b._evs) for (const n of b._evs) a[n] = b[n];
+  a._evs = b._evs;
+  // live form state: value/checked are properties, not attributes — but never
+  // fight the user over a field they're currently editing
+  const tag = a.nodeName;
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') {
+    if (document.activeElement !== a) {
+      if (a.value !== b.value) a.value = b.value;
+      if (a.checked !== b.checked) a.checked = b.checked;
+    }
+    if (a.disabled !== b.disabled) a.disabled = b.disabled;
+  }
+  // innerHTML-authored subtrees (svg icons, QRs): compare source, not nodes
+  if (b._html != null) {
+    if (a._html !== b._html) a.innerHTML = b._html;
+    a._html = b._html;
+    return;
+  }
+  if (a._html != null) {
+    // the live node was innerHTML-authored but this render built children —
+    // clear and fall through so the child loop rebuilds it (returning here
+    // once left a form's field permanently empty)
+    a.textContent = '';
+    a._html = undefined;
+  }
+  // children, by position; snapshot first (appending b's children moves them)
+  const ac = [...a.childNodes];
+  const bc = [...b.childNodes];
+  for (let i = 0; i < bc.length; i++) {
+    if (!ac[i]) a.append(bc[i]);
+    else if (ac[i] !== bc[i]) morph(ac[i], bc[i]);
+  }
+  for (let i = bc.length; i < ac.length; i++) ac[i].remove();
+}
+
+function morphChildren(parent, next) {
+  const cur = [...parent.childNodes];
+  for (let i = 0; i < next.length; i++) {
+    if (!cur[i]) parent.append(next[i]);
+    else if (cur[i] !== next[i]) morph(cur[i], next[i]);
+  }
+  for (let i = next.length; i < cur.length; i++) cur[i].remove();
 }
 
 const root = document.getElementById('app');
@@ -312,7 +386,9 @@ const _amtLast = new Map();
 function animatedAmount(key, sat) {
   const prev = _amtLast.get(key);
   _amtLast.set(key, sat);
-  const el = h('span', {}, fmtAmount(sat));
+  // data-fresh: this node animates itself with its own rAF loop after render,
+  // so the morph must install THIS node, not patch text onto last render's
+  const el = h('span', { 'data-fresh': '1' }, fmtAmount(sat));
   if (prev !== undefined && prev !== sat) {
     const from = prev, to = sat, t0 = performance.now(), dur = 550;
     const step = (t) => {
@@ -367,7 +443,7 @@ function render() {
     ui.profilePk, ui.settingsPage, ui.addrScan, ui.arkExitPage, ui.txDetail, ui.giftMode, ui.claimStep, ui.nameEditOpen].join('|');
   if (uiChanged('nav', navKey)) _navAt = performance.now();
   applyAnim(screen, 'anim-page', (performance.now() - _navAt) < 340 ? performance.now() - _navAt : -1);
-  root.replaceChildren(screen, footer());
+  morphChildren(root, [screen, footer()]);
   if (fpath) {
     const el = nodeAtPath(fpath);
     if (el && el !== a && /^(INPUT|SELECT|TEXTAREA)$/.test(el.tagName)) {
@@ -3068,7 +3144,11 @@ function recipientRow(s, r, i) {
 
   // Updated imperatively on input (and on render) so paste, typing, and scan
   // all reflect immediately without disrupting the input's focus/cursor.
-  const check = h('div', { class: 'addr-check' });
+  // data-fresh: these two are filled IMPERATIVELY through closures over this
+  // render's nodes — the morph must install these exact nodes, not keep last
+  // render's (whose closures are stale). Both are fully filled before the
+  // morph runs, so the wholesale swap carries identical content.
+  const check = h('div', { class: 'addr-check', 'data-fresh': '1' });
   const syncCheck = () => {
     const a = r.address.trim();
     const nodes = addrVerifyNodes(a);
@@ -3077,7 +3157,7 @@ function recipientRow(s, r, i) {
   };
   // The suggestions panel gets the same imperative treatment — see the
   // sendSearcher note: a render between key repeats kills backspace-hold.
-  const suggest = i === 0 ? h('div', { class: 'list send-suggest', style: 'display:none' }) : null;
+  const suggest = i === 0 ? h('div', { class: 'list send-suggest', style: 'display:none', 'data-fresh': '1' }) : null;
   const syncSuggest = () => {
     if (!suggest) return;
     const show = sendSearch.rows && sendSearch.rows.length && searchable(r.address);

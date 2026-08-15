@@ -339,7 +339,13 @@ async function settleLoop() {
     // LNURL invoices we minted: recorded against their payment hash
     const pending = state.invoices && state.invoices[inv.payment_hash];
     if (!name && pending) name = pending.key;
-    if (!name) continue; // not one of ours (e.g. the ASP's own invoices)
+    if (!name) {
+      // Usually genuinely not ours (the ASP's and boltz's invoices settle on
+      // this node too) — but log it, so a lost mapping is an audit-grep away
+      // instead of an archaeology project.
+      log(`settle without a name: ${inv.payment_hash} ${inv.amount_received_msat || ''}`);
+      continue;
+    }
     const sat = Math.floor((inv.amount_received_msat?.msat ?? inv.amount_received_msat ?? 0) / 1000);
     if (!sat) continue;
     // money has arrived for this name — push-notify their devices (best effort)
@@ -660,8 +666,13 @@ Bun.serve({
         state.invoices = state.invoices || {};
         state.invoices[inv.payment_hash] = { key, zap, bolt11: inv.bolt11, ts: Date.now() };
         // forget invoices nobody paid
+        // Keep mappings as long as the invoice could possibly settle: a 1h
+        // sweep once erased a mapping while the settle loop was catching up
+        // after downtime, stranding a paid 1000 sats unattributed (found
+        // again only via the description_hash). CLN invoices default to a
+        // 7-day expiry — match it.
         for (const [h, v] of Object.entries(state.invoices)) {
-          if (Date.now() - v.ts > 3600_000) delete state.invoices[h];
+          if (Date.now() - v.ts > 7 * 86400_000) delete state.invoices[h];
         }
         persist();
         log(`lnurl ${key}: issued ${sat} sat (forwarding on settle)`);

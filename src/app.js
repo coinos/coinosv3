@@ -1135,8 +1135,13 @@ function saveDirectory() {
     // reopening still shows WHO this wallet is (avatar, npub, profile) even
     // though nothing can be signed until the keys are back.
     const dir = accounts.filter((a) => a.xpub && !a.provisional).map((a) => {
-      if (a.id === activeId && !wallet.watchOnly && wallet.nostrPubkey) {
-        try { a.nostrPk = wallet.nostrPubkey() || a.nostrPk; } catch {}
+      if (a.id === activeId && !wallet.watchOnly) {
+        // remember the identity the header actually SHOWS — a nostr login
+        // outranks the seed-derived key, locked or not
+        try {
+          a.nostrPk = (featureHook('nostrLoginIdentity') || {}).pubkey
+            || (wallet.nostrPubkey && wallet.nostrPubkey()) || a.nostrPk;
+        } catch {}
       }
       return { id: a.id, label: a.label, xpub: a.xpub, autoLock: a.autoLock || 0, network: a.network, nostrPk: a.nostrPk };
     });

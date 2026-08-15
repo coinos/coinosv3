@@ -1217,6 +1217,14 @@ function switchAccount(id) {
 function restoreAccountsState() {
   let sess = null;
   try { sess = JSON.parse(sessionStorage.getItem(ACCOUNTS_KEY) || 'null'); } catch {}
+  // the "Unlock for" deadline outlives refreshes: past it, the password is
+  // required again no matter what the session cache still holds
+  if (unlockDeadlinePassed()) {
+    try { sessionStorage.removeItem(ACCOUNTS_KEY); localStorage.removeItem(UNLOCK_UNTIL_KEY); } catch {}
+    sess = null;
+  } else {
+    armUnlockDeadline();
+  }
   if (sess && Array.isArray(sess.accounts) && sess.accounts.length) {
     accounts = sess.accounts;
     const active = accounts.find((a) => a.id === sess.activeId) || accounts[0];
@@ -1448,11 +1456,46 @@ function attemptVaultUnlock(password) {
   return true;
 }
 
+// "Unlock for": a session deadline chosen at the password prompt. Past it the
+// app relocks (back to this prompt) — wallets stay saved, nothing is wiped.
+const UNLOCK_FOR_KEY = 'btc-wallet-unlock-for';
+const UNLOCK_UNTIL_KEY = 'btc-wallet-unlock-until';
+const UNLOCK_FOR_OPTIONS = [
+  { ms: 300_000, label: 'unlockFor5m' },
+  { ms: 1_800_000, label: 'unlockFor30m' },
+  { ms: 86_400_000, label: 'unlockFor1d' },
+  { ms: 0, label: 'unlockForever' },
+];
+let _unlockUntilTimer = null;
+function armUnlockDeadline() {
+  clearTimeout(_unlockUntilTimer); _unlockUntilTimer = null;
+  let until = 0;
+  try { until = Number(localStorage.getItem(UNLOCK_UNTIL_KEY)) || 0; } catch {}
+  if (!until) return;
+  const left = until - Date.now();
+  if (left <= 0) {
+    try { localStorage.removeItem(UNLOCK_UNTIL_KEY); } catch {}
+    if (activeAccount()) lock({ offerPassword: true });
+    return;
+  }
+  _unlockUntilTimer = setTimeout(armUnlockDeadline, Math.min(left, 60_000));
+}
+function unlockDeadlinePassed() {
+  try { const u = Number(localStorage.getItem(UNLOCK_UNTIL_KEY)) || 0; return u > 0 && Date.now() >= u; } catch { return false; }
+}
+
 // On-open vault unlock (password prompt).
 function unlockVault() {
   if (!attemptVaultUnlock(ui.vaultPw)) { ui.vaultError = t('pwWrong'); render(); return; }
   ui.vaultPw = '';
   ui.vaultError = '';
+  const ms = ui.unlockFor != null ? ui.unlockFor : Number(localStorage.getItem(UNLOCK_FOR_KEY)) || 0;
+  try {
+    localStorage.setItem(UNLOCK_FOR_KEY, String(ms));
+    if (ms > 0) localStorage.setItem(UNLOCK_UNTIL_KEY, String(Date.now() + ms));
+    else localStorage.removeItem(UNLOCK_UNTIL_KEY);
+  } catch {}
+  armUnlockDeadline();
   if (accounts.length) activateAccount(accounts[0], { fresh: true });
   else lock(); // everything got signed out by the timer
 }
@@ -1567,6 +1610,7 @@ function onAppVisible() {
   clearTimeout(_awayTimer); _awayTimer = null;
   const awayAt = _awayAt(); _clearAwayAt();
   if (awayAt) evaluateOverdue(Date.now() - awayAt);
+  armUnlockDeadline(); // background tabs throttle timers — recheck on return
 }
 
 // At boot the in-memory timer is gone (reload / discarded tab). Drop overdue
@@ -1681,12 +1725,14 @@ function settingsBtn() {
 }
 
 function lockBtn() {
+  // While a wallet is open this shows an OPEN padlock in green — the state is
+  // "unlocked", the tap locks it. (Locked state has no header at all.)
   return h('button', {
     class: 'header-msgs', title: t('lockWallet'), 'aria-label': t('lockWallet'),
     onClick: () => lock({ offerPassword: true }),
   }, h('span', {
-    class: 'hm-ico',
-    html: '<svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>',
+    class: 'hm-ico', style: 'color:#1d9e63',
+    html: '<svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/></svg>',
   }));
 }
 
@@ -2346,9 +2392,17 @@ function vaultScreen() {
       h('p', { class: 'small muted', style: 'margin:0' }, t('unlockSavedDesc')),
       h('input', { type: 'password', placeholder: t('password'), value: ui.vaultPw,
         onInput: (e) => (ui.vaultPw = e.target.value), onKeyDown: (e) => { if (e.key === 'Enter') unlockVault(); } }),
+      h('div', { class: 'row between', style: 'align-items:center;gap:10px' },
+        h('span', { class: 'small muted' }, t('unlockForLabel')),
+        h('select', { onChange: (e) => { ui.unlockFor = Number(e.target.value) || 0; } },
+          UNLOCK_FOR_OPTIONS.map((o) => h('option', {
+            value: String(o.ms),
+            selected: (ui.unlockFor != null ? ui.unlockFor : Number(localStorage.getItem(UNLOCK_FOR_KEY)) || 0) === o.ms,
+          }, t(o.label))))),
       ui.vaultError && h('div', { class: 'notice err' }, ui.vaultError),
       h('button', { class: 'btn-primary btn-block', onClick: unlockVault }, t('unlock')),
-      h('button', { class: 'btn-ghost btn-block', onClick: skipVault }, t('useAnotherWallet'))
+      h('button', { class: 'btn-ghost btn-block', onClick: skipVault },
+        loadWatchAccounts().length ? t('viewWithoutPassword') : t('useAnotherWallet'))
     )
   );
 }

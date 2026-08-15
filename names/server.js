@@ -27,6 +27,7 @@ import { HDKey } from '@scure/bip32';
 import { mnemonicToSeedSync } from '@scure/bip39';
 import { lnBackend } from '../bridge/ln.js';
 import { ArkManager } from '../src/ark/manager.js';
+import { decodeAddress } from '../src/ark/proto.js';
 
 const CFG = JSON.parse(readFileSync(process.env.NAMES_CONFIG
   || join(import.meta.dir, 'config.json'), 'utf8'));
@@ -745,6 +746,14 @@ Bun.serve({
         }
       }
       if (/[?&]lno=/.test(claim.uri)) return json({ error: 'lno is added by the registrar' }, 400);
+      // A corrupt ark address recorded here is a payment black hole: forwards
+      // fail forever while the sats sit on the node (goyslop's 190k sat sat
+      // behind an invalid checksum). Refuse it at the door.
+      const arkDest = arkParamOf(claim.uri);
+      if (arkDest) {
+        try { decodeAddress(arkDest); }
+        catch { return json({ error: 'the ark address in the uri does not decode' }, 400); }
+      }
 
       // Every name also gets a static Lightning offer on our node; payments
       // to it are forwarded to the ark destination in the claim.

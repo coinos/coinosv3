@@ -1191,7 +1191,7 @@ export function messagesFeature(ctx) {
       class: 'row',
       style: 'gap:10px;align-items:flex-start;padding:10px 0'
         + (open ? ';cursor:pointer' : '')
-        + (focus ? ';box-shadow:inset 3px 0 0 var(--accent,#7c3aed);padding-left:8px;margin-left:-8px' : ''),
+        + (focus ? ';background:var(--accent-soft,rgba(128,128,128,.08));border-radius:8px;padding-left:8px;padding-right:8px;margin:0 -8px' : ''),
       // closest('button') guard: on touch, a ⚡ tap must never double as a
       // row tap even if propagation quirks let the click reach us
       onClick: open ? (e) => { if (e.target && e.target.closest && e.target.closest('button')) return; openNoteThread(ev); } : undefined,
@@ -1279,7 +1279,7 @@ export function messagesFeature(ctx) {
   function threadScreen() {
     const s = ui.noteThread;
     const c = threadFor(s.seed);
-    const row = (ev) => noteRow(ev.pubkey, ev, displayName(ev.pubkey), { open: false, focus: ev.id === s.focusId && c.replies.length > 0 });
+    const row = (ev) => noteRow(ev.pubkey, ev, displayName(ev.pubkey), { open: false, focus: ev.id === s.focusId && ev.id !== c.rootId });
     return h('div', { class: 'col', style: 'gap:16px' },
       ctx.brandHeader(false),
       h('div', { class: 'card col', style: 'gap:0;padding:2px 14px' },

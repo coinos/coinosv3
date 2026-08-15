@@ -1111,14 +1111,22 @@ export function messagesFeature(ctx) {
     if (!hook('zapNpub', pk, npubStr, ev.id)) hook('lnZapNpub', pk, npubStr, ev.id);
   }
 
-  function noteCard(pk, ev) {
+  // One post as a feed row (avatar · name · time · body), twitter/jumble
+  // style: rows share a scrollable container and are split by hairlines
+  // rather than floating in their own cards.
+  function noteRow(pk, ev, name) {
     const isReply = ev.tags.some((x) => x[0] === 'e');
     const canZap = !isMe(pk) && !!(hook('arkReady') || hook('canLnZap'));
-    return h('div', { class: 'card col', style: 'gap:6px' },
-      h('div', { class: 'row between', style: 'align-items:center' },
-        h('span', { class: 'small faint' }, (isReply ? '↩ ' + t('profReplyTag') + ' · ' : '') + timeLabel(ev.created_at * 1000)),
-        canZap ? h('button', { class: 'btn-sm', title: t('zapTitle'), onClick: () => zapNote(pk, ev) }, '⚡') : null),
-      h('div', { class: 'small', style: 'white-space:pre-wrap;overflow-wrap:anywhere' }, ...noteBody(ev.content)));
+    return h('div', { class: 'row', style: 'gap:10px;align-items:flex-start;padding:10px 0' },
+      avatar(pk, 'chat-avatar', false),
+      h('div', { class: 'col grow', style: 'min-width:0;gap:3px' },
+        h('div', { class: 'row between', style: 'align-items:center;gap:8px' },
+          h('div', { class: 'row', style: 'gap:7px;align-items:baseline;min-width:0' },
+            h('span', { style: 'font-weight:600;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis' }, name),
+            h('span', { class: 'small faint', style: 'white-space:nowrap' },
+              (isReply ? '↩ ' + t('profReplyTag') + ' · ' : '') + timeLabel(ev.created_at * 1000))),
+          canZap ? h('button', { class: 'btn-sm', title: t('zapTitle'), onClick: () => zapNote(pk, ev) }, '⚡') : null),
+        h('div', { class: 'small', style: 'white-space:pre-wrap;overflow-wrap:anywhere' }, ...noteBody(ev.content))));
   }
 
   async function saveProfile() {
@@ -1247,9 +1255,13 @@ export function messagesFeature(ctx) {
           return h('div', { class: 'card col', style: 'align-items:center;padding:18px' }, h('span', { class: 'spinner sm' }));
         if (!c.notes.length)
           return h('div', { class: 'small faint', style: 'text-align:center' }, t('profNotesNone'));
-        return h('div', { class: 'col', style: 'gap:10px' },
+        return h('div', { class: 'col', style: 'gap:8px' },
           h('div', { class: 'small muted', style: 'padding:0 2px' }, t('profNotesTitle')),
-          ...c.notes.map((ev) => noteCard(pk, ev)));
+          h('div', { class: 'card col', style: 'gap:0;padding:2px 14px;max-height:440px;overflow-y:auto' },
+            ...c.notes.flatMap((ev, i) => [
+              i ? h('div', { style: 'height:1px;background:var(--border,rgba(128,128,128,.18));margin:0 -14px' }) : null,
+              noteRow(pk, ev, name),
+            ])));
       })(),
       h('button', { class: 'btn-ghost btn-block', onClick: () => { ui.profilePk = null; ui.profEdit = null; render(); } }, t('back')));
   }

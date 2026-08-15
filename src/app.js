@@ -440,7 +440,8 @@ function render() {
   // Navigation animates; background repaints must not. The key is every
   // ui field that decides which page is on screen.
   const navKey = [ui.screen, ui.tab === 'settings', ui.chatOpen, ui.msgView, ui.msgPeer, ui.msgCommunity,
-    ui.profilePk, ui.settingsPage, ui.addrScan, ui.arkExitPage, ui.txDetail, ui.giftMode, ui.claimStep, ui.nameEditOpen].join('|');
+    ui.profilePk, ui.settingsPage, ui.addrScan, ui.arkExitPage, ui.txDetail, ui.giftMode, ui.claimStep, ui.nameEditOpen,
+    ui.noteThread && ui.noteThread.focusId, !!ui.userSearch, !!ui.zapSetup].join('|');
   if (uiChanged('nav', navKey)) _navAt = performance.now();
   applyAnim(screen, 'anim-page', (performance.now() - _navAt) < 340 ? performance.now() - _navAt : -1);
   morphChildren(root, [screen, footer()]);
@@ -490,10 +491,16 @@ wallet.subscribe(scheduleRender);
 // buttons (and Android/system back) move between screens we've actually viewed.
 // We snapshot only the navigation-relevant `ui` fields, so incidental re-renders
 // (typing, polling, balance updates) don't create history entries.
-const NAV_FIELDS = ['screen', 'tab', 'txDetail', 'bump', 'giftMode', 'claimStep', 'chatOpen', 'msgView', 'msgCommunity', 'msgPeer', 'profilePk', 'settingsPage', 'nameEditOpen'];
+const NAV_FIELDS = ['screen', 'tab', 'txDetail', 'bump', 'giftMode', 'claimStep', 'chatOpen', 'msgView', 'msgCommunity', 'msgPeer', 'profilePk', 'settingsPage', 'nameEditOpen', 'noteThread', 'userSearch', 'zapSetup'];
 function navSnapshot() {
   const s = {};
   for (const f of NAV_FIELDS) s[f] = ui[f] ?? null;
+  // Screens with volatile sub-state (a reply draft, typed amounts, search
+  // results streaming in) snapshot only what IDENTIFIES the screen — a
+  // keystroke must never mint a history entry.
+  if (ui.noteThread) s.noteThread = { rootId: ui.noteThread.rootId, focusId: ui.noteThread.focusId, seed: ui.noteThread.seed };
+  if (ui.userSearch) s.userSearch = { q: '', rows: null };
+  if (ui.zapSetup) s.zapSetup = { pk: ui.zapSetup.pk, npub: ui.zapSetup.npub, eventId: ui.zapSetup.eventId, amount: '21' };
   return s;
 }
 const navSig = (s) => JSON.stringify(s);

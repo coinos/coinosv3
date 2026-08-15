@@ -79,7 +79,6 @@ const STR = {
     enterPasswordDesc: 'Unlock your saved wallets to continue.',
     password: 'Password',
     confirmPassword: 'Confirm password',
-    pwTooShort: 'Use at least 8 characters.',
     pwMismatch: 'Passwords do not match.',
     pwWrong: 'Wrong password.',
     pwNeededToLock: 'Enter a password, or choose "Not now".',

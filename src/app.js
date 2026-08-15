@@ -4067,7 +4067,12 @@ const ctx = {
   hook: (name, ...args) => featureHook(name, ...args),
   // full sign-out (distinct from the padlock's lock-in-place): clear the
   // session and leave — offering a password if none protects the vault yet
-  logout: () => { lock({ offerPassword: true }); },
+  logout: () => {
+    lock({ offerPassword: true });
+    // Logging out means the front door, not the password prompt: land on the
+    // start page (Get started / sign in). Saved wallets stay one Unlock away.
+    if (!ui.pw) { ui.screen = 'unlock'; ui.unlockTab = 'create'; ui.onb = { step: 'welcome' }; render(); }
+  },
   // the identity the header avatar currently wears (login > seed key >
   // remembered) — profile "mine"-ness must match what the user clicked
   shownPubkey: () => (featureHook('nostrLoginIdentity') || {}).pubkey

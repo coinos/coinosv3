@@ -1725,14 +1725,21 @@ function settingsBtn() {
 }
 
 function lockBtn() {
-  // While a wallet is open this shows an OPEN padlock in green — the state is
-  // "unlocked", the tap locks it. (Locked state has no header at all.)
+  // While a wallet is open this shows an OPEN padlock — gold body, steel
+  // shackle, a little cartoony on purpose. The tap locks it. (Locked state
+  // has no header at all.)
   return h('button', {
     class: 'header-msgs', title: t('lockWallet'), 'aria-label': t('lockWallet'),
     onClick: () => lock({ offerPassword: true }),
   }, h('span', {
-    class: 'hm-ico', style: 'color:#1d9e63',
-    html: '<svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/></svg>',
+    class: 'hm-ico',
+    html: '<svg width="21" height="21" viewBox="0 0 24 24" fill="none">'
+      + '<path d="M7.5 10.5V6.8a4.3 4.3 0 0 1 8.4-1.4" stroke="#9aa3ad" stroke-width="2.6" stroke-linecap="round"/>'
+      + '<rect x="4" y="10" width="13.4" height="10.6" rx="2.8" fill="#f7c948" stroke="#c99a1a" stroke-width="1.4"/>'
+      + '<circle cx="10.7" cy="14.4" r="1.7" fill="#8a6d1a"/>'
+      + '<path d="M10.7 15.3l-1 2.9h2z" fill="#8a6d1a"/>'
+      + '<path d="M5.9 12c1.3-.6 3-.9 4.6-.9" stroke="#ffe28a" stroke-width="1.2" stroke-linecap="round"/>'
+      + '</svg>',
   }));
 }
 

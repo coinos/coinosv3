@@ -1009,7 +1009,7 @@ async function activateAccount(acc, opts = {}) {
   }
   if (acc.type === 'watch') wallet.load({ xpub: acc.xpub, netName, offline: false });
   else if (acc.xprv) wallet.load({ xprv: acc.xprv, netName, offline: false });
-  else wallet.load({ mnemonic: acc.mnemonic, passphrase: acc.passphrase || '', netName, offline: false, spFresh: !!opts.generated });
+  else wallet.load({ mnemonic: acc.mnemonic, passphrase: acc.passphrase || '', netName, offline: false, spFresh: !!opts.generated, accountIndex: acc.deriveIndex || 0 });
   // Record the account-level xpub so this wallet survives a session wipe as a
   // watch-only entry (see the durable account directory) — you keep seeing your
   // balance/history and re-enter the seed to spend again.
@@ -1111,7 +1111,7 @@ let accounts = [];
 let activeId = null;
 
 const genId = () => 'a' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
-const credId = (a) => (a.type === 'watch' ? 'w:' + a.xpub : a.xprv ? 'x:' + a.xprv : 'f:' + a.mnemonic + '|' + (a.passphrase || ''));
+const credId = (a) => (a.type === 'watch' ? 'w:' + a.xpub : a.xprv ? 'x:' + a.xprv : 'f:' + a.mnemonic + '|' + (a.passphrase || '') + (a.deriveIndex ? '|#' + a.deriveIndex : ''));
 const activeAccount = () => accounts.find((a) => a.id === activeId) || null;
 
 function defaultLabel(type) {
@@ -1152,10 +1152,33 @@ function addOrGetAccount(partial) {
   if (!acc) {
     // every new wallet is born on the currently-selected network
     acc = { id: genId(), network: getNetwork(), ...partial };
+    // the Add-wallet chooser fixed this wallet's purpose before the seed flow
+    if (ui.newWalletKind) { acc.kind = ui.newWalletKind; ui.newWalletKind = null; }
     accounts.push(acc);
     persistAccounts();
   }
   return acc;
+}
+
+// A wallet on an existing seed: the next unused BIP84 account index under the
+// parent's phrase. Its coins, ark state, cache and nostr identity are all its
+// own; the parent's seed phrase backs up both.
+function createDerivedWallet(parentId, kind) {
+  const parent = accounts.find((a) => a.id === parentId);
+  if (!parent || !parent.mnemonic) return;
+  const siblings = accounts.filter((x) => x.mnemonic === parent.mnemonic && (x.passphrase || '') === (parent.passphrase || ''));
+  const next = 1 + Math.max(0, ...siblings.map((x) => x.deriveIndex || 0));
+  const acc = {
+    id: genId(), type: 'full', network: parent.network || getNetwork(),
+    label: `${parent.label} +${next}`,
+    mnemonic: parent.mnemonic, passphrase: parent.passphrase || '',
+    deriveIndex: next, kind,
+  };
+  accounts.push(acc);
+  persistAccounts();
+  if (parent.persisted) { acc.persisted = true; writeVault(); }
+  ui.addWallet = null;
+  activateAccount(acc, { fresh: true });
 }
 
 // Commit the active account — clear the "provisional" gift flag so it's no
@@ -1719,7 +1742,7 @@ function brandHeader(withLock) {
           settingsBtn(),
           lockBtn(),
           h('button', { class: 'btn-sm', onClick: () => { ui.screen = 'accounts'; render(); } },
-            acc ? acc.label : t('accounts')),
+            acc ? viewLabel(acc, accountSel()) : t('accounts')),
           avatarMenu())
       : null
   );
@@ -2043,6 +2066,39 @@ function claimTargets() {
 // Account switcher: pick a wallet, add another, or lock the session.
 function accountsScreen() {
   if (ui.pw) return h('div', { class: 'col', style: 'gap:16px' }, brandHeader(false), pwPromptCard());
+  if (ui.addWallet) {
+    const aw = ui.addWallet;
+    const fulls = accounts.filter((x) => x.type === 'full' && x.mnemonic);
+    return h('div', { class: 'col', style: 'gap:16px' },
+      brandHeader(false),
+      h('div', { class: 'card col', style: 'gap:12px' },
+        h('h3', {}, t('addWallet')),
+        h('div', { class: 'seg', style: 'display:flex;width:100%' },
+          ['spending', 'savings'].map((k) => h('button', {
+            type: 'button', class: (aw.kind === k ? 'active ' : '') + 'grow',
+            onClick: () => { aw.kind = k; render(); },
+          }, k === 'spending' ? t('spendingName') : t('savingsName')))),
+        h('div', { class: 'col gap6' },
+          h('span', { class: 'small muted' }, t('addWalletSeed')),
+          h('select', { onChange: (e) => { aw.from = e.target.value; render(); } },
+            h('option', { value: 'new', selected: aw.from === 'new' }, t('addWalletNewSeed')),
+            fulls.map((x) => h('option', { value: x.id, selected: aw.from === x.id }, t('addWalletShareSeed', { name: x.label }))))),
+        aw.from !== 'new' ? h('div', { class: 'small faint' }, t('addWalletShareNote')) : null,
+        h('div', { class: 'row gap6' },
+          h('button', { class: 'btn-ghost grow', onClick: () => { ui.addWallet = null; render(); } }, t('back')),
+          h('button', { class: 'btn-primary grow', onClick: () => {
+            const kind = aw.kind;
+            if (aw.from === 'new') {
+              ui.newWalletKind = kind;
+              ui.addWallet = null;
+              ui.draftMnemonic = ''; ui.createStep = 'gen'; ui.confirm = []; ui.passphrase = ''; ui.confirmPass = '';
+              ui.showPass = false; ui.screen = 'unlock'; ui.unlockTab = 'create'; ui.fromWallet = true; ui.unlockError = '';
+              render();
+            } else {
+              createDerivedWallet(aw.from, kind);
+            }
+          } }, t('addWalletGo')))));
+  }
   if (ui.confirmClear) {
     return h('div', { class: 'col', style: 'gap:16px' },
       brandHeader(false),
@@ -2077,11 +2133,12 @@ function accountsScreen() {
     h('div', { class: 'card col' },
       h('h3', {}, t('accounts')),
       h('div', { class: 'col', style: 'gap:0' },
-        accounts.map((a) => {
-          const isActive = a.id === activeId;
+        accounts.flatMap((a) => viewsOf(a).map((view) => {
+          const isActive = a.id === activeId && accountSel() === view;
           const netTag = a.network && a.network !== 'mainnet' ? ' · ' + a.network : '';
-          const tag = (a.type === 'watch' ? ' · ' + t('watchOnlyTag') : '') + netTag; // "saved" shown in the link below, not the title
-          if (ui.editId === a.id) {
+          const seedTag = accounts.length > 1 && !a.kind ? ' · ' + a.label : '';
+          const tag = (a.type === 'watch' ? ' · ' + t('watchOnlyTag') : '') + netTag + seedTag;
+          if (ui.editId === a.id && ui.editView === view) {
             return h('div', { class: 'row gap6', style: 'padding:10px 0; border-bottom:1px solid var(--line)' },
               h('input', { type: 'text', style: 'flex:1', value: ui.editLabel, autofocus: true,
                 onInput: (e) => (ui.editLabel = e.target.value),
@@ -2094,19 +2151,20 @@ function accountsScreen() {
             h('div', { class: 'row between' },
               h('button', {
                 class: 'linklike', style: 'text-align:left;flex:1;font-size:15px;' + (isActive ? 'font-weight:600' : ''),
-                onClick: () => { if (isActive) { ui.screen = 'wallet'; render(); } else switchAccount(a.id); },
-              }, (isActive ? '● ' : '○ ') + a.label + tag),
+                onClick: () => switchToView(a.id, view),
+              }, (isActive ? '● ' : '○ ') + viewLabel(a, view) + tag),
+              h('button', { class: 'btn-sm wallet-row-btn', title: t('renameWallet'), onClick: () => { ui.editId = a.id; ui.editView = view; ui.editLabel = viewLabel(a, view); render(); } }, '✎'),
               h('button', { class: 'btn-sm wallet-row-btn', title: t('walletSettings'), onClick: () => openAccountSettings(a.id), html: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:block"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>' }),
               h('button', { class: 'btn-sm wallet-row-btn', title: t('remove'), onClick: () => { ui.confirmRemove = a.id; render(); } }, '✕')
             ),
-            a.type === 'full'
+            a.type === 'full' && view === viewsOf(a)[viewsOf(a).length - 1]
               ? h('button', { class: 'linklike small', style: 'align-self:flex-start', onClick: () => (a.persisted ? startForget(a.id) : startSave(a.id)) },
                   a.persisted ? t('forgetDevice') : t('saveDevice'))
               : null
           );
-        })
+        }))
       ),
-      h('button', { class: 'btn-block', onClick: () => { ui.draftMnemonic = ''; ui.createStep = 'gen'; ui.confirm = []; ui.passphrase = ''; ui.confirmPass = ''; ui.showPass = false; ui.screen = 'unlock'; ui.unlockTab = 'create'; ui.fromWallet = true; ui.unlockError = ''; render(); } }, t('addWallet')),
+      h('button', { class: 'btn-block', onClick: () => { ui.addWallet = { kind: 'spending', from: 'new' }; render(); } }, t('addWallet')),
       hasVault() ? h('button', { class: 'btn-ghost btn-block', onClick: startChangePw }, t('changePassword')) : null,
       h('button', { class: 'btn-ghost btn-block', onClick: () => { ui.confirmClear = true; render(); } }, t('clearAll'))
     ),
@@ -2118,9 +2176,12 @@ function renameAccount(id) {
   const acc = accounts.find((a) => a.id === id);
   if (acc) {
     const v = (ui.editLabel || '').trim();
-    if (v) acc.label = v;
-    persistAccounts();
-    if (acc.persisted) writeVault();
+    if (v) {
+      // names belong to the VIEW now — Spending and Savings rename separately
+      acc.viewLabels = { ...(acc.viewLabels || {}), [ui.editView || accountSel()]: v };
+      persistAccounts();
+      if (acc.persisted) writeVault();
+    }
   }
   ui.editId = null;
   render();
@@ -2650,7 +2711,34 @@ function spendingActive() {
   const addr = featureHook('namesAddress');
   return !!addr && !/^npub1/.test(addr);
 }
+// ---- the flat wallet model -------------------------------------------------
+// Each seed record surfaces as up to two TOP-LEVEL wallets: its Spending (Ark)
+// and Savings (on-chain) sides. A record with a fixed `kind` (single-purpose,
+// possibly sharing another wallet's seed at a higher BIP84 account) surfaces
+// once. "Spending" and "Savings" are the default names; renames are per-view.
+function viewsOf(a) {
+  if (!a) return [];
+  if (a.kind) return [a.kind];
+  if (a.type === 'watch') return ['savings'];
+  return ['spending', 'savings'];
+}
+function viewLabel(a, view) {
+  if (a && a.viewLabels && a.viewLabels[view]) return a.viewLabels[view];
+  return view === 'spending' ? t('spendingName') : t('savingsName');
+}
+function switchToView(id, view) {
+  ui.account = view;
+  try { localStorage.setItem(ACCOUNT_KEY, view); } catch {}
+  if (id === activeId) { ui.screen = 'wallet'; render(); }
+  else {
+    const acc = accounts.find((a) => a.id === id);
+    if (acc) switchAccount(id);
+  }
+}
+
 function accountSel() {
+  const a = activeAccount();
+  if (a && a.kind) return a.kind; // single-purpose wallet: no other side
   if (!spendingActive()) return 'savings'; // one balance, no choice
   if (!ui.account) {
     let saved = null;
@@ -2684,33 +2772,52 @@ function balanceCard() {
   // is the on-chain one. The headline is simply everything you have.
   const spending = featureHook('spendingSat') || 0;
   const saving = wallet.spendable;
+  const acc0 = activeAccount();
+  const kindLocked = !!(acc0 && acc0.kind); // single-purpose top-level wallet
   const hasSpending = spendingActive();
-  const sel = hasSpending ? accountSel() : 'savings';
+  const sel = kindLocked ? acc0.kind : hasSpending ? accountSel() : 'savings';
   const isSpending = sel === 'spending';
+  // a single-purpose wallet's switch jumps to a same-seed sibling wallet of
+  // the opposite purpose, when one exists
+  const opp = isSpending ? 'savings' : 'spending';
+  const sibling = kindLocked
+    ? accounts.find((x) => x.id !== acc0.id && x.mnemonic && x.mnemonic === acc0.mnemonic
+        && (x.passphrase || '') === (acc0.passphrase || '') && viewsOf(x).includes(opp))
+    : null;
   // One balance at a time, full size: the card IS the account you're in, and
   // everything (receive, gifts) follows it. Swipe or tap the dots to flip.
   const dtAcc = animWindow('acct', sel, 300);
   const face = h('div', { class: 'balance-face' },
     h('div', { class: 'row between', style: 'align-items:center' },
       h('div', { class: 'small faint', style: 'text-transform:uppercase;letter-spacing:.06em' },
-        hasSpending ? (isSpending ? t('spendingLabel') : t('savingLabel')) : t('balance')),
+        kindLocked ? viewLabel(acc0, sel)
+          : hasSpending ? (isSpending ? t('spendingLabel') : t('savingLabel')) : t('balance')),
       // Swiping only helps on touch, and dots are an indicator rather than a
       // target — so the switch is a real button that names where it goes.
       // Before Spending exists, its spot offers to set it up — the one
       // doorway into the optional spending-account flow.
-      hasSpending
-        ? h('button', {
-            class: 'balance-switch',
-            onClick: () => setAccountSel(isSpending ? 'savings' : 'spending', isSpending ? 'left' : 'right'),
-          },
-            h('span', { html: SWAP_ICON }),
-            h('span', { class: 'bsw-label' }, isSpending ? t('savingLabel') : t('spendingLabel')))
-        : featureHook('arkReady') && !wallet.watchOnly
+      kindLocked
+        ? (sibling
+            ? h('button', {
+                class: 'balance-switch',
+                onClick: () => switchToView(sibling.id, opp),
+              },
+                h('span', { html: SWAP_ICON }),
+                h('span', { class: 'bsw-label' }, viewLabel(sibling, opp)))
+            : null)
+        : hasSpending
           ? h('button', {
               class: 'balance-switch',
-              onClick: () => { ui.onbError = ''; ui.onb = { step: 'spend' }; render(); },
-            }, h('span', { class: 'bsw-label' }, t('spendSetup')))
-          : null),
+              onClick: () => setAccountSel(isSpending ? 'savings' : 'spending', isSpending ? 'left' : 'right'),
+            },
+              h('span', { html: SWAP_ICON }),
+              h('span', { class: 'bsw-label' }, isSpending ? t('savingLabel') : t('spendingLabel')))
+          : featureHook('arkReady') && !wallet.watchOnly
+            ? h('button', {
+                class: 'balance-switch',
+                onClick: () => { ui.onbError = ''; ui.onb = { step: 'spend' }; render(); },
+              }, h('span', { class: 'bsw-label' }, t('spendSetup')))
+            : null),
     h('div', { class: 'amt', style: firstLoad ? 'opacity:.3' : '' },
       firstLoad ? h('span', { class: 'spinner sm', style: 'margin-right:8px' }) : null,
       animatedAmount('bal:' + sel, isSpending ? spending : saving), ' ', unitTag('unit')),
@@ -2734,6 +2841,9 @@ function balanceCard() {
     // pointless (and confusing) while there's only one.
     ...(hasSpending ? featureAll('balanceActions') : []).map((a2) =>
       h('button', { class: 'btn-sm', style: 'margin-top:10px', onClick: a2.onClick }, a2.label)),
+    kindLocked && isSpending && !hasSpending && featureHook('arkReady') && !wallet.watchOnly
+      ? h('button', { class: 'btn-sm', style: 'margin-top:10px', onClick: () => { ui.onbError = ''; ui.onb = { step: 'spend' }; render(); } }, t('spendSetup'))
+      : null,
     // A feature can unfold UI right on the card (ark's inline move panel).
     (() => {
       if (!hasSpending) return null;

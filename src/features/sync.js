@@ -152,7 +152,7 @@ export function installSyncWallet(wallet) {
 
   // identity follows the open wallet
   wallet.registerLoadHook(() => {
-    if (wallet.mnemonic) wallet.nostr.load(wallet.mnemonic, wallet.passphrase);
+    if (wallet.mnemonic) wallet.nostr.load(wallet.mnemonic, wallet.passphrase, wallet.accountIndex || 0);
     else wallet.nostr.unload();
     wallet._syncPubSeen = {}; // a new identity has published nothing yet
     adoptSyncRelays().catch(() => {});

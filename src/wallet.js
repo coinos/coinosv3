@@ -173,13 +173,17 @@ export class Wallet {
   }
 
   // --- setup --------------------------------------------------------------
-  load({ mnemonic = '', passphrase = '', xpub = '', xprv = '', netName = 'mainnet', offline = false, spFresh = false }) {
+  load({ mnemonic = '', passphrase = '', xpub = '', xprv = '', netName = 'mainnet', offline = false, spFresh = false, accountIndex = 0 }) {
     this.stopRealtime();
     // A freshly-generated wallet can't have received silent payments before it
     // existed, so we start its SP watermark at the current tip (no history scan).
 
     this.mnemonic = (mnemonic || '').trim().replace(/\s+/g, ' ');
     this.passphrase = passphrase;
+    // BIP84 account index: 0 for ordinary wallets; a wallet sharing another's
+    // seed lives at the next index, giving it its own coins, ark state, cache
+    // slot and nostr identity while backing up under one phrase.
+    this.accountIndex = accountIndex || 0;
     this.xpub = xpub || '';
     this.xprv = xprv || ''; // spending wallet imported from an extended private key
     this.watchOnly = !!this.xpub && !this.mnemonic && !this.xprv; // view/receive only
@@ -261,7 +265,7 @@ export class Wallet {
     // Cache key identifies the source so a reload rebuilds when it changes.
     const key = this.watchOnly ? 'pub:' + this.xpub
       : this.xprv ? 'prv:' + this.xprv
-      : `${this.netName}|${this.mnemonic}|${this.passphrase}`;
+      : `${this.netName}|${this.mnemonic}|${this.passphrase}|${this.accountIndex || 0}`;
     if (this._account && this._accountKey === key) return this._account;
     let acct;
     if (this.watchOnly) {
@@ -270,9 +274,9 @@ export class Wallet {
       // A master xprv (depth 0) needs the BIP84 account path derived from it;
       // an already account-level xprv is used as-is.
       const node = HDKey.fromExtendedKey(this.xprv);
-      acct = node.depth === 0 ? node.derive(`m/84'/${coin}'/0'`) : node;
+      acct = node.depth === 0 ? node.derive(`m/84'/${coin}'/${this.accountIndex || 0}'`) : node;
     } else {
-      acct = HDKey.fromMasterSeed(mnemonicToSeedSync(this.mnemonic, this.passphrase)).derive(`m/84'/${coin}'/0'`);
+      acct = HDKey.fromMasterSeed(mnemonicToSeedSync(this.mnemonic, this.passphrase)).derive(`m/84'/${coin}'/${this.accountIndex || 0}'`);
     }
     this._account = acct;
     this._accountKey = key;
@@ -1772,7 +1776,8 @@ export class Wallet {
   // then shows the last-known balance/history instantly while a fresh scan
   // runs in the background.
   _cacheKey() {
-    const id = this.watchOnly ? this.xpub : this.xprv ? this.xprv : `${this.mnemonic}\n${this.passphrase}`;
+    let id = this.watchOnly ? this.xpub : this.xprv ? this.xprv : `${this.mnemonic}\n${this.passphrase}`;
+    if (this.accountIndex) id += `\n#${this.accountIndex}`; // derived siblings get their own slots
     const bytes = new TextEncoder().encode(id);
     return 'btc-wallet-cache:' + hex.encode(sha256(bytes)).slice(0, 32);
   }

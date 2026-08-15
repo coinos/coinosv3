@@ -252,8 +252,10 @@ export class NostrSync {
 
   setDtag(d) { this.dtag = d || DTAG; }
 
-  load(mnemonic, passphrase = '') {
-    this.sk = nip06.privateKeyFromSeedWords(mnemonic, passphrase || undefined);
+  load(mnemonic, passphrase = '', accountIndex = 0) {
+    // a derived sibling wallet (same seed, higher BIP84 account) gets its own
+    // nostr identity and sync slots — nip06 shifts by account index
+    this.sk = nip06.privateKeyFromSeedWords(mnemonic, passphrase || undefined, accountIndex || 0);
     this.pk = getPublicKey(this.sk);
     this.ck = nip44.getConversationKey(this.sk, this.pk);
   }

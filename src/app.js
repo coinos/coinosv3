@@ -1627,33 +1627,44 @@ function lock({ offerPassword = false } = {}) {
 }
 
 // ================================================================ WALLET
-// The avatar anchors the identity menu: Edit profile, Settings, Messages,
-// Logout. The avatar node itself comes from the messages feature (profile
-// cache + punk fallback); without that feature there's no menu.
+// The avatar IS your profile now — one tap opens it (edit lives there).
+// Settings and Lock stand beside it as their own icons; no popup menu.
 function avatarMenu() {
   const me = (featureHook('nostrLoginIdentity') || {}).pubkey || (wallet.nostrPubkey && wallet.nostrPubkey());
-  // No identity (watch-only wallet): the menu still exists — Settings and
-  // Logout don't need keys — behind a neutral face.
+  // No identity (watch-only wallet): a neutral face with nowhere to go.
   const node = (me && featureHook('headerAvatar', me))
     || h('span', {
       class: 'chat-avatar header-ava fallback',
       html: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>',
     });
-  const item = (label, fn) => h('button', {
-    class: 'icon-select-item',
-    onClick: () => { ui.avatarMenu = false; fn(); render(); },
-  }, label);
-  return h('span', { class: 'avatar-menu-wrap' },
-    h('button', { class: 'header-avatar', onClick: () => { ui.avatarMenu = !ui.avatarMenu; render(); } }, node),
-    (() => { const dt = animWindow('avmenu', !!ui.avatarMenu, 220); return ui.avatarMenu
-      ? h('span', {},
-          h('div', { class: 'menu-backdrop', onClick: () => { ui.avatarMenu = false; render(); } }),
-          (() => { const m = h('div', { class: 'icon-select-menu avatar-menu' },
-            me ? item(t('profEdit'), () => featureHook('showProfile', me)) : null,
-            item(t('tabSettings'), () => { ui.chatOpen = false; ui.profilePk = null; ui.screen = 'wallet'; ui.tab = 'settings'; ui.settingsPage = null; }),
-            me ? item(t('msgDmsTitle'), () => { ui.profilePk = null; ui.chatOpen = true; }) : null,
-            item(t('lockWallet'), () => lock({ offerPassword: true }))); applyAnim(m, 'anim-menu', dt); return m; })())
-      : null; })());
+  return h('button', {
+    class: 'header-avatar',
+    title: me ? t('profEdit') : undefined,
+    onClick: me ? () => { featureHook('showProfile', me); render(); } : undefined,
+  }, node);
+}
+
+function settingsBtn() {
+  return h('button', {
+    class: 'header-msgs', title: t('tabSettings'), 'aria-label': t('tabSettings'),
+    onClick: () => {
+      ui.chatOpen = false; ui.profilePk = null; ui.userSearch = null; ui.noteThread = null;
+      ui.screen = 'wallet'; ui.tab = 'settings'; ui.settingsPage = null; render();
+    },
+  }, h('span', {
+    class: 'hm-ico',
+    html: '<svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.09a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.09a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>',
+  }));
+}
+
+function lockBtn() {
+  return h('button', {
+    class: 'header-msgs', title: t('lockWallet'), 'aria-label': t('lockWallet'),
+    onClick: () => lock({ offerPassword: true }),
+  }, h('span', {
+    class: 'hm-ico',
+    html: '<svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>',
+  }));
 }
 
 // Messages sit one tap away, left of the wallet selector. The dot is presence,
@@ -1705,6 +1716,8 @@ function brandHeader(withLock) {
       ? h('div', { class: 'row gap6', style: 'align-items:center' },
           searchBtn(),
           messagesBtn(),
+          settingsBtn(),
+          lockBtn(),
           h('button', { class: 'btn-sm', onClick: () => { ui.screen = 'accounts'; render(); } },
             acc ? acc.label : t('accounts')),
           avatarMenu())

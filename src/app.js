@@ -1179,6 +1179,7 @@ function createDerivedWallet(parentId, kind) {
   const acc = {
     id: genId(), type: 'full', network: parent.network || getNetwork(),
     label: `${parent.label} +${next}`,
+    viewLabels: { [kind]: `${kind === 'spending' ? t('spendingName') : t('savingsName')} ${next + 1}` },
     mnemonic: parent.mnemonic, passphrase: parent.passphrase || '',
     deriveIndex: next, kind,
   };
@@ -2186,7 +2187,7 @@ function accountsScreen() {
           h('span', { class: 'small muted' }, t('addWalletSeed')),
           h('select', { onChange: (e) => { aw.from = e.target.value; render(); } },
             h('option', { value: 'new', selected: aw.from === 'new' }, t('addWalletNewSeed')),
-            fulls.map((x) => h('option', { value: x.id, selected: aw.from === x.id }, t('addWalletShareSeed', { name: x.label }))))),
+            fulls.map((x) => h('option', { value: x.id, selected: aw.from === x.id }, t('addWalletShareSeed', { name: seedName(x) }))))),
         aw.from !== 'new' ? h('div', { class: 'small faint' }, t('addWalletShareNote')) : null,
         h('div', { class: 'row gap6' },
           h('button', { class: 'btn-ghost grow', onClick: () => { ui.addWallet = null; render(); } }, t('back')),
@@ -2222,7 +2223,7 @@ function accountsScreen() {
       brandHeader(false),
       h('div', { class: 'card col' },
         h('h3', {}, t('removeWalletTitle')),
-        h('div', { class: 'warn-box' }, t('removeWalletWarn', { name: acc ? acc.label : '' })),
+        h('div', { class: 'warn-box' }, t('removeWalletWarn', { name: acc ? seedName(acc) : '' })),
         h('div', { class: 'row gap6' },
           h('button', { class: 'btn-ghost grow', onClick: () => { ui.confirmRemove = null; render(); } }, t('back')),
           h('button', { class: 'btn-primary grow', onClick: () => { const id = ui.confirmRemove; ui.confirmRemove = null; removeAccount(id); } }, t('remove'))
@@ -2240,7 +2241,7 @@ function accountsScreen() {
         accounts.flatMap((a) => viewsOf(a).map((view) => {
           const isActive = a.id === activeId && accountSel() === view;
           const netTag = a.network && a.network !== 'mainnet' ? ' · ' + a.network : '';
-          const seedTag = accounts.length > 1 && !a.kind ? ' · ' + a.label : '';
+          const seedTag = '';
           const tag = (a.type === 'watch' ? ' · ' + t('watchOnlyTag') : '') + netTag + seedTag;
           if (ui.editId === a.id && ui.editView === view) {
             return h('div', { class: 'row gap6', style: 'padding:10px 0; border-bottom:1px solid var(--line)' },
@@ -2835,6 +2836,11 @@ function viewsOf(a) {
   if (a.kind) return [a.kind];
   if (a.type === 'watch') return ['savings'];
   return ['spending', 'savings'];
+}
+// How a SEED reads to the user: the names of the wallets it carries
+// ("Spending + Savings") — its internal record label never surfaces.
+function seedName(a) {
+  return viewsOf(a).map((v) => viewLabel(a, v)).join(' + ');
 }
 function viewLabel(a, view) {
   if (a && a.viewLabels && a.viewLabels[view]) return a.viewLabels[view];

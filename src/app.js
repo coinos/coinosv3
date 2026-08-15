@@ -520,6 +520,20 @@ function syncHistory() {
   } catch {} // history API failures must never break a render
 }
 
+// A refresh must land where the user was — on a profile, a settings page, a
+// tab — not back home. history.state survives reload, so the navigation
+// snapshot the last render pushed is still there to re-apply.
+function restoreNavFromHistory() {
+  try {
+    const st = history.state;
+    if (!st || !st.nav || ui.screen !== 'wallet') return;
+    for (const f of NAV_FIELDS) if (f in st.nav) ui[f] = st.nav[f];
+    navStack = [st.nav];
+    navIndex = 0;
+    render();
+  } catch {}
+}
+
 window.addEventListener('popstate', (e) => {
   const st = e.state;
   const snap = (st && st.nav) || navSnapshot();
@@ -1177,6 +1191,7 @@ function restoreAccountsState() {
     accounts = sess.accounts;
     const active = accounts.find((a) => a.id === sess.activeId) || accounts[0];
     activateAccount(active);
+    restoreNavFromHistory();
     return true;
   }
   if (hasVault()) {

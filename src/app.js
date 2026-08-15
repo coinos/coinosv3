@@ -1483,7 +1483,7 @@ function armUnlockDeadline() {
   const left = until - Date.now();
   if (left <= 0) {
     try { localStorage.removeItem(UNLOCK_UNTIL_KEY); } catch {}
-    if (activeAccount()) lock({ offerPassword: true });
+    if (activeAccount() && !wallet.watchOnly) softLock();
     return;
   }
   _unlockUntilTimer = setTimeout(armUnlockDeadline, Math.min(left, 60_000));
@@ -1736,14 +1736,41 @@ function settingsBtn() {
   }));
 }
 
+// Lock in place: the keys leave, the view stays. The wallet remains on screen
+// watch-only (balances and history, no spending), the padlock closes, and
+// tapping it again asks for the password to bring the keys back.
+function softLock() {
+  const watch = loadWatchAccounts();
+  let blankPw = false;
+  try { decryptVault(loadVaultBlob(), ''); blankPw = true; } catch {}
+  // Nothing watchable, or a passwordless vault (locking would mean nothing):
+  // fall back to the classic flow, which offers to set a password.
+  if (!watch.length || !hasVault() || blankPw) { lock({ offerPassword: true }); ui.justLocked = true; return; }
+  const keepId = activeId;
+  for (const f of FEATURES) { try { f.stop && f.stop(); } catch {} }
+  vaultPassword = null;
+  accounts = watch.slice();
+  persistAccounts();
+  const cur = accounts.find((a) => a.id === keepId) || accounts[0];
+  activateAccount(cur, { fresh: true });
+  toast(t('lockedToast'));
+}
+
 function lockBtn() {
-  // While a wallet is open this shows an OPEN padlock — gold body, steel
-  // shackle, a little cartoony on purpose. The tap locks it. (Locked state
-  // has no header at all.)
+  const locked = wallet.watchOnly && hasVault();
   return h('button', {
-    class: 'header-msgs', title: t('lockWallet'), 'aria-label': t('lockWallet'),
-    onClick: () => { lock({ offerPassword: true }); ui.justLocked = true; toast(t('lockedToast')); },
-  }, h('span', { class: 'hm-ico', style: 'font-size:18px;line-height:1' }, '\u{1F513}'));
+    class: 'header-msgs',
+    title: locked ? t('unlock') : t('lockWallet'),
+    'aria-label': locked ? t('unlock') : t('lockWallet'),
+    onClick: locked
+      ? () => {
+          if (attemptVaultUnlock('')) {
+            const cur = accounts.find((a) => a.id === activeId) || accounts[0];
+            if (cur) activateAccount(cur, { fresh: true });
+          } else { ui.justLocked = false; ui.screen = 'vault'; render(); }
+        }
+      : () => softLock(),
+  }, h('span', { class: 'hm-ico', style: 'font-size:18px;line-height:1' }, locked ? '\u{1F512}' : '\u{1F513}'));
 }
 
 // Messages sit one tap away, left of the wallet selector. The dot is presence,

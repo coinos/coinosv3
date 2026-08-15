@@ -1644,10 +1644,28 @@ function messagesBtn() {
     class: 'header-msgs' + (unread ? ' unread' : ''),
     title: t('msgDmsTitle'),
     'aria-label': t('msgDmsTitle'),
-    onClick: () => { ui.profilePk = null; ui.chatOpen = true; ui.msgView = 'home'; render(); },
+    onClick: () => { ui.profilePk = null; ui.userSearch = null; ui.noteThread = null; ui.zapSetup = null; ui.chatOpen = true; ui.msgView = 'home'; render(); },
   }, h('span', {
     class: 'hm-ico',
     html: '<svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>',
+  }));
+}
+
+// Find anyone on nostr from the header — results open their profile.
+function searchBtn() {
+  if (!featureHook('userSearchAvailable')) return null;
+  return h('button', {
+    class: 'header-msgs',
+    title: t('searchUsers'),
+    'aria-label': t('searchUsers'),
+    onClick: () => {
+      featureHook('openUserSearch');
+      render();
+      setTimeout(() => document.querySelector('.user-search-input')?.focus(), 60);
+    },
+  }, h('span', {
+    class: 'hm-ico',
+    html: '<svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.35-4.35"/></svg>',
   }));
 }
 
@@ -1663,6 +1681,7 @@ function brandHeader(withLock) {
     ),
     withLock
       ? h('div', { class: 'row gap6', style: 'align-items:center' },
+          searchBtn(),
           messagesBtn(),
           h('button', { class: 'btn-sm', onClick: () => { ui.screen = 'accounts'; render(); } },
             acc ? acc.label : t('accounts')),
@@ -1928,6 +1947,9 @@ function goHome() {
     ui.chatOpen = false;
     ui.profilePk = null;
     ui.profEdit = null;
+    ui.userSearch = null;
+    ui.noteThread = null;
+    ui.zapSetup = null;
     ui.arkExitPage = null;
     ui.settingsPage = null;
     ui.addrScan = false;
@@ -3773,6 +3795,14 @@ async function importSnapshotFile(e) {
 const ctx = {
   h, ui, render, wallet, toast, copy, copyBtn, pasteBtn, blankSend, goBack, goHome, openExternal,
   fmtAmount, unitLabel, unitTag, parseAmount, getUnit: () => unit, toggleUnit, download,
+  // the one-tap zap amount, synced across devices with the rest of the state
+  zapDefaultSat: () => (wallet.loadFeatureState ? (wallet.loadFeatureState('prefs', {}).zapSat || 0) : 0),
+  setZapDefaultSat: (n) => {
+    const p = wallet.loadFeatureState('prefs', {});
+    p.zapSat = Math.max(1, Math.floor(n) || 0);
+    wallet.saveFeatureState('prefs', p);
+    try { wallet.saveCache(); } catch {}
+  },
   brandHeader, activeAccount, setAccounts: (list) => { accounts = list; },
   getAccounts: () => accounts,
   claimTargets, enterWallet, activateAccount, commitAccount,

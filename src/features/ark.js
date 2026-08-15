@@ -960,19 +960,31 @@ export function arkFeature(ctx) {
   //   2. lightning: profile lud16/lud06, via the zap flow
   //   3. an on-chain address from the BIP-353 record
   const NAMES_REGISTRAR = 'https://names.coinos.io';
-  function startNpubPay(pk, npub, eventId = null) {
-    const z = (ui.arkZap = { npub, pk, eventId, amount: '', comment: '', status: 'lookup' });
+  function startNpubPay(pk, npub, eventId = null, autoSat = 0) {
+    const z = (ui.arkZap = { npub, pk, eventId, amount: '', comment: '', status: 'lookup', autoSat });
     ui.zap = null; // a stale Lightning-zap card must not resurface behind ours
     ui.sendError = '';
     render();
     const live = () => ui.arkZap === z;
+    // an instant zap: resolution succeeded — pay the default amount now, no
+    // form, and report by toast; failures fall back to the classic form
+    const auto = async (label) => {
+      try {
+        await performArkZap(z, z.autoSat);
+        if (ui.arkZap === z) ui.arkZap = null;
+        toast('⚡ ' + t('zapSentShort', { n: fmtAmount(z.autoSat) + ' ' + unitLabel() }));
+        render();
+      } catch (e) {
+        z.autoSat = 0; ui.tab = 'send'; ui.sendError = e.message; render();
+      }
+    };
     (async () => {
       connectArk().catch(() => {});
       // 1a. ark advert
       const adv = await lookupArkZapTarget(pk).catch(() => ({ status: 'noark' }));
       if (!live()) return;
-      if (adv.status === 'ready') { Object.assign(z, adv); render(); return; }
-      if (adv.status === 'wrongnet') { Object.assign(z, adv); render(); return; }
+      if (adv.status === 'ready') { Object.assign(z, adv); if (z.autoSat) return auto(); render(); return; }
+      if (adv.status === 'wrongnet') { Object.assign(z, adv); if (z.autoSat) { z.autoSat = 0; ui.tab = 'send'; } render(); return; }
       // 1b. BIP-353 with an ark instruction; remember on-chain as last resort
       const uris = [];
       try {
@@ -994,24 +1006,30 @@ export function arkFeature(ctx) {
         const dec = parseBip21Uri(uri);
         if (!dec) continue;
         const arkAddr = dec.params && dec.params.ark;
-        if (arkAddr && isArkAddress(arkAddr)) { Object.assign(z, { status: 'ready', address: arkAddr }); render(); return; }
+        if (arkAddr && isArkAddress(arkAddr)) {
+          Object.assign(z, { status: 'ready', address: arkAddr });
+          if (z.autoSat) return auto();
+          render();
+          return;
+        }
         if (dec.onchain && !onchain) onchain = dec.onchain;
       }
       // 2. lightning via the zap flow (connect first — canLnPay needs it)
       if (profile && (profile.lud16 || profile.lud06)) {
         await connectArk().catch(() => {});
         if (!live()) return;
-        if (ctx.hook('canLnZap')) { ctx.hook('lnZapNpub', pk, npub, z.eventId); return; }
+        if (ctx.hook('canLnZap')) { ui.arkZap = null; ctx.hook('lnZapNpub', pk, npub, z.eventId, z.autoSat); return; }
       }
       // 3. on-chain fallback
       if (onchain) {
         ui.arkZap = null;
         ui.send.recipients[0].address = onchain;
+        if (z.autoSat) ui.tab = 'send';
         render();
         return;
       }
-      if (live()) { z.status = 'noark'; render(); }
-    })().catch((e) => { if (live()) { z.status = 'noark'; ui.sendError = e.message; render(); } });
+      if (live()) { z.status = 'noark'; if (z.autoSat) { z.autoSat = 0; ui.tab = 'send'; } render(); }
+    })().catch((e) => { if (live()) { z.status = 'noark'; if (z.autoSat) { z.autoSat = 0; ui.tab = 'send'; } ui.sendError = e.message; render(); } });
   }
 
   // shared by the ark and lightning zap flows (see zaps.js for the twin)
@@ -1039,25 +1057,30 @@ export function arkFeature(ctx) {
     return { status: 'ready', address: addr };
   }
 
+  // The zap itself, shared by the form and the one-tap default-amount path.
+  async function performArkZap(z, sats) {
+    const mgr = await connectArk();
+    const actionId = await mgr.send(z.address, sats);
+    const action = mgr.state.actions.find((a) => a.id === actionId);
+    if (!action || action.step === 'failed') throw new Error(action?.error || t('claimFailed'));
+    const vtxoId = decodeVtxo(hex.decode((action.destBytesList || [action.destBytes])[0])).id;
+    noteZap('to:' + z.address, z.pk);
+    // the receipt is best-effort: the sats are already delivered via mailbox
+    await wallet.nostrPublish({
+      kind: ARK_ZAP_KIND,
+      content: (z.comment || '').slice(0, 280),
+      tags: [['p', z.pk], ...(z.eventId ? [['e', z.eventId]] : []),
+        ['amount', String(sats)], ['vtxo', vtxoId], ['network', getNetwork()]],
+    }).catch(() => {});
+  }
+
   async function doArkZap() {
     const z = ui.arkZap;
     const sats = ctx.parseAmount(z.amount, ctx.getUnit());
     if (!sats || sats <= 0) { ui.sendError = t('enterValidAmtForN', { n: 1 }); render(); return; }
     ui.busy = true; ui.sendError = ''; render();
     try {
-      const mgr = await connectArk();
-      const actionId = await mgr.send(z.address, sats);
-      const action = mgr.state.actions.find((a) => a.id === actionId);
-      if (!action || action.step === 'failed') throw new Error(action?.error || t('claimFailed'));
-      const vtxoId = decodeVtxo(hex.decode((action.destBytesList || [action.destBytes])[0])).id;
-      noteZap('to:' + z.address, z.pk);
-      // the receipt is best-effort: the sats are already delivered via mailbox
-      await wallet.nostrPublish({
-        kind: ARK_ZAP_KIND,
-        content: (z.comment || '').slice(0, 280),
-        tags: [['p', z.pk], ...(z.eventId ? [['e', z.eventId]] : []),
-          ['amount', String(sats)], ['vtxo', vtxoId], ['network', getNetwork()]],
-      }).catch(() => {});
+      await performArkZap(z, sats);
       ui.arkZapped = { amountSat: sats, npub: z.npub };
       ui.arkZap = null;
     } catch (e) {
@@ -2136,9 +2159,9 @@ export function arkFeature(ctx) {
     // ⚡ button) — through the same resolution ladder as a pasted npub. The
     // event id rides into the receipt's e tag; callers fall back to the
     // lnZapNpub hook when ark can't serve this build/wallet.
-    zapNpub(pk, npub, eventId) {
+    zapNpub(pk, npub, eventId, autoSat) {
       if (!arkAvailable() || !wallet.nostrFetch) return false;
-      startNpubPay(pk, npub, eventId || null);
+      startNpubPay(pk, npub, eventId || null, autoSat || 0);
       return true;
     },
     historyEntries() {

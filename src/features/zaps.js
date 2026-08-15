@@ -16,7 +16,7 @@ import { npubOf } from '../nostr.js';
 import { parseZapTarget, zapTargetFromProfile, fetchPayParams, buildZapRequest, requestInvoice } from '../lnurl.js';
 
 export function zapsFeature(ctx) {
-  const { h, ui, render, wallet, blankSend, parseAmount, getUnit, unitTag, hook } = ctx;
+  const { h, ui, render, wallet, blankSend, parseAmount, getUnit, unitTag, hook, toast, fmtAmount, unitLabel } = ctx;
 
   // Lightning payment has to be possible for a zap to make sense.
   const canPay = () => !wallet.watchOnly && !!hook('canLnPay');
@@ -49,6 +49,36 @@ export function zapsFeature(ctx) {
     if (ui.zap !== z) return; // user navigated away
     z.params = params;
     z.status = 'ready';
+    render();
+  }
+
+  // One-tap zap at the user's default amount: resolve, invoice, pay through
+  // the ark seam (its quote + retries included), and report by toast — the
+  // whole flow without a single screen.
+  async function autoZap(target, sats) {
+    const profile = await wallet.nostrProfile(target.pk);
+    const lnTarget = zapTargetFromProfile(profile, target.pk);
+    if (!lnTarget) throw new Error(t('lnZapNoAddress'));
+    const t2 = { ...lnTarget, eventId: target.eventId || null };
+    const p = await fetchPayParams(t2.url);
+    const msat = sats * 1000;
+    if (msat < p.minSendable || msat > p.maxSendable) {
+      throw new Error(t('lnZapRange', {
+        min: Math.ceil(p.minSendable / 1000).toLocaleString(),
+        max: Math.floor(p.maxSendable / 1000).toLocaleString(),
+      }));
+    }
+    let zapRequest = null;
+    if (p.allowsNostr && t2.pk && wallet.nostrSign) {
+      zapRequest = buildZapRequest({
+        amountMsat: msat, relays: wallet.nostrRelays(), lnurlBech32: t2.lnurlBech32,
+        recipientPk: t2.pk, eventId: t2.eventId || null, comment: '',
+        signFn: (partial) => wallet.nostrSign(partial),
+      });
+    }
+    const invoice = await requestInvoice(p, { amountMsat: msat, zapRequest, lnurlBech32: t2.lnurlBech32 });
+    await hook('arkPayInvoice', invoice, { maxAmountSat: sats + 50 });
+    toast('⚡ ' + t('zapSentShort', { n: fmtAmount(sats) + ' ' + unitLabel() }));
     render();
   }
 
@@ -201,11 +231,29 @@ export function zapsFeature(ctx) {
     // Ark's "no Ark address published" screen offers a Lightning fallback,
     // which lands here with the recipient's pubkey (and, when the zap was
     // aimed at a note, its event id for the zap request's e tag).
-    lnZapNpub(pk, npub, eventId) {
+    lnZapNpub(pk, npub, eventId, autoSat) {
       if (!canPay() || !wallet.nostrProfile) return false;
+      if (autoSat && hook('arkReady')) {
+        autoZap({ kind: 'npub', pk, eventId: eventId || null }, autoSat)
+          .catch((e) => toast('⚡ ' + e.message));
+        return true;
+      }
       begin({ kind: 'npub', pk, eventId: eventId || null }, shortNpub(npub || npubOf(pk)));
       return true;
     },
     sendView() { return zapView(); },
+    // Settings → Payments: the one-tap zap amount.
+    settingsCards() {
+      const cur = ctx.zapDefaultSat ? ctx.zapDefaultSat() : 0;
+      return [h('div', { class: 'card col', style: 'gap:8px' },
+        h('div', { class: 'row between', style: 'align-items:center;gap:10px' },
+          h('span', { class: 'small' }, '⚡ ' + t('zapDefaultLabel')),
+          h('div', { class: 'input-group', style: 'width:130px' },
+            h('input', { type: 'number', min: '1', value: cur || '', placeholder: '21',
+              style: 'text-align:right',
+              onInput: (e) => { const n = parseInt(e.target.value, 10); if (n > 0) ctx.setZapDefaultSat(n); } }),
+            h('span', { class: 'small muted', style: 'align-self:center;padding:0 6px' }, 'sats'))),
+        h('div', { class: 'small faint' }, t('zapDefaultHint')))];
+    },
   };
 }

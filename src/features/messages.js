@@ -1100,24 +1100,60 @@ export function messagesFeature(ctx) {
     return out;
   }
 
-  // Zap a specific note: ark first (instant, free, e-tagged receipt), else
-  // the Lightning zap flow — same ladder as paying the person directly.
+  // Zap a specific note. With a default amount configured this is ONE TAP:
+  // the zap fires instantly (ark first, Lightning fallback) and reports by
+  // toast, no form, no leaving the page. Without one, a small setup screen
+  // asks once and remembers.
   function zapNote(pk, ev) {
     const npubStr = npubOf(pk);
-    ui.profilePk = null;
-    ui.chatOpen = false;
-    ui.tab = 'send';
-    render();
-    if (!hook('zapNpub', pk, npubStr, ev.id)) hook('lnZapNpub', pk, npubStr, ev.id);
+    const def = ctx.zapDefaultSat ? ctx.zapDefaultSat() : 0;
+    if (!def) { ui.zapSetup = { pk, npub: npubStr, eventId: ev.id, amount: '21' }; render(); return; }
+    if (!hook('zapNpub', pk, npubStr, ev.id, def) && !hook('lnZapNpub', pk, npubStr, ev.id, def)) {
+      // no instant path in this build — the classic form flow
+      ui.profilePk = null;
+      ui.chatOpen = false;
+      ui.tab = 'send';
+      render();
+      if (!hook('zapNpub', pk, npubStr, ev.id)) hook('lnZapNpub', pk, npubStr, ev.id);
+    }
+  }
+
+  // First ⚡ tap ever: pick the amount one time, then every zap is one tap.
+  function zapSetupScreen() {
+    const s = ui.zapSetup;
+    return h('div', { class: 'col', style: 'gap:16px' },
+      ctx.brandHeader(false),
+      h('div', { class: 'card col', style: 'gap:10px' },
+        h('h3', { style: 'margin:0' }, '⚡ ' + t('zapSetupTitle')),
+        h('div', { class: 'small muted' }, t('zapSetupDesc')),
+        h('div', { class: 'input-group' },
+          h('input', { type: 'number', min: '1', value: s.amount, onInput: (e) => { s.amount = e.target.value; } }),
+          h('span', { class: 'small muted', style: 'align-self:center;padding:0 8px' }, 'sats')),
+        h('button', { class: 'btn-primary btn-block', onClick: () => {
+          const n = parseInt(s.amount, 10);
+          if (!n || n <= 0) { toast(t('enterValidAmtForN', { n: 1 })); return; }
+          ctx.setZapDefaultSat(n);
+          const { pk, npub, eventId } = s;
+          ui.zapSetup = null;
+          render();
+          if (!hook('zapNpub', pk, npub, eventId, n)) hook('lnZapNpub', pk, npub, eventId, n);
+        } }, t('zapSetupSave'))),
+      h('button', { class: 'btn-ghost btn-block', onClick: () => { ui.zapSetup = null; render(); } }, t('back')));
   }
 
   // One post as a feed row (avatar · name · time · body), twitter/jumble
   // style: rows share a scrollable container and are split by hairlines
-  // rather than floating in their own cards.
-  function noteRow(pk, ev, name) {
+  // rather than floating in their own cards. Tapping a row opens its thread.
+  function noteRow(pk, ev, name, { open = true, focus = false } = {}) {
     const isReply = ev.tags.some((x) => x[0] === 'e');
     const canZap = !isMe(pk) && !!(hook('arkReady') || hook('canLnZap'));
-    return h('div', { class: 'row', style: 'gap:10px;align-items:flex-start;padding:10px 0' },
+    return h('div', {
+      class: 'row',
+      style: 'gap:10px;align-items:flex-start;padding:10px 0'
+        + (open ? ';cursor:pointer' : '')
+        + (focus ? ';box-shadow:inset 3px 0 0 var(--accent,#7c3aed);padding-left:8px;margin-left:-8px' : ''),
+      onClick: open ? () => openNoteThread(ev) : undefined,
+    },
       avatar(pk, 'chat-avatar', false),
       h('div', { class: 'col grow', style: 'min-width:0;gap:3px' },
         h('div', { class: 'row between', style: 'align-items:center;gap:8px' },
@@ -1125,8 +1161,63 @@ export function messagesFeature(ctx) {
             h('span', { style: 'font-weight:600;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis' }, name),
             h('span', { class: 'small faint', style: 'white-space:nowrap' },
               (isReply ? '↩ ' + t('profReplyTag') + ' · ' : '') + timeLabel(ev.created_at * 1000))),
-          canZap ? h('button', { class: 'btn-sm', title: t('zapTitle'), onClick: () => zapNote(pk, ev) }, '⚡') : null),
+          canZap ? h('button', { class: 'btn-sm', title: t('zapTitle'), onClick: (e) => { e.stopPropagation(); zapNote(pk, ev); } }, '⚡') : null),
         h('div', { class: 'small', style: 'white-space:pre-wrap;overflow-wrap:anywhere' }, ...noteBody(ev.content))));
+  }
+
+  // ---- thread view: a note in its conversation ----------------------------
+  const threadCache = new Map(); // root id -> { status, root, replies }
+  const noteSep = () => h('div', { style: 'height:1px;background:var(--border,rgba(128,128,128,.18));margin:0 -14px' });
+  function rootIdOf(ev) {
+    const es = ev.tags.filter((x) => x[0] === 'e');
+    const marked = es.find((x) => x[3] === 'root');
+    return (marked || es[0] || [])[1] || ev.id;
+  }
+  function threadFor(seed) {
+    const rootId = rootIdOf(seed);
+    let c = threadCache.get(rootId);
+    if (c) return c;
+    c = { status: 'loading', rootId, root: seed.id === rootId ? seed : null, replies: [] };
+    threadCache.set(rootId, c);
+    (async () => {
+      const [roots, replies] = await Promise.all([
+        c.root ? Promise.resolve([]) : queryOn(NOTE_RELAYS, { kinds: [1], ids: [rootId] }, 4000),
+        queryOn(NOTE_RELAYS, { kinds: [1], '#e': [rootId], limit: 80 }, 4500),
+      ]);
+      if (!c.root) c.root = (roots || [])[0] || null;
+      const seen = new Set([rootId]);
+      c.replies = (replies || [])
+        .filter((e) => !seen.has(e.id) && seen.add(e.id))
+        .sort((a, b) => a.created_at - b.created_at);
+      c.status = 'ready';
+      if (ui.noteThread && ui.noteThread.rootId === rootId) render();
+    })().catch(() => {
+      c.status = 'ready';
+      if (ui.noteThread && ui.noteThread.rootId === rootId) render();
+    });
+    return c;
+  }
+  function openNoteThread(ev) {
+    ui.noteThread = { rootId: rootIdOf(ev), focusId: ev.id, seed: ev };
+    render();
+  }
+  function threadScreen() {
+    const s = ui.noteThread;
+    const c = threadFor(s.seed);
+    const row = (ev) => noteRow(ev.pubkey, ev, displayName(ev.pubkey), { open: false, focus: ev.id === s.focusId && c.replies.length > 0 });
+    return h('div', { class: 'col', style: 'gap:16px' },
+      ctx.brandHeader(false),
+      h('div', { class: 'card col', style: 'gap:0;padding:2px 14px' },
+        c.root ? row(c.root)
+          : h('div', { class: 'small faint', style: 'padding:10px 0' },
+              c.status === 'loading' ? '…' : t('threadRootMissing')),
+        ...c.replies.flatMap((ev) => [noteSep(), row(ev)]),
+        c.status === 'loading'
+          ? h('div', { class: 'row', style: 'justify-content:center;padding:12px' }, h('span', { class: 'spinner sm' }))
+          : !c.replies.length
+            ? h('div', { class: 'small faint', style: 'text-align:center;padding:10px 0' }, t('threadNoReplies'))
+            : null),
+      h('button', { class: 'btn-ghost btn-block', onClick: () => { ui.noteThread = null; render(); } }, t('back')));
   }
 
   async function saveProfile() {
@@ -1267,6 +1358,34 @@ export function messagesFeature(ctx) {
   }
 
   const backBtn = (onClick) => h('button', { class: 'iconbtn chat-back', onClick }, '‹');
+
+  // ---- user search: the header magnifier ----------------------------------
+  // Same engine the Send form and DMs use (registrar names + Primal cache +
+  // NIP-50 relays); tapping a result opens their profile, and profile-Back
+  // lands here again since the search state survives.
+  const userSearcher = makeSearcher((q, rows) => {
+    if (ui.userSearch && ui.userSearch.q === q) { ui.userSearch.rows = rows; render(); }
+  });
+  function userSearchScreen() {
+    const s = ui.userSearch;
+    return h('div', { class: 'col', style: 'gap:16px' },
+      ctx.brandHeader(false),
+      h('div', { class: 'card col', style: 'gap:10px' },
+        h('h3', { style: 'margin:0' }, t('searchUsers')),
+        h('input', {
+          type: 'text', class: 'user-search-input', placeholder: t('searchUsersHint'), value: s.q,
+          autocapitalize: 'none', autocomplete: 'off', spellcheck: 'false',
+          onInput: (e) => { s.q = e.target.value; userSearcher.update(s.q); },
+        }),
+        s.rows && s.rows.length
+          ? h('div', { class: 'list' }, resultRows(h, s.rows, (r) => {
+              if (r.pk) { openProfile(r.pk); render(); }
+            }))
+          : s.rows && s.q.trim().length >= 2
+            ? h('div', { class: 'small faint', style: 'text-align:center;padding:6px' }, t('searchNoResults'))
+            : h('div', { class: 'small faint', style: 'text-align:center;padding:6px' }, t('searchUsersEmpty'))),
+      h('button', { class: 'btn-ghost btn-block', onClick: () => { ui.userSearch = null; render(); } }, t('back')));
+  }
 
   // ---- presence & typing --------------------------------------------------
   // Both ride the channel stream as 21059 wraps, so they stay inside the
@@ -1873,11 +1992,22 @@ export function messagesFeature(ctx) {
     notifySettingsCards() { return [notifyCard()]; },
     screenView() {
       if (ui.screen !== 'wallet') return null;
+      if (ui.zapSetup) return zapSetupScreen();
+      if (ui.noteThread) return threadScreen();
       if (ui.profilePk) return profileScreen();
+      if (ui.userSearch && !ui.chatOpen) return userSearchScreen();
       if (!ui.chatOpen) return null;
       return h('div', { class: 'col', style: 'gap:16px' },
         ctx.brandHeader(true),
         messagesTab());
+    },
+    // The header magnifier: search anyone on nostr, results open profiles.
+    userSearchAvailable() { return true; },
+    openUserSearch() {
+      ui.chatOpen = false;
+      ui.profilePk = null;
+      ui.userSearch = { q: '', rows: null };
+      return true;
     },
     // Anyone (ark's history, other features) can open a profile or render a
     // small clickable identity chip.

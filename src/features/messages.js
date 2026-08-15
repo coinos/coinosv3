@@ -910,7 +910,14 @@ export function messagesFeature(ctx) {
       const got = await unwrapDM(wrap, d).catch(() => null);
       if (!got) continue;
       if (got.rumor.kind === 14) {
-        noteDM(got.peer, got.rumor, isMe(got.author));
+        // unwrapDM judges "mine" against the key that DECRYPTED, but this
+        // wallet can hold several identities (wallet key + nostr login). A
+        // sent-copy authored by any of them must thread under the RECIPIENT,
+        // or every welcome DM the registrar sends lands in a self-thread.
+        const mine = isMe(got.author);
+        const to = got.rumor.tags?.find((x) => x[0] === 'p')?.[1];
+        const peer = mine ? (to || got.peer || got.author) : got.author;
+        noteDM(peer, got.rumor, mine);
         persistDms();
       } else if (got.rumor.kind === 3313 && !isMe(got.author)) {
         try {
@@ -938,11 +945,22 @@ export function messagesFeature(ctx) {
     const pks = myPubkeys();
     if (!pks.length) return;
     dmStarted = true;
-    // warm threads from the local cache
+    // warm threads from the local cache. A self-thread of our own messages is
+    // the residue of the old sent-copy misthreading (each welcome DM landed
+    // under our own key) — sweep it rather than resurrect it; the cached
+    // rows carry no tags, so they cannot be re-threaded to their recipients.
     const s = st();
-    for (const [peer, list] of Object.entries(s.dms))
+    let swept = false;
+    for (const [peer, list] of Object.entries(s.dms)) {
+      if (isMe(peer) && list.every((m) => isMe(m.from))) {
+        delete s.dms[peer];
+        swept = true;
+        continue;
+      }
       for (const m of list)
         threadOf(peer).set(m.id, { rumor: { id: m.id, pubkey: m.from, content: m.text, created_at: m.t, kind: 14 }, mine: isMe(m.from) });
+    }
+    if (swept) save(s);
     allUnsubs.push(subscribeOn(DM_RELAYS, { kinds: [1059], '#p': pks, limit: 400 }, (wrap) => {
       handleInboxWrap(wrap).catch(() => {});
     }));

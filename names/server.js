@@ -162,11 +162,12 @@ async function sendWelcome(pubkey) {
   state.welcomed[pubkey] = Date.now();
   persist();
   try {
-    // wraps for [sender-copy, recipient], each to its owner's inbox
-    const [toSelf, toPeer] = wrapManyEvents(WELCOME.sk, [{ publicKey: pubkey }], WELCOME.message);
+    // wrapManyEvents returns [sender-copy, recipient] — publish ONLY the
+    // recipient's wrap. A sender copy per registrant flooded Adam's own
+    // clients with an endless stream of his own welcome message.
+    const [, toPeer] = wrapManyEvents(WELCOME.sk, [{ publicKey: pubkey }], WELCOME.message);
     const inbox = await inboxRelaysOf(pubkey);
     await Promise.allSettled(pool.publish([...new Set([...inbox, ...LNURL_RELAYS])], toPeer));
-    await Promise.allSettled(pool.publish(LNURL_RELAYS, toSelf));
     log(`welcome DM sent to ${pubkey.slice(0, 12)}`);
   } catch (e) {
     log('welcome DM failed: ' + e.message);

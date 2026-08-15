@@ -1731,16 +1731,7 @@ function lockBtn() {
   return h('button', {
     class: 'header-msgs', title: t('lockWallet'), 'aria-label': t('lockWallet'),
     onClick: () => { lock({ offerPassword: true }); toast(t('lockedToast')); },
-  }, h('span', {
-    class: 'hm-ico',
-    html: '<svg width="21" height="21" viewBox="0 0 24 24" fill="none">'
-      + '<path d="M7.5 10.5V6.8a4.3 4.3 0 0 1 8.4-1.4" stroke="#9aa3ad" stroke-width="2.6" stroke-linecap="round"/>'
-      + '<rect x="4" y="10" width="13.4" height="10.6" rx="2.8" fill="#f7c948" stroke="#c99a1a" stroke-width="1.4"/>'
-      + '<circle cx="10.7" cy="14.4" r="1.7" fill="#8a6d1a"/>'
-      + '<path d="M10.7 15.3l-1 2.9h2z" fill="#8a6d1a"/>'
-      + '<path d="M5.9 12c1.3-.6 3-.9 4.6-.9" stroke="#ffe28a" stroke-width="1.2" stroke-linecap="round"/>'
-      + '</svg>',
-  }));
+  }, h('span', { class: 'hm-ico', style: 'font-size:18px;line-height:1' }, '\u{1F513}'));
 }
 
 // Messages sit one tap away, left of the wallet selector. The dot is presence,
@@ -2415,12 +2406,7 @@ function vaultScreen() {
     brandHeader(false),
     h('div', { class: 'card col' },
       h('div', { class: 'row gap6', style: 'align-items:center' },
-        h('span', { html: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none">'
-          + '<path d="M7.5 10.5V7a4.3 4.3 0 0 1 8.6 0v3.5" stroke="#9aa3ad" stroke-width="2.6" stroke-linecap="round"/>'
-          + '<rect x="4" y="10" width="13.4" height="10.6" rx="2.8" fill="#f7c948" stroke="#c99a1a" stroke-width="1.4"/>'
-          + '<circle cx="10.7" cy="14.4" r="1.7" fill="#8a6d1a"/>'
-          + '<path d="M10.7 15.3l-1 2.9h2z" fill="#8a6d1a"/>'
-          + '</svg>' }),
+        h('span', { style: 'font-size:20px;line-height:1' }, '\u{1F512}'),
         h('h3', { style: 'margin:0' }, t('unlockSaved'))),
       h('p', { class: 'small muted', style: 'margin:0' }, t('unlockSavedDesc')),
       h('input', { type: 'password', placeholder: t('password'), value: ui.vaultPw,

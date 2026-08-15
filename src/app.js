@@ -1497,6 +1497,7 @@ function unlockVault() {
   if (!attemptVaultUnlock(ui.vaultPw)) { ui.vaultError = t('pwWrong'); render(); return; }
   ui.vaultPw = '';
   ui.vaultError = '';
+  ui.justLocked = false;
   const ms = ui.unlockFor != null ? ui.unlockFor : Number(localStorage.getItem(UNLOCK_FOR_KEY)) || 0;
   try {
     localStorage.setItem(UNLOCK_FOR_KEY, String(ms));
@@ -1741,7 +1742,7 @@ function lockBtn() {
   // has no header at all.)
   return h('button', {
     class: 'header-msgs', title: t('lockWallet'), 'aria-label': t('lockWallet'),
-    onClick: () => { lock({ offerPassword: true }); toast(t('lockedToast')); },
+    onClick: () => { lock({ offerPassword: true }); ui.justLocked = true; toast(t('lockedToast')); },
   }, h('span', { class: 'hm-ico', style: 'font-size:18px;line-height:1' }, '\u{1F513}'));
 }
 
@@ -2422,8 +2423,8 @@ function vaultScreen() {
     h('div', { class: 'card col' },
       h('div', { class: 'row gap6', style: 'align-items:center' },
         h('span', { style: 'font-size:20px;line-height:1' }, '\u{1F512}'),
-        h('h3', { style: 'margin:0' }, t('unlockSaved'))),
-      h('p', { class: 'small muted', style: 'margin:0' }, t('unlockSavedDesc')),
+        h('h3', { style: 'margin:0' }, ui.justLocked ? t('lockedTitle') : t('unlockSaved'))),
+      h('p', { class: 'small muted', style: 'margin:0' }, ui.justLocked ? t('lockedDesc') : t('unlockSavedDesc')),
       h('input', { type: 'password', placeholder: t('password'), value: ui.vaultPw,
         onInput: (e) => (ui.vaultPw = e.target.value), onKeyDown: (e) => { if (e.key === 'Enter') unlockVault(); } }),
       h('div', { class: 'row between', style: 'align-items:center;gap:10px' },

@@ -1685,9 +1685,11 @@ function lock({ offerPassword = false } = {}) {
   ui.broadcastTx = null;
   ui.bump = null;
   // After the resets above (which clear ui.pw): locking with no password locks
-  // nothing, so offer one — once, and only when a person chose to lock, never
-  // when the idle timer did it for them.
-  if (noPassword && offerPassword && !lockPwAsked()) {
+  // NOTHING — the wallets reopen by themselves. So a person who taps the
+  // padlock gets the password prompt every time until one exists; without it
+  // the tap would just be a confusing trip to the wallet list. (The idle
+  // timer still never nags.)
+  if (noPassword && offerPassword) {
     ui.pw = { purpose: 'lock', mode: 'set', v0: '', v1: '', v2: '', error: '' };
   }
   render();

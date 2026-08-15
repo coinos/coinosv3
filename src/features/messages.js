@@ -1056,20 +1056,42 @@ export function messagesFeature(ctx) {
 
   const NOTE_RELAYS = [...new Set([...PROFILE_RELAYS, ...DM_RELAYS])];
   const notesCache = new Map(); // pk -> { status: 'loading'|'ready', notes: [kind-1 events] }
+  // NIP-65: where this author actually writes. Their notes and threads live
+  // there first — our default relays are just the common ground.
+  const relayListCache = new Map(); // pk -> Promise<string[]>
+  function relaysOf(pk) {
+    let p = relayListCache.get(pk);
+    if (p) return p;
+    p = queryOn([...new Set([...PROFILE_RELAYS, ...NOTE_RELAYS])], { kinds: [10002], authors: [pk] }, 3500)
+      .then((evs) => {
+        const newest = (evs || []).sort((a, b) => b.created_at - a.created_at)[0];
+        if (!newest) return [];
+        return [...new Set(newest.tags
+          .filter((x) => x[0] === 'r' && x[1] && x[2] !== 'read' && /^wss:\/\//.test(x[1]))
+          .map((x) => x[1].replace(/\/$/, '')))].slice(0, 4);
+      })
+      .catch(() => []);
+    relayListCache.set(pk, p);
+    return p;
+  }
+  const notesRelays = async (pk) => [...new Set([...NOTE_RELAYS, ...(await relaysOf(pk))])];
+
   function notesFor(pk) {
     let c = notesCache.get(pk);
     if (c) return c;
     c = { status: 'loading', notes: [] };
     notesCache.set(pk, c);
-    queryOn(NOTE_RELAYS, { kinds: [1], authors: [pk], limit: 30 }, 4500).then((evs) => {
+    (async () => {
+      const evs = await queryOn(await notesRelays(pk), { kinds: [1], authors: [pk], limit: 30 }, 4500);
       const seen = new Set();
       c.notes = (evs || [])
         .filter((e) => !seen.has(e.id) && seen.add(e.id))
         .sort((a, b) => b.created_at - a.created_at)
         .slice(0, 20);
+    })().catch(() => {}).finally(() => {
       c.status = 'ready';
       if (ui.profilePk === pk) render();
-    }).catch(() => { c.status = 'ready'; if (ui.profilePk === pk) render(); });
+    });
     return c;
   }
 
@@ -1152,7 +1174,9 @@ export function messagesFeature(ctx) {
       style: 'gap:10px;align-items:flex-start;padding:10px 0'
         + (open ? ';cursor:pointer' : '')
         + (focus ? ';box-shadow:inset 3px 0 0 var(--accent,#7c3aed);padding-left:8px;margin-left:-8px' : ''),
-      onClick: open ? () => openNoteThread(ev) : undefined,
+      // closest('button') guard: on touch, a ⚡ tap must never double as a
+      // row tap even if propagation quirks let the click reach us
+      onClick: open ? (e) => { if (e.target && e.target.closest && e.target.closest('button')) return; openNoteThread(ev); } : undefined,
     },
       avatar(pk, 'chat-avatar', false),
       h('div', { class: 'col grow', style: 'min-width:0;gap:3px' },
@@ -1180,9 +1204,12 @@ export function messagesFeature(ctx) {
     c = { status: 'loading', rootId, root: seed.id === rootId ? seed : null, replies: [] };
     threadCache.set(rootId, c);
     (async () => {
+      // the conversation's home relays are the root author's (NIP-10 outbox);
+      // the seed's author is the best guess until the root is known
+      const relays = await notesRelays((c.root || seed).pubkey);
       const [roots, replies] = await Promise.all([
-        c.root ? Promise.resolve([]) : queryOn(NOTE_RELAYS, { kinds: [1], ids: [rootId] }, 4000),
-        queryOn(NOTE_RELAYS, { kinds: [1], '#e': [rootId], limit: 80 }, 4500),
+        c.root ? Promise.resolve([]) : queryOn(relays, { kinds: [1], ids: [rootId] }, 4000),
+        queryOn(relays, { kinds: [1], '#e': [rootId], limit: 80 }, 4500),
       ]);
       if (!c.root) c.root = (roots || [])[0] || null;
       const seen = new Set([rootId]);
@@ -1201,6 +1228,36 @@ export function messagesFeature(ctx) {
     ui.noteThread = { rootId: rootIdOf(ev), focusId: ev.id, seed: ev };
     render();
   }
+  // Publish a kind-1 reply to the focused note (NIP-10 markers), addressed to
+  // the conversation's own relays plus ours, and shown optimistically.
+  async function publishReply(c, s, text) {
+    const id = await identity();
+    if (!id) throw new Error(t('msgNoIdentity'));
+    const target = c.replies.find((e) => e.id === s.focusId) || c.root || s.seed;
+    const rootId = c.rootId;
+    const pTags = [...new Set([
+      target.pubkey,
+      ...(c.root ? [c.root.pubkey] : []),
+      ...target.tags.filter((x) => x[0] === 'p' && /^[0-9a-f]{64}$/.test(x[1] || '')).map((x) => x[1]),
+    ])].filter((pk) => pk !== id.pubkey).slice(0, 8);
+    const partial = {
+      kind: 1,
+      content: text,
+      created_at: Math.floor(Date.now() / 1000),
+      tags: [
+        ['e', rootId, '', 'root'],
+        ...(target.id !== rootId ? [['e', target.id, '', 'reply']] : []),
+        ...pTags.map((pk) => ['p', pk]),
+      ],
+    };
+    const evt = id.signer instanceof Uint8Array ? finalizeEvent(partial, id.signer) : await id.signer.signEvent(partial);
+    const relays = [...new Set([...(await notesRelays(target.pubkey)), ...wallet.nostrRelays()])];
+    const ok = await publishOn(relays, evt);
+    if (!ok) throw new Error(t('msgSendFailed'));
+    c.replies = [...c.replies, evt];
+    return evt;
+  }
+
   function threadScreen() {
     const s = ui.noteThread;
     const c = threadFor(s.seed);
@@ -1217,6 +1274,31 @@ export function messagesFeature(ctx) {
           : !c.replies.length
             ? h('div', { class: 'small faint', style: 'text-align:center;padding:10px 0' }, t('threadNoReplies'))
             : null),
+      h('div', { class: 'card row', style: 'gap:8px;align-items:center' },
+        h('input', {
+          type: 'text', class: 'grow thread-reply-input', placeholder: t('threadReplyHint'),
+          value: s.draft || '',
+          onInput: (e) => { s.draft = e.target.value; },
+          onKeydown: (e) => { if (e.key === 'Enter') e.target.closest('.card').querySelector('.thread-reply-send')?.click(); },
+        }),
+        h('button', {
+          class: 'btn-primary thread-reply-send', disabled: !!s.sending,
+          onClick: async () => {
+            const text = (s.draft || '').trim();
+            if (!text) return;
+            s.sending = true; render();
+            try {
+              await publishReply(c, s, text);
+              s.draft = '';
+              // the input may still be focused, and the morph won't touch a
+              // focused field's value — clear it by hand
+              const inp = document.querySelector('.thread-reply-input');
+              if (inp) inp.value = '';
+              toast(t('threadReplied'));
+            } catch (e) { toast(e.message); }
+            s.sending = false; render();
+          },
+        }, s.sending ? h('span', { class: 'spinner sm' }) : t('threadReplySend'))),
       h('button', { class: 'btn-ghost btn-block', onClick: () => { ui.noteThread = null; render(); } }, t('back')));
   }
 

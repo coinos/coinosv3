@@ -384,7 +384,8 @@ setInterval(async () => {
   for (const p of q) {
     if (p.next && Date.now() < p.next) { still.push(p); continue; }
     try { await forward(p.name, p.sat); }
-    catch {
+    catch (e) {
+      log(`forward retry failed for ${p.name} (${p.sat} sat, try ${(p.tries || 0) + 1}): ${e.message}`);
       p.tries = (p.tries || 0) + 1;
       p.next = Date.now() + Math.min(3_600_000, 60_000 * 2 ** Math.min(p.tries - 1, 6));
       still.push(p);

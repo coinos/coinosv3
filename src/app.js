@@ -1126,12 +1126,20 @@ function defaultLabel(type) {
 function loadWatchAccounts() {
   try {
     const dir = JSON.parse(localStorage.getItem(WATCH_KEY) || '[]');
-    return dir.filter((d) => d.xpub).map((d) => ({ id: d.id, label: d.label, type: 'watch', xpub: d.xpub, autoLock: d.autoLock || 0, network: d.network }));
+    return dir.filter((d) => d.xpub).map((d) => ({ id: d.id, label: d.label, type: 'watch', xpub: d.xpub, autoLock: d.autoLock || 0, network: d.network, nostrPk: d.nostrPk }));
   } catch { return []; }
 }
 function saveDirectory() {
   try {
-    const dir = accounts.filter((a) => a.xpub && !a.provisional).map((a) => ({ id: a.id, label: a.label, xpub: a.xpub, autoLock: a.autoLock || 0, network: a.network }));
+    // Remember each wallet's nostr identity alongside its xpub: a watch-only
+    // reopening still shows WHO this wallet is (avatar, npub, profile) even
+    // though nothing can be signed until the keys are back.
+    const dir = accounts.filter((a) => a.xpub && !a.provisional).map((a) => {
+      if (a.id === activeId && !wallet.watchOnly && wallet.nostrPubkey) {
+        try { a.nostrPk = wallet.nostrPubkey() || a.nostrPk; } catch {}
+      }
+      return { id: a.id, label: a.label, xpub: a.xpub, autoLock: a.autoLock || 0, network: a.network, nostrPk: a.nostrPk };
+    });
     localStorage.setItem(WATCH_KEY, JSON.stringify(dir));
   } catch {}
 }
@@ -1699,7 +1707,8 @@ function lock({ offerPassword = false } = {}) {
 // The avatar IS your profile now — one tap opens it (edit lives there).
 // Settings and Lock stand beside it as their own icons; no popup menu.
 function avatarMenu() {
-  const me = (featureHook('nostrLoginIdentity') || {}).pubkey || (wallet.nostrPubkey && wallet.nostrPubkey());
+  const me = (featureHook('nostrLoginIdentity') || {}).pubkey || (wallet.nostrPubkey && wallet.nostrPubkey())
+    || (activeAccount() || {}).nostrPk;
   // No identity (watch-only wallet): a neutral face with nowhere to go.
   const node = (me && featureHook('headerAvatar', me))
     || h('span', {

@@ -279,7 +279,7 @@ export function nostrLoginFeature(ctx) {
       const signer = await makeSigner();
       if (signer.pubkey !== st.pubkey) {
         if (signer.close) signer.close();
-        throw new Error(t('nlWrongAccount', { npub: (npubOf(st.pubkey) || '').slice(0, 16) + '…' }));
+        throw new Error(t('nlWrongAccount', { npub: npubOf(st.pubkey) || '' }));
       }
       live = selfHealing(signer);
       save({ ...load(), ...sessionOf(signer) });

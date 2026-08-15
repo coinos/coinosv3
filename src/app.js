@@ -330,8 +330,9 @@ function animatedAmount(key, sat) {
 
 function render() {
   // A direct render subsumes any coalesced one queued by a background emit, so
-  // drop the pending frame (a user action must not trigger a second rebuild).
-  if (_renderRaf) { cancelAnimationFrame(_renderRaf); _renderRaf = 0; }
+  // drop the pending one (a user action must not trigger a second rebuild).
+  if (_renderRaf) { clearTimeout(_renderRaf); _renderRaf = 0; }
+  _lastRender = Date.now();
   // Preserve focus + caret across the rebuild, so a background update (poll, a
   // payment push, an SP scan) can't kick the user out of a field they're editing.
   const a = document.activeElement;
@@ -393,14 +394,18 @@ function render() {
 // after being backgrounded. Rendering synchronously on each one rebuilds the
 // whole screen dozens of times in a row and starves user input, so the app
 // feels frozen for a second or two. Coalesce those into at most one render per
-// animation frame. Direct user actions still call render() synchronously, and
-// the browser dispatches input events ahead of the queued frame, so a tap or
-// navigation always takes priority over background repaints. (rAF also skips
-// rendering entirely while the tab is hidden, and fires once on refocus.)
+// 200ms: one-per-frame still meant a visible strobe during boot bursts (every
+// rebuild swaps the node under the cursor, dropping its :hover until the next
+// mouse move — buttons flashed under a resting pointer). Direct user actions
+// still call render() synchronously and always take priority; render() itself
+// stamps the throttle, so a user render pushes the next background one out.
 let _renderRaf = 0;
+let _lastRender = 0;
+const BG_RENDER_MIN_MS = 200;
 function scheduleRender() {
   if (_renderRaf) return;
-  _renderRaf = requestAnimationFrame(() => { _renderRaf = 0; render(); });
+  const wait = Math.max(0, BG_RENDER_MIN_MS - (Date.now() - _lastRender));
+  _renderRaf = setTimeout(() => { _renderRaf = 0; render(); }, wait);
 }
 wallet.subscribe(scheduleRender);
 

@@ -1741,8 +1741,6 @@ function brandHeader(withLock) {
           messagesBtn(),
           settingsBtn(),
           lockBtn(),
-          h('button', { class: 'btn-sm', onClick: () => { ui.screen = 'accounts'; render(); } },
-            acc ? viewLabel(acc, accountSel()) : t('accounts')),
           avatarMenu())
       : null
   );
@@ -2796,28 +2794,12 @@ function balanceCard() {
       // target — so the switch is a real button that names where it goes.
       // Before Spending exists, its spot offers to set it up — the one
       // doorway into the optional spending-account flow.
-      kindLocked
-        ? (sibling
-            ? h('button', {
-                class: 'balance-switch',
-                onClick: () => switchToView(sibling.id, opp),
-              },
-                h('span', { html: SWAP_ICON }),
-                h('span', { class: 'bsw-label' }, viewLabel(sibling, opp)))
-            : null)
-        : hasSpending
-          ? h('button', {
-              class: 'balance-switch',
-              onClick: () => setAccountSel(isSpending ? 'savings' : 'spending', isSpending ? 'left' : 'right'),
-            },
-              h('span', { html: SWAP_ICON }),
-              h('span', { class: 'bsw-label' }, isSpending ? t('savingLabel') : t('spendingLabel')))
-          : featureHook('arkReady') && !wallet.watchOnly
-            ? h('button', {
-                class: 'balance-switch',
-                onClick: () => { ui.onbError = ''; ui.onb = { step: 'spend' }; render(); },
-              }, h('span', { class: 'bsw-label' }, t('spendSetup')))
-            : null),
+      h('button', {
+        class: 'balance-switch',
+        onClick: () => { ui.screen = 'accounts'; render(); },
+      },
+        h('span', { html: SWAP_ICON }),
+        h('span', { class: 'bsw-label' }, t('manageAccounts')))),
     h('div', { class: 'amt', style: firstLoad ? 'opacity:.3' : '' },
       firstLoad ? h('span', { class: 'spinner sm', style: 'margin-right:8px' }) : null,
       animatedAmount('bal:' + sel, isSpending ? spending : saving), ' ', unitTag('unit')),
@@ -2841,7 +2823,8 @@ function balanceCard() {
     // pointless (and confusing) while there's only one.
     ...(hasSpending ? featureAll('balanceActions') : []).map((a2) =>
       h('button', { class: 'btn-sm', style: 'margin-top:10px', onClick: a2.onClick }, a2.label)),
-    kindLocked && isSpending && !hasSpending && featureHook('arkReady') && !wallet.watchOnly
+    (ui.account === 'spending' || (kindLocked && acc0.kind === 'spending')) && !hasSpending
+      && featureHook('arkReady') && !wallet.watchOnly
       ? h('button', { class: 'btn-sm', style: 'margin-top:10px', onClick: () => { ui.onbError = ''; ui.onb = { step: 'spend' }; render(); } }, t('spendSetup'))
       : null,
     // A feature can unfold UI right on the card (ark's inline move panel).

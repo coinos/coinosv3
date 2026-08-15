@@ -1725,7 +1725,32 @@ export function arkFeature(ctx) {
   // vtxo via a self-send (regtest-verified: the mailbox delivers self-sends),
   // then exits just that one. The number the user typed is the number that
   // leaves Spending; fees come off what arrives in Savings.
-  async function doArkOffboard(amountSat) {
+  // Send-to-on-chain from Spending: amount in, exit out — an offboard whose
+  // destination is whatever address was pasted.
+  function arkOffboardSendView() {
+    const o = ui.arkOffboardSend;
+    const spendable = arkBalance()?.spendableSat || 0;
+    return h('div', { class: 'card col', style: 'gap:12px' },
+      h('h3', {}, t('arkExitSendTitle')),
+      h('div', { class: 'small muted break' }, o.address),
+      h('div', { class: 'small faint' }, t('arkExitSendNote')),
+      h('div', { class: 'input-group' },
+        h('input', { type: 'number', min: '1', placeholder: String(spendable), value: o.amount,
+          onInput: (e) => { o.amount = e.target.value; } }),
+        h('button', { type: 'button', onClick: () => { o.amount = String(spendable); render(); } }, t('max'))),
+      ui.arkError ? h('div', { class: 'notice err' }, ui.arkError) : null,
+      h('div', { class: 'row gap6' },
+        h('button', { class: 'btn-ghost grow', onClick: () => { ui.arkOffboardSend = null; ui.arkError = ''; ui.send = blankSend(); render(); } }, t('back')),
+        ui.arkBusy === 'offboard'
+          ? h('button', { class: 'btn-primary grow', disabled: true }, h('span', { class: 'spinner sm' }))
+          : h('button', { class: 'btn-primary grow', onClick: () => {
+              const sats = parseInt(o.amount, 10) || spendable;
+              if (!sats || sats <= 0 || sats > spendable) { ui.arkError = t('enterValidAmtForN', { n: 1 }); render(); return; }
+              doArkOffboard(sats >= spendable ? 0 : sats, o.address);
+            } }, t('send'))));
+  }
+
+  async function doArkOffboard(amountSat, destAddress = null) {
     ui.arkBusy = 'offboard'; ui.arkError = ''; render();
     try {
       const mgr = await connectArk();
@@ -1746,11 +1771,12 @@ export function arkFeature(ctx) {
         }
         ids = [target.id];
       }
-      const address = wallet.freshReceive().address;
+      const address = destAddress || wallet.freshReceive().address;
       const spk = btc.OutScript.encode(btc.Address(wallet.netCfg.net).decode(address));
       const action = await mgr.startOffboard(spk, address, ids);
       ui.arkOffboardAmt = '';
       ui.arkMoveOpen = false;
+      ui.arkOffboardSend = null;
       ui.arkOffboarded = { txid: action.txid, netSat: action.netSat, feeSat: action.feeSat };
       wallet.scan().catch(() => {}); // surface the incoming pending tx promptly
     } catch (e) {
@@ -2092,6 +2118,7 @@ export function arkFeature(ctx) {
       return false;
     },
     sendView() {
+      if (ui.arkOffboardSend) return arkOffboardSendView();
       if (ui.arkLnPaid || ui.arkLnPay) return arkLnPayView();
       if (ui.arkZapped || ui.arkZap) return arkZapView();
       if (ui.arkSent || ui.arkSend) return arkSendReview();
@@ -2149,6 +2176,15 @@ export function arkFeature(ctx) {
     // delegates back via the startArkLnPay hook).
     matchSendText(text) {
       const inv = (text || '').trim().replace(/^lightning:/i, '');
+      // In a Spending wallet an on-chain address means "exit ark to there":
+      // the offboard happens right in the send flow, no Move money ceremony.
+      if (ctx.getAccount() === 'spending' && wallet.isOnchainAddress(inv)
+          && arkAvailable() && (arkBalance()?.spendableSat || 0) > 0) {
+        ui.arkOffboardSend = { address: inv, amount: '' };
+        ui.sendError = '';
+        render();
+        return true;
+      }
       if (maybeBolt11(inv)) return startArkLnPay(inv);
       const pk = npubToHex(text);
       if (!pk || !arkAvailable() || !wallet.nostrFetch) return false;
@@ -2182,13 +2218,7 @@ export function arkFeature(ctx) {
     // The spendable off-chain balance IS the wallet's "Spending" — the balance
     // card shows it by name, so this feature only reports the number.
     // "Move money" under the balance — the one door between the two balances.
-    balanceActions() {
-      if (wallet.watchOnly || !arkAvailable()) return [];
-      return [{
-        label: ui.arkMoveOpen ? t('hide') : t('moveMoney'),
-        onClick: () => { ui.arkMoveOpen = !ui.arkMoveOpen; ui.arkError = ''; render(); },
-      }];
-    },
+    balanceActions() { return []; }, // Move money retired: exits ride the Send field now
     balanceExtra() {
       if (!ui.arkMoveOpen || wallet.watchOnly || !arkAvailable()) return null;
       return movePanel();

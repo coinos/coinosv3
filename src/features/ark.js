@@ -629,12 +629,22 @@ export function arkFeature(ctx) {
     const routing = await mgr.lnRouteFee(invoice, p.amountSat);
     if (!ui.arkLnPay || ui.arkLnPay !== p || p.invoice !== invoice) return;
     p.routingFeeSat = routing;
-    const candidates = mgr.vtxos().filter((v) => v.state === 'spendable')
-      .sort((a, b) => a.amountSat - b.amountSat);
+    const spendables = mgr.vtxos().filter((v) => v.state === 'spendable');
     let fee = null;
-    for (const v of candidates) {
+    for (const v of [...spendables].sort((a, b) => a.amountSat - b.amountSat)) {
       const f = lnSendFee(p.amountSat, mgr.info.lnSendFees, [v], tip) + routing;
       if (v.amountSat >= p.amountSat + f) { fee = f; break; }
+    }
+    if (fee == null) {
+      // no single coin covers it — the pay path gathers several, so quote for
+      // the same largest-first set it will pick
+      const picked = [];
+      let sum = 0;
+      for (const v of [...spendables].sort((a, b) => b.amountSat - a.amountSat)) {
+        picked.push(v); sum += v.amountSat;
+        const f = lnSendFee(p.amountSat, mgr.info.lnSendFees, picked, tip) + routing;
+        if (sum >= p.amountSat + f) { fee = f; break; }
+      }
     }
     if (fee == null) {
       const pendingCover = mgr.vtxos().some((v) => v.state === 'pending' && v.amountSat >= p.amountSat);

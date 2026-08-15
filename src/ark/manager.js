@@ -738,35 +738,55 @@ export class ArkManager {
     }
     const tip = await this.chain.tipHeight();
     const routing = routingFeeSat != null ? routingFeeSat : await this.lnRouteFee(invoice, amountSat);
-    // smallest single vtxo that covers amount + routing + its expiry-dependent fee
-    const candidates = this.state.vtxos
-      .filter((v) => v.state === 'spendable')
-      .sort((a, b) => a.amountSat - b.amountSat);
-    let input = null, feeSat = 0;
-    for (const v of candidates) {
+    // smallest single vtxo that covers amount + routing + its expiry-dependent
+    // fee — else gather largest-first: each input funds its own HTLC vtxo with
+    // the same payment hash, and the server sums them into one payment.
+    const spendable = this.state.vtxos.filter((v) => v.state === 'spendable');
+    let inputs = null, feeSat = 0;
+    for (const v of [...spendable].sort((a, b) => a.amountSat - b.amountSat)) {
       const fee = lnSendFee(amountSat, this.info.lnSendFees, [v], tip) + routing;
-      if (v.amountSat >= amountSat + fee) { input = v; feeSat = fee; break; }
+      if (v.amountSat >= amountSat + fee) { inputs = [v]; feeSat = fee; break; }
     }
-    if (!input) {
-      const total = this.balance().spendableSat;
-      throw new Error(total >= amountSat
-        ? 'no single vtxo covers this amount — consolidate with refresh() first'
-        : 'insufficient ark balance');
+    if (!inputs) {
+      const picked = [];
+      let sum = 0;
+      for (const v of [...spendable].sort((a, b) => b.amountSat - a.amountSat)) {
+        picked.push(v); sum += v.amountSat;
+        feeSat = lnSendFee(amountSat, this.info.lnSendFees, picked, tip) + routing;
+        if (sum >= amountSat + feeSat) { inputs = picked; break; }
+      }
+      if (!inputs) throw new Error('insufficient ark balance');
+      if (inputs.length > 24) throw new Error('balance is spread over too many coins for one payment');
     }
+    // per-input HTLC share: first n-1 consumed whole, the last carries change
+    let remainingLock = amountSat + feeSat;
+    const parts = inputs.map((v) => {
+      const htlcSat = Math.min(remainingLock, v.amountSat);
+      remainingLock -= htlcSat;
+      return { inputId: v.id, htlcSat, changeSat: v.amountSat - htlcSat };
+    });
     const action = {
       id: `lnpay-${Date.now()}`, type: 'ln-pay', step: 'created',
       invoice, paymentHash: dec.paymentHash, amountSat, feeSat, routingFeeSat: routing,
-      inputId: input.id,
+      parts,
       htlcKeyIndex: this.state.nextKeyIndex++, // HTLC lock key, reused for change (bark does the same)
       revKeyIndex: this.state.nextKeyIndex++,
       htlcExpiry: tip + (this.info.htlcSendExpiryDelta || 258),
-      changeSat: input.amountSat - amountSat - feeSat,
     };
-    input.state = 'pending';
+    for (const v of inputs) v.state = 'pending';
     this.state.actions.push(action);
     this._save();
     await this._driveLnPay(action);
     return action.id;
+  }
+
+  // pre-multi-input ln-pay actions carried the single part in flat fields
+  _lnParts(action) {
+    return action.parts || [{
+      inputId: action.inputId,
+      htlcSat: action.amountSat + (action.feeSat || 0),
+      changeSat: action.changeSat || 0,
+    }];
   }
 
   async _driveLnPay(action) {
@@ -777,34 +797,44 @@ export class ArkManager {
 
   async _driveLnPayInner(action) {
     if (action.step === 'created') {
-      const inputRec = this._vtxo(action.inputId);
-      const input = this._decoded(inputRec);
-      const keys = this._keyForVtxo(inputRec);
+      const parts = this._lnParts(action);
+      const inputRecs = parts.map((p) => this._vtxo(p.inputId));
+      const decoded = inputRecs.map((r) => this._decoded(r));
+      const keysList = inputRecs.map((r) => this._keyForVtxo(r));
       const htlcKey = this._key(action.htlcKeyIndex);
-      const outputs = [{
-        amountSat: action.amountSat + action.feeSat,
-        policy: {
-          type: 'serverHtlcSend', userPubkey: hex.encode(htlcKey.pubkey),
-          paymentHash: action.paymentHash, htlcExpiry: action.htlcExpiry,
-        },
-      }];
-      if (action.changeSat > 0) outputs.push({ amountSat: action.changeSat, userPubkey: htlcKey.pubkey });
-      await registerVtxoTransactions(this.arkUrl, [input._raw.bytes]);
-      const build = buildArkoorSend({ input, outputs, serverPubkey: this.serverPub, vtxoKeys: keys });
-      const nonces = genUserNonces(build, keys);
-      let resp;
+      // every part locks its own HTLC vtxo under the SAME payment hash and
+      // key — the server sums them into one payment (htlc_vtxo_sum)
+      const builds = parts.map((p, i) => buildArkoorSend({
+        input: decoded[i],
+        outputs: [
+          {
+            amountSat: p.htlcSat,
+            policy: {
+              type: 'serverHtlcSend', userPubkey: hex.encode(htlcKey.pubkey),
+              paymentHash: action.paymentHash, htlcExpiry: action.htlcExpiry,
+            },
+          },
+          ...(p.changeSat > 0 ? [{ amountSat: p.changeSat, userPubkey: htlcKey.pubkey }] : []),
+        ],
+        serverPubkey: this.serverPub, vtxoKeys: keysList[i],
+      }));
+      await registerVtxoTransactions(this.arkUrl, decoded.map((d) => d._raw.bytes));
+      const noncesList = builds.map((b, i) => genUserNonces(b, keysList[i]));
+      let resps;
       try {
         // idempotent on payment hash server-side: a re-drive after a crash
-        // gets fresh partials for fresh nonces
-        [resp] = await requestLightningPayHtlcCosign(this.arkUrl,
-          [cosignPartBytes({ build, input, vtxoKeys: keys, nonces })]);
+        // gets fresh partials for fresh nonces. One package: all or none.
+        resps = await requestLightningPayHtlcCosign(this.arkUrl,
+          builds.map((b, i) => cosignPartBytes({ build: b, input: decoded[i], vtxoKeys: keysList[i], nonces: noncesList[i] })));
       } catch (e) {
-        // INVALID_ARGUMENT (status 3): the server rejected the cosign outright
-        // — nothing was spent, so the input goes back to spendable instead of
-        // rotting in pending. "already spent" means the input really is gone.
+        // INVALID_ARGUMENT (status 3): the server rejected the package outright
+        // — nothing was spent, everything returns to spendable. "already
+        // spent" names ONE stale input but not which: free them all and let
+        // reconcile() flip the truly-gone one back to spent.
         const spent = e instanceof GrpcError && /already spent|not spendable/i.test(e.message);
         if (spent || (e instanceof GrpcError && e.grpcStatus === 3)) {
-          inputRec.state = spent ? 'spent' : 'spendable';
+          for (const r of inputRecs) r.state = 'spendable';
+          if (spent) this.reconcile().catch(() => {});
           action.step = 'failed';
           action.error = e.message;
           this._movement({ type: 'ln-send', amountSat: action.amountSat, status: 'failed', detail: e.message });
@@ -813,20 +843,28 @@ export class ArkManager {
         }
         throw e;
       }
-      if (!resp) throw new Error('empty cosign response');
-      const sigs = combineCosign({ build, nonces, serverResp: resp, vtxoKeys: keys, serverPubkey: this.serverPub });
-      // the input is spent server-side from this moment: persist immediately.
-      // Dust padding may split the HTLC (or change) across two vtxos —
+      if (resps.length !== parts.length) throw new Error('bad cosign response count');
+      // the inputs are spent server-side from this moment: persist immediately.
+      // Dust padding may split an HTLC (or change) across two vtxos —
       // classify by policy type.
-      const all = buildAllSignedVtxos({ input, build, finalSigs: sigs, serverPubkey: this.serverPub })
-        .map((bytes) => ({ bytes, v: decodeVtxo(bytes) }));
-      const htlcs = all.filter((x) => x.v.policy.type === 'serverHtlcSend');
-      const changes = all.filter((x) => x.v.policy.type !== 'serverHtlcSend');
-      action.htlcBytesList = htlcs.map((x) => hex.encode(x.bytes));
-      action.htlcVtxoIds = htlcs.map((x) => x.v.id);
-      action.changeBytesList = changes.map((x) => hex.encode(x.bytes));
-      for (const x of all) this._addVtxo(x.v, x.bytes, action.htlcKeyIndex, 'pending');
-      inputRec.state = 'spent';
+      const htlcBytesList = [], htlcVtxoIds = [], changeBytesList = [];
+      for (let i = 0; i < parts.length; i++) {
+        const sigs = combineCosign({
+          build: builds[i], nonces: noncesList[i], serverResp: resps[i],
+          vtxoKeys: keysList[i], serverPubkey: this.serverPub,
+        });
+        const all = buildAllSignedVtxos({ input: decoded[i], build: builds[i], finalSigs: sigs, serverPubkey: this.serverPub })
+          .map((bytes) => ({ bytes, v: decodeVtxo(bytes) }));
+        for (const x of all) {
+          if (x.v.policy.type === 'serverHtlcSend') { htlcBytesList.push(hex.encode(x.bytes)); htlcVtxoIds.push(x.v.id); }
+          else changeBytesList.push(hex.encode(x.bytes));
+          this._addVtxo(x.v, x.bytes, action.htlcKeyIndex, 'pending');
+        }
+        inputRecs[i].state = 'spent';
+      }
+      action.htlcBytesList = htlcBytesList;
+      action.htlcVtxoIds = htlcVtxoIds;
+      action.changeBytesList = changeBytesList;
       action.step = 'cosigned';
       this._save();
     }

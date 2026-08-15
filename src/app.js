@@ -1730,7 +1730,7 @@ function lockBtn() {
   // has no header at all.)
   return h('button', {
     class: 'header-msgs', title: t('lockWallet'), 'aria-label': t('lockWallet'),
-    onClick: () => lock({ offerPassword: true }),
+    onClick: () => { lock({ offerPassword: true }); toast(t('lockedToast')); },
   }, h('span', {
     class: 'hm-ico',
     html: '<svg width="21" height="21" viewBox="0 0 24 24" fill="none">'
@@ -1874,20 +1874,39 @@ function settingsTab() {
     case 'notifications': return page(featureAll('notifySettingsCards'));
     case 'advanced': return advancedSettingsView();
   }
-  const nav = (id, label) =>
-    h('button', { class: 'btn-block settings-nav', onClick: () => { ui.settingsPage = id; render(); } }, label);
+  const I = (d) => '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">' + d + '</svg>';
+  const TILE_ICONS = {
+    wallet: I('<rect x="2" y="6" width="20" height="14" rx="2"/><path d="M2 10h20"/><circle cx="17" cy="15" r="1.4"/>'),
+    payments: I('<path d="M13 2 4.5 13.5H11L9.5 22 18 10.5h-6.5z"/>'),
+    network: I('<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 0 1 0 18M12 3a15 15 0 0 0 0 18"/>'),
+    nostr: I('<circle cx="8" cy="15" r="4"/><path d="M10.9 12.1 20 3l1 1-2 2 2 2-2.5 2.5L16 8l-2.2 2.2"/>'),
+    notifications: I('<path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/>'),
+    advanced: I('<line x1="4" y1="8" x2="20" y2="8"/><line x1="4" y1="16" x2="20" y2="16"/><circle cx="9" cy="8" r="2.2" fill="var(--surface,#fff)"/><circle cx="15" cy="16" r="2.2" fill="var(--surface,#fff)"/>'),
+  };
+  const tile = (id, label, desc) =>
+    h('button', {
+      class: 'card col settings-tile',
+      style: 'align-items:flex-start;gap:6px;text-align:left;padding:14px;cursor:pointer',
+      onClick: () => { ui.settingsPage = id; render(); },
+    },
+      h('span', { class: 'st-ico', style: 'color:var(--muted)', html: TILE_ICONS[id] || '' }),
+      h('span', { style: 'font-weight:600' }, label),
+      h('span', { class: 'small faint' }, desc));
+  const grid = (kids) => h('div', { style: 'display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px' }, ...kids);
   return h(
     'div',
     { class: 'col', style: 'gap:10px' },
     h('div', { class: 'row gap6', style: 'align-items:center;margin:2px 0 6px 4px' },
       h('span', { style: 'display:flex;color:var(--muted)', html: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>' }),
       h('h3', { style: 'margin:0' }, t('tabSettings'))),
-    nav('wallet', t('settingsWallet')),
-    nav('payments', t('settingsPayments')),
-    nav('network', t('settingsNetwork')),
-    nav('nostr', t('nostrSettings')),
-    nav('notifications', t('settingsNotifications')),
-    nav('advanced', t('advancedSettings')),
+    grid([
+      tile('wallet', t('settingsWallet'), t('settingsWalletDesc')),
+      tile('payments', t('settingsPayments'), t('settingsPaymentsDesc')),
+      tile('network', t('settingsNetwork'), t('settingsNetworkDesc')),
+      tile('nostr', t('nostrSettings'), t('settingsNostrDesc')),
+      tile('notifications', t('settingsNotifications'), t('settingsNotifDesc')),
+      tile('advanced', t('advancedSettings'), t('settingsAdvancedDesc')),
+    ]),
     h('button', { class: 'btn-ghost btn-block', style: 'margin-top:6px', onClick: () => { ui.tab = wallet.offline ? 'settings' : 'receive'; render(); } }, t('back'))
   );
 }
@@ -2395,7 +2414,14 @@ function vaultScreen() {
     { class: 'col', style: 'gap:16px' },
     brandHeader(false),
     h('div', { class: 'card col' },
-      h('h3', {}, t('unlockSaved')),
+      h('div', { class: 'row gap6', style: 'align-items:center' },
+        h('span', { html: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none">'
+          + '<path d="M7.5 10.5V7a4.3 4.3 0 0 1 8.6 0v3.5" stroke="#9aa3ad" stroke-width="2.6" stroke-linecap="round"/>'
+          + '<rect x="4" y="10" width="13.4" height="10.6" rx="2.8" fill="#f7c948" stroke="#c99a1a" stroke-width="1.4"/>'
+          + '<circle cx="10.7" cy="14.4" r="1.7" fill="#8a6d1a"/>'
+          + '<path d="M10.7 15.3l-1 2.9h2z" fill="#8a6d1a"/>'
+          + '</svg>' }),
+        h('h3', { style: 'margin:0' }, t('unlockSaved'))),
       h('p', { class: 'small muted', style: 'margin:0' }, t('unlockSavedDesc')),
       h('input', { type: 'password', placeholder: t('password'), value: ui.vaultPw,
         onInput: (e) => (ui.vaultPw = e.target.value), onKeyDown: (e) => { if (e.key === 'Enter') unlockVault(); } }),

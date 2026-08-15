@@ -2079,6 +2079,10 @@ function goHome() {
     ui.sendResult = null;
     ui.sendError = '';
     ui.fromWallet = false;
+  } else if (hasVault()) {
+    // Locked with saved wallets: home is the unlock prompt, not the
+    // create-a-new-wallet flow — the logo must never read as "start over".
+    ui.screen = 'vault';
   } else {
     ui.screen = 'unlock';
     ui.unlockTab = 'create';

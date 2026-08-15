@@ -670,7 +670,7 @@ const STR = {
     settingsNotifications: 'Notifications',
     searchUsers: 'Search',
     spendingName: 'Spending',
-    manageAccounts: 'Manage accounts',
+    manageAccounts: 'Wallets',
     lockedToast: 'Locked',
     settingsWalletDesc: 'Name, keys, backup',
     settingsPaymentsDesc: 'Zaps and auto-withdraw',

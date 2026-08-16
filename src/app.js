@@ -1435,7 +1435,7 @@ function submitPw() {
     persistAccounts();
     markLockPwAsked();
     ui.pw = null;
-    lock(); // now there IS a password, so this lands on the unlock screen
+    softLock(); // stay home, watch-only: closed padlock + "Locked" toast
     return;
   }
   if (p.mode === 'set') {

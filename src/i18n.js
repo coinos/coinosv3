@@ -77,6 +77,7 @@ const STR = {
     pwChanged: 'Password changed',
     enterPassword: 'Enter your password',
     enterPasswordDesc: 'Unlock your saved wallets to continue.',
+    lockSaveDesc: "This wallet isn't saved on this device yet. Enter your password to save it before locking — otherwise unlocking couldn't bring it back.",
     password: 'Password',
     confirmPassword: 'Confirm password',
     pwMismatch: 'Passwords do not match.',

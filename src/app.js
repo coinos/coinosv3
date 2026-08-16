@@ -1400,6 +1400,8 @@ function startForget(id) {
 function cancelPw() {
   // Declining the lock-time offer is an answer, not a postponement.
   if (ui.pw && ui.pw.purpose === 'lock') markLockPwAsked();
+  // Backing out of save-before-lock means "don't lock" — go home, keys intact.
+  if (ui.pw && ui.pw.purpose === 'locksave') ui.screen = 'wallet';
   ui.pw = null;
   render();
 }
@@ -1444,10 +1446,12 @@ function submitPw() {
     mergeVaultList(list); // bring existing persisted accounts into the session
   }
   const acc = accounts.find((a) => a.id === p.accId);
-  if (acc) acc.persisted = p.purpose === 'save';
+  if (acc) acc.persisted = p.purpose === 'save' || p.purpose === 'locksave';
   writeVault();
   persistAccounts();
+  const finishLock = p.purpose === 'locksave';
   ui.pw = null;
+  if (finishLock) { softLock(); return; }
   render();
 }
 
@@ -1514,7 +1518,8 @@ function unlockVault() {
     else localStorage.removeItem(UNLOCK_UNTIL_KEY);
   } catch {}
   armUnlockDeadline();
-  if (accounts.length) activateAccount(accounts[0], { fresh: true });
+  const cur = accounts.find((a) => a.id === activeId) || accounts[0];
+  if (cur) activateAccount(cur, { fresh: true });
   else lock(); // everything got signed out by the timer
 }
 function skipVault() {
@@ -1755,6 +1760,23 @@ function softLock() {
   // Nothing watchable, or a passwordless vault (locking would mean nothing):
   // fall back to the classic flow, which offers to set a password.
   if (!watch.length || !hasVault() || blankPw) { lock({ offerPassword: true }); ui.justLocked = true; return; }
+  // A wallet that isn't IN the vault can't come back from a lock — unlocking
+  // decrypts the vault, and this seed isn't there (created while the vault
+  // sat locked, so autoSave couldn't write it). Save it first: with the
+  // session password if we hold it, else ask for the vault password now.
+  const active = activeAccount();
+  if (active && active.type === 'full' && !active.provisional && !active.persisted) {
+    if (vaultPassword != null) {
+      active.persisted = true;
+      writeVault();
+      persistAccounts();
+    } else {
+      ui.pw = { purpose: 'locksave', accId: active.id, mode: 'enter', v1: '', v2: '', error: '' };
+      ui.screen = 'accounts'; // the pw prompt renders on the accounts screen
+      render();
+      return;
+    }
+  }
   const keepId = activeId;
   for (const f of FEATURES) { try { f.stop && f.stop(); } catch {} }
   vaultPassword = null;
@@ -2439,7 +2461,7 @@ function pwPromptCard() {
   return h('div', { class: 'card col' },
     h('h3', {}, atLock ? t('lockPwTitle') : change ? t('changePassword') : p.mode === 'set' ? t('setPassword') : t('enterPassword')),
     h('p', { class: 'small muted', style: 'margin:0' },
-      atLock ? t('lockPwDesc') : change ? t('changePasswordDesc') : p.mode === 'set' ? t('setPasswordDesc') : t('enterPasswordDesc')),
+      atLock ? t('lockPwDesc') : change ? t('changePasswordDesc') : p.purpose === 'locksave' ? t('lockSaveDesc') : p.mode === 'set' ? t('setPasswordDesc') : t('enterPasswordDesc')),
     change ? h('input', { type: 'password', placeholder: t('currentPassword'), value: p.v0, onInput: (e) => (p.v0 = e.target.value) }) : null,
     h('input', { type: 'password', placeholder: newish ? t('passwordOptional') : t('password'), value: p.v1, onInput: (e) => (p.v1 = e.target.value) }),
     newish ? h('input', { type: 'password', placeholder: t('confirmPassword'), value: p.v2, onInput: (e) => (p.v2 = e.target.value) }) : null,

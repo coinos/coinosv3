@@ -138,7 +138,6 @@ const STR = {
     hiwBasics3: 'It uses standard Bitcoin formats: the same twelve words restore your Savings in Sparrow, Electrum, or any other standard wallet, even if this site disappears.',
     hiwLnTitle: 'Spending and Savings',
     hiwLn1: 'Your money can sit in two kinds of wallet. Savings is ordinary Bitcoin on the blockchain — safest for money you’re keeping, but each move costs a mining fee and waits for a confirmation. Spending sends and arrives instantly, free or nearly free, and is still only yours: it runs on Ark, a newer layer on top of Bitcoin where every coin stays locked to your key, and it speaks Lightning, so you can pay and be paid by any bitcoin app or shop.',
-    hiwLn2: 'The wallet handles the upkeep on its own — just open the app now and then. And every coin in Spending carries a pre-signed escape route: even if the coinos server vanished, you could pull your money back on-chain yourself.',
     hiwGiftsTitle: 'Gifts',
     hiwGifts1: 'You can gift bitcoin with a link: whoever opens it claims the coins into their own wallet — no app, no signup, works even for someone brand new to bitcoin. Until a gift is claimed, you can cancel it and take the coins back.',
     moveMoney: 'Move money',

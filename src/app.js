@@ -2152,6 +2152,22 @@ function goHome() {
     ui.sendResult = null;
     ui.sendError = '';
     ui.fromWallet = false;
+  } else if ((ui.onb && ui.onb.step !== 'welcome')
+      || ui.draftMnemonic || ui.createStep !== 'gen' || ui.importText) {
+    // Mid-create with no wallet minted yet (wizard step, a generated seed on
+    // screen, the confirm quiz, a pasted import): the logo backs out to the
+    // start page this began from — not the vault prompt, which reads as a
+    // dead end when you were busy creating something new.
+    ui.onb = { step: 'welcome' };
+    try { localStorage.removeItem(ONB_STEP_KEY); } catch {}
+    ui.nostrLoginOpen = false;
+    ui.screen = 'unlock';
+    ui.unlockTab = 'create';
+    ui.createStep = 'gen';
+    ui.draftMnemonic = '';
+    ui.importText = '';
+    ui.confirm = [];
+    ui.unlockError = '';
   } else if (hasVault()) {
     // Locked with saved wallets: home is the unlock prompt, not the
     // create-a-new-wallet flow — the logo must never read as "start over".

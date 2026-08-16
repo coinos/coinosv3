@@ -2158,6 +2158,17 @@ export function messagesFeature(ctx) {
     // the picture visibly flash during boot's render bursts. There is exactly
     // one header avatar, so the node itself is reused until the profile
     // (or account) actually changes.
+    // A seed minted seconds ago has no kind-0 anywhere — don't make the
+    // avatar sit white while a relay lookup confirms that; paint the punk now.
+    identityGenerated() {
+      identity().then((id) => {
+        if (!id) return;
+        const entry = { name: null, picture: null, t: Date.now() };
+        profiles.set(id.pubkey, entry);
+        persistProfile(id.pubkey, entry);
+        scheduleRepaint();
+      }).catch(() => {});
+    },
     headerAvatar(pk) {
       // A fresh node every render: the morph keeps the live element (and its
       // loaded image) in place when nothing changed, which is exactly what

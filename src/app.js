@@ -1017,6 +1017,9 @@ async function activateAccount(acc, opts = {}) {
   persistAccounts();
   autoSave(acc);
   for (const f of FEATURES) { try { f.init && f.init(); } catch {} } // per-feature wallet lifecycle
+  // A freshly generated identity provably has no profile yet — let features
+  // skip the "is there a kind-0?" wait (avatar would sit blank meanwhile).
+  if (opts.generated) featureHook('identityGenerated');
   const hadCache = wallet.restoreCache(); // show last-known balance/history instantly
   // An opened gift link starts on a claim/back-up screen instead of the wallet.
   ui.screen = opts.gift ? 'claim' : 'wallet';

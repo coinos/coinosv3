@@ -105,8 +105,14 @@ const startSub = (host, port, topic, onMessage) => new Promise((resolve) => {
       if (flags & 0x04) continue; // command frame (e.g. READY)
       frames.push(body);
       if (flags & 0x01) continue; // more frames follow
-      if (frames.length >= 2 && dec.decode(frames[0]) === topic) onMessage(frames[1]);
+      // frames must reset BEFORE delivery: a throwing handler once left the
+      // array to swallow the whole firehose (one poisoned tx re-delivered per
+      // message, ~170MB/h until the OOM killer took the box's biggest process).
+      const msg = frames;
       frames = [];
+      if (msg.length >= 2 && dec.decode(msg[0]) === topic) {
+        try { onMessage(msg[1]); } catch (e) { console.error('zmq handler error', e.message); }
+      }
     }
   };
 
@@ -129,7 +135,11 @@ const TX_OPTS = { allowUnknownOutputs: true, allowUnknownInputs: true, disableSc
 const notifyForTx = (raw, confirmed, blockTime) => {
   let tx;
   try { tx = Transaction.fromRaw(raw, TX_OPTS); } catch { return; }
-  const txid = tx.id;
+  // btc-signer's .id getter throws "Transaction is not finalized" for inputs
+  // it can't classify — the tx is final (it came off the wire), so fall back
+  // to hashing the raw bytes ourselves rather than dropping the notification.
+  let txid;
+  try { txid = tx.id; } catch { try { txid = txidOf(raw); } catch { return; } }
   const byScript = new Map(); // scripthash -> [{ vout, value }]
   for (let i = 0; i < tx.outputsLength; i++) {
     let o;
@@ -183,6 +193,24 @@ const rawTxSize = (buf, start) => {
   o += 4; // locktime
   return o - start;
 };
+// txid = sha256d of the tx serialized WITHOUT witness data (BIP-141): for
+// segwit txs, excise the marker/flag pair and the witness section.
+const stripWitness = (buf) => {
+  if (!(buf[4] === 0x00 && buf[5] !== 0x00)) return buf;
+  let o = 6;
+  const vin = readVarInt(buf, o); o += vin.size;
+  for (let i = 0; i < vin.value; i++) { o += 36; const sl = readVarInt(buf, o); o += sl.size + sl.value + 4; }
+  const vout = readVarInt(buf, o); o += vout.size;
+  for (let i = 0; i < vout.value; i++) { o += 8; const sl = readVarInt(buf, o); o += sl.size + sl.value; }
+  const witnessStart = o;
+  for (let i = 0; i < vin.value; i++) {
+    const ic = readVarInt(buf, o); o += ic.size;
+    for (let j = 0; j < ic.value; j++) { const il = readVarInt(buf, o); o += il.size + il.value; }
+  }
+  return concatBytes(buf.subarray(0, 4), buf.subarray(6, witnessStart), buf.subarray(o));
+};
+const txidOf = (raw) => bytesToHex(Uint8Array.from(sha256(sha256(stripWitness(raw)))).reverse());
+
 const handleRawBlock = (raw) => {
   // A new block confirms watched txs: walk its txs and notify matching
   // scripthashes with confirmed=true + the block time (header bytes 68..71, LE).

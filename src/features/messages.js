@@ -1129,6 +1129,7 @@ export function messagesFeature(ctx) {
   function openProfile(pk) {
     ui.profilePk = pk;
     ui.profEdit = null; ui.profEditFilled = false;
+    ui.nameOffer = null;
     render();
     fetchFullProfile(pk);
     notesFor(pk);
@@ -1393,6 +1394,45 @@ export function messagesFeature(ctx) {
       h('button', { class: 'btn-ghost btn-block', onClick: () => { ui.noteThread = null; render(); } }, t('back')));
   }
 
+  async function publishProfileFields(fields, opts = {}) {
+      const id = await identity();
+      if (!id) throw new Error(t('msgNoIdentity'));
+      const evs = await queryOn([...new Set([...PROFILE_RELAYS, ...DM_RELAYS])], { kinds: [0], authors: [id.pubkey] }, 3000);
+      const newest = evs.sort((a, b) => b.created_at - a.created_at)[0];
+      let base = {};
+      try { base = newest ? JSON.parse(newest.content) : {}; } catch {}
+      if (opts.onlyWhen && !opts.onlyWhen(base)) return true; // condition says leave it be
+      const merged = { ...base };
+      // fillOnly fields are offers, not orders: the onboarding wizard suggests
+      // a name and a punk for profiles that have none — it must never RENAME
+      // (or re-face) an identity that already has one.
+      const fill = new Set(opts.fillOnly || []);
+      const taken = (k) => (k === 'name' ? !!(base.name || base.display_name) : !!base[k]);
+      for (const [k, v] of Object.entries(fields || {})) {
+        if (!v) continue;
+        if (fill.has(k) && taken(k)) continue;
+        merged[k] = v;
+      }
+      if (merged.name && !(fill.has('name') && taken('name'))) merged.display_name = merged.name;
+      if (JSON.stringify(merged) === JSON.stringify(base)) return true; // nothing to say
+      const partial = { kind: 0, content: JSON.stringify(merged), tags: [], created_at: Math.floor(Date.now() / 1000) };
+      const evt = id.signer instanceof Uint8Array ? finalizeEvent(partial, id.signer) : await id.signer.signEvent(partial);
+      const ok = await publishOn([...new Set([...PROFILE_RELAYS, ...DM_RELAYS])], evt);
+      if (!ok) throw new Error(t('msgSendFailed'));
+      fullProfiles.set(id.pubkey, merged);
+      profiles.set(id.pubkey, { name: merged.name || null, picture: merged.picture || null, t: Date.now() });
+      return true;
+    }
+
+  // A display name reduced to registrar rules (/^[a-z0-9][a-z0-9._-]{0,29}$/),
+  // or null when nothing address-shaped survives.
+  const usernameCandidate = (raw) => {
+    const x = String(raw || '').toLowerCase().normalize('NFKD')
+      .replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, '')
+      .replace(/[^a-z0-9._-]/g, '').replace(/^[._-]+/, '').slice(0, 30);
+    return /^[a-z0-9][a-z0-9._-]{0,29}$/.test(x) ? x : null;
+  };
+
   async function saveProfile() {
     const id = await identity();
     if (!id) { toast(t('msgNoIdentity')); return; }
@@ -1426,6 +1466,13 @@ export function messagesFeature(ctx) {
       profiles.set(id.pubkey, { name: merged.name || null, picture: merged.picture || null });
       ui.profEdit = null; ui.profEditFilled = false;
       toast(t('profSaved'));
+      // A new name usually wants a matching payment address. Offer — never
+      // assume: display names aren't always usernames, and the old address
+      // may be printed somewhere.
+      const curAddr = hook('namesAddress');
+      const cand = usernameCandidate(merged.name);
+      if (curAddr && cand && cand !== curAddr.split('@')[0])
+        ui.nameOffer = { cand, addr: cand + '@' + curAddr.split('@')[1], old: curAddr };
     } catch (err) {
       toast(err.message || String(err));
     } finally {
@@ -1493,6 +1540,20 @@ export function messagesFeature(ctx) {
             h('div', { class: 'chat-title' }, name),
             nip05 ? h('div', { class: 'muted small break' }, nip05) : null,
             showLud ? h('div', { class: 'muted small break' }, '⚡ ' + lud16) : null)),
+        mine && ui.nameOffer ? h('div', { class: 'notice', style: 'display:flex;flex-direction:column;gap:8px' },
+          h('span', { class: 'small' }, t('profAddrOffer', { addr: ui.nameOffer.addr })),
+          h('div', { class: 'row gap6' },
+            h('button', { class: 'btn-ghost grow', disabled: ui.nameOfferBusy,
+              onClick: () => { ui.nameOffer = null; render(); } }, t('profAddrKeep')),
+            h('button', { class: 'btn-primary grow', disabled: ui.nameOfferBusy, onClick: async () => {
+              ui.nameOfferBusy = true; render();
+              try {
+                await hook('namesClaimName', ui.nameOffer.cand);
+                ui.nameOffer = null;
+                toast(t('profAddrUpdated'));
+              } catch (err) { toast(err.message || String(err)); }
+              finally { ui.nameOfferBusy = false; render(); }
+            } }, ui.nameOfferBusy ? h('span', { class: 'spinner sm' }) : t('profAddrUpdate')))) : null,
         // no spinner while the kind 0 loads — prefetch keeps this rare, and
         // an empty beat reads calmer than a spinner
         showAbout && !ui.profEdit ? h('p', { class: 'small', style: 'margin:0;white-space:pre-wrap' }, about.slice(0, 1000)) : null,
@@ -2219,33 +2280,14 @@ export function messagesFeature(ctx) {
     showProfile(pk) { openProfile(pk); return true; },
     // Publish (merge) kind-0 fields for the current identity — the onboarding
     // wizard sets name + picture through this.
-    async publishProfile(fields, opts = {}) {
-      const id = await identity();
-      if (!id) throw new Error(t('msgNoIdentity'));
-      const evs = await queryOn([...new Set([...PROFILE_RELAYS, ...DM_RELAYS])], { kinds: [0], authors: [id.pubkey] }, 3000);
-      const newest = evs.sort((a, b) => b.created_at - a.created_at)[0];
-      let base = {};
-      try { base = newest ? JSON.parse(newest.content) : {}; } catch {}
-      const merged = { ...base };
-      // fillOnly fields are offers, not orders: the onboarding wizard suggests
-      // a name and a punk for profiles that have none — it must never RENAME
-      // (or re-face) an identity that already has one.
-      const fill = new Set(opts.fillOnly || []);
-      const taken = (k) => (k === 'name' ? !!(base.name || base.display_name) : !!base[k]);
-      for (const [k, v] of Object.entries(fields || {})) {
-        if (!v) continue;
-        if (fill.has(k) && taken(k)) continue;
-        merged[k] = v;
-      }
-      if (merged.name && !(fill.has('name') && taken('name'))) merged.display_name = merged.name;
-      if (JSON.stringify(merged) === JSON.stringify(base)) return true; // nothing to say
-      const partial = { kind: 0, content: JSON.stringify(merged), tags: [], created_at: Math.floor(Date.now() / 1000) };
-      const evt = id.signer instanceof Uint8Array ? finalizeEvent(partial, id.signer) : await id.signer.signEvent(partial);
-      const ok = await publishOn([...new Set([...PROFILE_RELAYS, ...DM_RELAYS])], evt);
-      if (!ok) throw new Error(t('msgSendFailed'));
-      fullProfiles.set(id.pubkey, merged);
-      profiles.set(id.pubkey, { name: merged.name || null, picture: merged.picture || null, t: Date.now() });
-      return true;
+    publishProfile(fields, opts = {}) { return publishProfileFields(fields, opts); },
+    // A payment-address rename released the old name: repoint the kind 0's
+    // lud16 — but only when it pointed at the released address (or was empty).
+    // A deliberately different lightning address is not ours to touch.
+    addressRenamed(oldAddr, newAddr) {
+      return publishProfileFields({ lud16: newAddr }, {
+        onlyWhen: (base) => !base.lud16 || base.lud16 === oldAddr,
+      }).catch(() => {});
     },
     profileChip(pk, size) {
       const big = size === 'lg';

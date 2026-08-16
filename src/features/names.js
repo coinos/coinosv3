@@ -78,6 +78,10 @@ export function namesFeature(ctx) {
     save({ name, domain: DOMAIN, uri, offerPk: hook('nwcOfferPubkey') || null, updated: Date.now() });
     if (prev && prev !== name) {
       post('/register', 'DELETE', { name: prev, domain: DOMAIN }).catch(() => {});
+      // the old address just died — a kind 0 still pointing at it would send
+      // zaps into the void, so the profile's lud16 follows the rename
+      // (messages only touches it if it pointed at the released name)
+      Promise.resolve(hook('addressRenamed', `${prev}@${DOMAIN}`, `${name}@${DOMAIN}`)).catch(() => {});
     }
     return j;
   }

@@ -171,6 +171,7 @@ const STR = {
     msgDelete: 'Delete message',
     msgNoIdentity: "Your nostr signer isn't connected — reconnect it to send as yourself",
     msgSendFailed: 'No relay accepted the message',
+    msgLockedChat: 'Your wallet is locked, so it can’t sign messages.',
     msgSignerOff: "Your nostr signer isn't connected, so you can't post as yourself yet.",
     msgReconnect: 'Reconnect',
     msgDmsTitle: 'Messages',

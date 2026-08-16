@@ -153,6 +153,9 @@ export function messagesFeature(ctx) {
     return pks;
   };
   const isMe = (pk) => myPubkeys().includes(pk);
+  // "No identity" while soft-locked means the keys left with the lock — say
+  // that, not "signer disconnected" (which reads as a nostr-login problem).
+  const noIdToast = () => toast(t(wallet.watchOnly ? 'msgLockedChat' : 'msgNoIdentity'));
 
   // ---- shared runtime -----------------------------------------------------
 
@@ -372,7 +375,7 @@ export function messagesFeature(ctx) {
     const text = (ui.msgDraft || '').trim();
     if (!text || ui.msgSending) return;
     const id = await identity();
-    if (!id) { toast(t('msgNoIdentity')); return; }
+    if (!id) { noIdToast(); return; }
     ui.msgSending = true;
     render();
     try {
@@ -422,7 +425,7 @@ export function messagesFeature(ctx) {
 
   async function createCommunity(name) {
     const id = await identity();
-    if (!id) { toast(t('msgNoIdentity')); return; }
+    if (!id) { noIdToast(); return; }
     name = name.trim().slice(0, 64);
     if (!name) return;
     const ownerSalt = bytesToHex(crypto.getRandomValues(new Uint8Array(32)));
@@ -498,7 +501,7 @@ export function messagesFeature(ctx) {
 
   async function mintInviteLink(room) {
     const id = await identity();
-    if (!id) { toast(t('msgNoIdentity')); return null; }
+    if (!id) { noIdToast(); return null; }
     const s = st();
     const existing = s.invites[room.jm.community_id];
     if (existing) return existing.url;
@@ -518,7 +521,7 @@ export function messagesFeature(ctx) {
     const peer = parseNostrPubkey(input);
     if (!peer) { toast(t('msgBadNpub')); return; }
     const id = await identity();
-    if (!id) { toast(t('msgNoIdentity')); return; }
+    if (!id) { noIdToast(); return; }
     if (!(id.signer instanceof Uint8Array) && !id.signer.encryptTo) { toast(t('msgSignerNoDm')); return; }
     const rumor = {
       kind: 3313, pubkey: id.pubkey,
@@ -988,7 +991,7 @@ export function messagesFeature(ctx) {
     const text = (ui.msgDraft || '').trim();
     if (!text || ui.msgSending) return;
     const id = await identity();
-    if (!id) { toast(t('msgNoIdentity')); return; }
+    if (!id) { noIdToast(); return; }
     if (!(id.signer instanceof Uint8Array) && !id.signer.encryptTo) { toast(t('msgSignerNoDm')); return; }
     ui.msgSending = true;
     render();
@@ -1426,7 +1429,7 @@ export function messagesFeature(ctx) {
 
   async function saveProfile() {
     const id = await identity();
-    if (!id) { toast(t('msgNoIdentity')); return; }
+    if (!id) { noIdToast(); return; }
     const e = ui.profEdit;
     ui.profSaving = true;
     render();
@@ -1764,6 +1767,11 @@ export function messagesFeature(ctx) {
   // identity itself is still known — it's the ability to sign as it that's
   // missing — so this offers to fetch it back rather than to log in again.
   function signerNotice() {
+    if (wallet.watchOnly) {
+      return h('div', { class: 'row gap6 chat-signer-off', style: 'align-items:center' },
+        h('span', { class: 'small muted grow' }, '\u{1F512} ' + t('msgLockedChat')),
+        h('button', { class: 'btn-sm', onClick: () => { ui.justLocked = false; ui.screen = 'vault'; render(); } }, t('unlock')));
+    }
     const id = hook('nostrLoginIdentity');
     if (!id || id.signer) return null;
     return h('div', { class: 'row gap6 chat-signer-off', style: 'align-items:center' },
@@ -1834,6 +1842,11 @@ export function messagesFeature(ctx) {
     kids.push(h('div', { class: 'row gap6', style: 'align-items:center' },
       backBtn(() => { ui.chatOpen = false; render(); }),
       h('h3', { style: 'margin:0' }, t('tabMessages'))));
+
+    // A locked wallet can't decrypt or sign — say so up top, where the rooms
+    // that quietly won't open are listed.
+    const lockedRow = signerNotice();
+    if (lockedRow && wallet.watchOnly) kids.push(lockedRow);
 
     if (pendingLink) kids.push(linkInviteCard());
     for (const [rid, inv] of pendingDirect) kids.push(directInviteCard(rid, inv));

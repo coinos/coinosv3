@@ -1128,7 +1128,7 @@ export function messagesFeature(ctx) {
 
   function openProfile(pk) {
     ui.profilePk = pk;
-    ui.profEdit = null;
+    ui.profEdit = null; ui.profEditFilled = false;
     render();
     fetchFullProfile(pk);
     notesFor(pk);
@@ -1424,7 +1424,7 @@ export function messagesFeature(ctx) {
       if (!ok) throw new Error(t('msgSendFailed'));
       fullProfiles.set(id.pubkey, merged);
       profiles.set(id.pubkey, { name: merged.name || null, picture: merged.picture || null });
-      ui.profEdit = null;
+      ui.profEdit = null; ui.profEditFilled = false;
       toast(t('profSaved'));
     } catch (err) {
       toast(err.message || String(err));
@@ -1439,19 +1439,32 @@ export function messagesFeature(ctx) {
     const mine = isMe(pk) || (ctx.shownPubkey && pk === ctx.shownPubkey());
     const logoutBtn = () => h('button', {
       class: 'btn-block', style: 'color:var(--red,#c0392b);display:flex;align-items:center;justify-content:center;gap:8px',
-      onClick: () => { ui.profilePk = null; ui.profEdit = null; ctx.logout && ctx.logout(); },
+      onClick: () => { ui.profilePk = null; ui.profEdit = null; ui.profEditFilled = false; ctx.logout && ctx.logout(); },
     },
       h('span', { style: 'display:flex', html: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>' }),
       t('logout'));
     const full = fullProfiles.get(pk);
-    // Your own profile IS the editor — the form appears prefilled as soon as
-    // the published kind 0 arrives, no Edit step.
-    if (mine && !ui.profEdit && full !== undefined) {
+    // Your own profile IS the editor — and it renders IMMEDIATELY, seeded
+    // from the local name/picture cache, so the page never reflows when the
+    // published kind 0 arrives. saveProfile re-fetches the newest kind 0
+    // before merging, so a stale seed can't clobber anything.
+    if (mine && !ui.profEdit) {
+      const p = (full === undefined ? profileOf(pk) : full) || {};
       ui.profEdit = {
-        name: full.display_name || full.name || '',
-        about: full.about || '',
-        picture: full.picture || '',
+        name: (full || {}).display_name || p.name || '',
+        about: p.about || '',
+        picture: p.picture || '',
       };
+      ui.profEditFilled = full !== undefined;
+    }
+    // Once the real kind 0 lands, top up fields still sitting empty — never
+    // ones the user (or the cache) already filled.
+    if (mine && ui.profEdit && !ui.profEditFilled && full !== undefined) {
+      ui.profEditFilled = true;
+      const e = ui.profEdit;
+      if (!e.name) e.name = full.display_name || full.name || '';
+      if (!e.about) e.about = full.about || '';
+      if (!e.picture) e.picture = full.picture || '';
     }
     const name = displayName(pk);
     const npub = npubOf(pk) || pk;
@@ -1521,7 +1534,10 @@ export function messagesFeature(ctx) {
       // Their latest public notes, zappable in place.
       (() => {
         const c = notesFor(pk);
-        if (c.status === 'loading') return null; // prefetched almost always; never a spinner
+        // while loading: an invisible copy of the empty-state line holds the
+        // height, so the page doesn't jump when the answer lands (no spinner)
+        if (c.status === 'loading')
+          return h('div', { class: 'small faint', style: 'text-align:center;visibility:hidden' }, t('profNotesNone'));
         if (!c.notes.length)
           return h('div', { class: 'small faint', style: 'text-align:center' }, t('profNotesNone'));
         return h('div', { class: 'col', style: 'gap:8px' },
@@ -1532,7 +1548,7 @@ export function messagesFeature(ctx) {
               noteRow(pk, ev, name),
             ])));
       })(),
-      h('button', { class: 'btn-ghost btn-block', onClick: () => { ui.profilePk = null; ui.profEdit = null; render(); } }, t('back')));
+      h('button', { class: 'btn-ghost btn-block', onClick: () => { ui.profilePk = null; ui.profEdit = null; ui.profEditFilled = false; render(); } }, t('back')));
   }
 
   const backBtn = (onClick) => h('button', { class: 'iconbtn chat-back', onClick }, '‹');

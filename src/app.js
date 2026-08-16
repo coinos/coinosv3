@@ -2476,17 +2476,18 @@ function pwPromptCard() {
   const change = p.purpose === 'change';
   const atLock = p.purpose === 'lock';
   const newish = change || p.mode === 'set'; // entering a (new) password with confirm
+  const atLockSave = p.purpose === 'locksave'; // locking, but the vault needs its password first
   return h('div', { class: 'card col' },
-    h('h3', {}, atLock ? t('lockPwTitle') : change ? t('changePassword') : p.mode === 'set' ? t('setPassword') : t('enterPassword')),
+    h('h3', {}, atLock ? t('lockPwTitle') : atLockSave ? t('lockWallet') : change ? t('changePassword') : p.mode === 'set' ? t('setPassword') : t('enterPassword')),
     h('p', { class: 'small muted', style: 'margin:0' },
-      atLock ? t('lockPwDesc') : change ? t('changePasswordDesc') : p.purpose === 'locksave' ? t('lockSaveDesc') : p.mode === 'set' ? t('setPasswordDesc') : t('enterPasswordDesc')),
+      atLock ? t('lockPwDesc') : change ? t('changePasswordDesc') : atLockSave ? t('lockSaveDesc') : p.mode === 'set' ? t('setPasswordDesc') : t('enterPasswordDesc')),
     change ? h('input', { type: 'password', placeholder: t('currentPassword'), value: p.v0, onInput: (e) => (p.v0 = e.target.value) }) : null,
     h('input', { type: 'password', placeholder: newish ? t('passwordOptional') : t('password'), value: p.v1, onInput: (e) => (p.v1 = e.target.value) }),
     newish ? h('input', { type: 'password', placeholder: t('confirmPassword'), value: p.v2, onInput: (e) => (p.v2 = e.target.value) }) : null,
     p.error && h('div', { class: 'notice err' }, p.error),
     h('div', { class: 'row gap6' },
       h('button', { class: 'btn-ghost grow', onClick: cancelPw }, atLock ? t('lockPwSkip') : t('back')),
-      h('button', { class: 'btn-primary grow', onClick: submitPw }, newish ? t('save') : t('unlock'))
+      h('button', { class: 'btn-primary grow', onClick: submitPw }, newish ? t('save') : atLockSave ? t('lockAction') : t('unlock'))
     )
   );
 }

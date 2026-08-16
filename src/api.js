@@ -240,7 +240,7 @@ const ARK_PRESETS_BY_NET = {
 // state is namespaced per server, so a user who never explicitly picked a
 // provider follows the default — their coins on the old ASP stay safe under
 // its namespace but disappear from view until they reselect it in Settings.
-const ARK_DEFAULT = { mainnet: 'coinos', testnet: 'off', signet: 'second', mutinynet: 'off', regtest: 'local' };
+const ARK_DEFAULT = { mainnet: 'coinos', testnet: 'off', signet: 'second', mutinynet: 'coinos', regtest: 'local' };
 const ARK_PROVIDER_KEY = 'btc-wallet-ark-provider'; // selected preset id, per network
 const ARK_CUSTOM_KEY = 'btc-wallet-ark-custom';     // { ark, esplora } for custom, per network
 

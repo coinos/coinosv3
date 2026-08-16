@@ -87,7 +87,7 @@ const STR = {
     pwWrong: 'Wrong password.',
     pwNeededToLock: 'Enter a password, or choose "Not now".',
     lockPwTitle: 'Protect this device?',
-    lockPwDesc: 'Locking only means something with a password: without one, this device reopens your wallets by itself. Set one now and it will be required every time.',
+    lockPwDesc: 'Set a password to lock your wallet. Anyone using this device will need it to spend your money.',
     lockPwSkip: 'Not now',
     unlockSaved: 'Unlock saved wallets',
     unlockSavedDesc: 'Enter your password to open the wallets saved on this device.',

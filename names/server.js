@@ -594,6 +594,17 @@ Bun.serve({
       return json({ ok: true, offerId: o.offer_id, memo, bolt12: o.bolt12 });
     }
 
+    // --- NIP-05 --------------------------------------------------------
+    // Every claimed name doubles as a nostr identifier: name@domain verifies
+    // against the owner's key. Public data, CORS comes with json().
+    if ((url.pathname === '/.well-known/nostr.json' || url.pathname === '/nostr.json') && req.method === 'GET') {
+      const name = (url.searchParams.get('name') || '').toLowerCase();
+      const domain = (url.searchParams.get('domain') || DOMAIN).toLowerCase();
+      if (!NAME_RE.test(name)) return json({ names: {} });
+      const rec = state.names[`${name}@${domain}`];
+      return json(rec ? { names: { [name]: rec.pubkey } } : { names: {} });
+    }
+
     // Availability / lookup. Public data (it's DNS).
     const m = url.pathname.match(/^\/name\/([a-z0-9._-]{1,30})$/);
     if (m && req.method === 'GET') {

@@ -134,7 +134,7 @@ const STR = {
     installApp: 'Install app',
     hiwBasicsTitle: 'The basics',
     hiwBasics1: 'When you make a wallet, the page generates twelve random words — the keys to your coins. Anyone who has them can spend; if you lose them, the coins are gone for good. Write them down on paper before you put money in.',
-    hiwBasics2: 'Your keys never leave your device. coinos runs servers that ferry payments and messages, but they can’t touch your money. The app itself is one page — you can save it and open it offline.',
+    hiwBasics2: 'Your keys never leave your device. Coinos runs servers that ferry payments and messages, but they can’t touch your money. The app itself is one page — you can save it and open it offline.',
     hiwBasics3: 'It uses standard Bitcoin formats: the same twelve words restore your Savings in Sparrow, Electrum, or any other standard wallet, even if this site disappears.',
     hiwLnTitle: 'Spending and Savings',
     hiwLn1: 'Your money can sit in two kinds of wallet. Savings is ordinary Bitcoin on the blockchain — safest for money you’re keeping, but each move costs a mining fee and waits for a confirmation. Spending sends and arrives instantly, free or nearly free, and is still only yours: it runs on Ark, a newer layer on top of Bitcoin where every coin stays locked to your key, and it speaks Lightning, so you can pay and be paid by any bitcoin app or shop.',

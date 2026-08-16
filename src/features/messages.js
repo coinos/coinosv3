@@ -1051,7 +1051,7 @@ export function messagesFeature(ctx) {
       node.classList.add('clickable');
       node.addEventListener('click', (e) => { e.stopPropagation(); openProfile(pk); });
     }
-    return node;
+    return hook('wrapAvatar', pk, node) || node;
   };
 
   // ---- profiles: view + own kind-0 editor ---------------------------------
@@ -1568,6 +1568,7 @@ export function messagesFeature(ctx) {
               field(t('profPicture'), 'picture', 'https://…'),
               h('button', { class: 'btn-primary btn-block', disabled: ui.profSaving, onClick: saveProfile },
                 ui.profSaving ? h('span', { class: 'spinner sm' }) : t('save')),
+              hook('hatShopEntry'),
               logoutBtn())
           : mine
             ? logoutBtn() // the editor renders above once the kind 0 loads
@@ -1633,7 +1634,7 @@ export function messagesFeature(ctx) {
         s.rows && s.rows.length
           ? h('div', { class: 'list' }, resultRows(h, s.rows, (r) => {
               if (r.pk) { openProfile(r.pk); render(); }
-            }))
+            }, (pk, node) => hook('wrapAvatar', pk, node)))
           : s.rows && s.q.trim().length >= 2
             ? h('div', { class: 'small faint', style: 'text-align:center;padding:6px' }, t('searchNoResults'))
             : h('div', { class: 'small faint', style: 'text-align:center;padding:6px' }, t('searchUsersEmpty'))),
@@ -1897,7 +1898,7 @@ export function messagesFeature(ctx) {
           : dmSearch.busy ? h('div', { class: 'row gap6', style: 'align-items:center;padding:4px 0' },
               h('span', { class: 'spinner sm' }), h('span', { class: 'small muted' }, t('msgSearching')))
           : dmSearch.rows.length
-            ? h('div', { class: 'list' }, resultRows(h, dmSearch.rows, (r) => openThread(r.pk)))
+            ? h('div', { class: 'list' }, resultRows(h, dmSearch.rows, (r) => openThread(r.pk), (pk, node) => hook('wrapAvatar', pk, node)))
             : h('div', { class: 'small muted' }, t('msgNoMatches'))));
     }
     // A long DM history must not bury the communities below it: past a

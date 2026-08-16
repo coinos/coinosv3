@@ -441,7 +441,7 @@ function render() {
   // ui field that decides which page is on screen.
   const navKey = [ui.screen, ui.tab === 'settings', ui.chatOpen, ui.msgView, ui.msgPeer, ui.msgCommunity,
     ui.profilePk, ui.settingsPage, ui.addrScan, ui.arkExitPage, ui.txDetail, ui.giftMode, ui.claimStep, ui.nameEditOpen,
-    ui.noteThread && ui.noteThread.focusId, !!ui.userSearch, !!ui.zapSetup].join('|');
+    ui.noteThread && ui.noteThread.focusId, !!ui.userSearch, !!ui.zapSetup, !!ui.hatShop].join('|');
   if (uiChanged('nav', navKey)) _navAt = performance.now();
   applyAnim(screen, 'anim-page', (performance.now() - _navAt) < 340 ? performance.now() - _navAt : -1);
   morphChildren(root, [screen, footer()]);
@@ -491,7 +491,7 @@ wallet.subscribe(scheduleRender);
 // buttons (and Android/system back) move between screens we've actually viewed.
 // We snapshot only the navigation-relevant `ui` fields, so incidental re-renders
 // (typing, polling, balance updates) don't create history entries.
-const NAV_FIELDS = ['screen', 'tab', 'txDetail', 'bump', 'giftMode', 'claimStep', 'chatOpen', 'msgView', 'msgCommunity', 'msgPeer', 'profilePk', 'settingsPage', 'nameEditOpen', 'noteThread', 'userSearch', 'zapSetup'];
+const NAV_FIELDS = ['screen', 'tab', 'txDetail', 'bump', 'giftMode', 'claimStep', 'chatOpen', 'msgView', 'msgCommunity', 'msgPeer', 'profilePk', 'settingsPage', 'nameEditOpen', 'noteThread', 'userSearch', 'zapSetup', 'hatShop'];
 function navSnapshot() {
   const s = {};
   for (const f of NAV_FIELDS) s[f] = ui[f] ?? null;
@@ -3482,7 +3482,7 @@ function recipientRow(s, r, i) {
   const syncSuggest = () => {
     if (!suggest) return;
     const show = sendSearch.rows && sendSearch.rows.length && searchable(r.address);
-    suggest.replaceChildren(...(show ? resultRows(h, sendSearch.rows, pickRecipient) : []));
+    suggest.replaceChildren(...(show ? resultRows(h, sendSearch.rows, pickRecipient, (pk, node) => featureHook('wrapAvatar', pk, node)) : []));
     suggest.style.display = show ? '' : 'none';
   };
   if (i === 0) sendSearch.sync = syncSuggest;

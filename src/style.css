@@ -479,6 +479,20 @@ hr.divider { margin: 16px 0; }
 .menu-backdrop { position: fixed; inset: 0; z-index: 40; }
 .avatar-menu { position: absolute; right: 0; top: calc(100% + 8px); z-index: 41; min-width: 170px; }
 .chat-avatar.fallback.loading { background: var(--surface2); }
+
+/* hats: a supporter hat perched above any avatar. The wrapper takes the
+   avatar's place in the layout; the hat overflows upward, clicks fall
+   through it. */
+.hat-wrap { position: relative; display: inline-flex; flex-shrink: 0; }
+.ava-hat { position: absolute; left: 50%; z-index: 1; pointer-events: none; filter: drop-shadow(0 1px 1px rgba(0, 0, 0, .28)); }
+.ava-hat svg { display: block; width: 100%; height: auto; }
+.hat-row { display: flex; gap: 12px; align-items: center; padding: 9px 2px; }
+.hat-row + .hat-row { border-top: 1px solid var(--line); }
+.hat-demo { position: relative; display: inline-flex; width: 34px; height: 34px; flex-shrink: 0; margin-top: 12px; }
+.hat-demo-head { width: 100%; height: 100%; border-radius: 50%; background: var(--accent-soft); }
+.hat-btn { white-space: nowrap; flex-shrink: 0; }
+.hat-btn.wearing { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
+.hat-btn.confirm { border-color: var(--green); color: var(--green); }
 .wallet-row-btn { font-size: 19px; line-height: 1; padding: 8px 12px; }
 .chat-avatar.header-ava.fallback { align-items: center; justify-content: center; display: flex; color: var(--muted); }
 

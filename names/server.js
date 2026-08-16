@@ -321,6 +321,34 @@ async function publishZapReceipt(pending, inv) {
   } catch (e) { log('zap receipt failed: ' + e.message); }
 }
 
+// ---------------------------------------------------------------------------
+// Hats — cosmetic supporter hats, shown above the buyer's avatar in coinos.
+// Ownership is a paid CLN invoice; the registry here is what clients trust
+// (a kind-0 field would be self-asserted). Money stays on the node: it IS
+// the support. The crown is Adam's and is not for sale.
+// ---------------------------------------------------------------------------
+
+const HAT_ADMIN_PK = '98ae4da926c471c23fd12d1ebdd5839ba82917baa618e184e0c9916d93dcf4f7';
+const HAT_PRICES = {
+  beanie: 21, party: 2100, trucker: 2100, cowboy: 21000, fedora: 21000,
+  bowler: 210000, wizard: 210000, top: 2100000,
+};
+
+function hatRec(pk) {
+  const r = (state.hats || {})[pk];
+  const owned = r ? [...(r.owned || [])] : [];
+  if (pk === HAT_ADMIN_PK && !owned.includes('crown')) owned.push('crown');
+  const equipped = r ? (r.equipped || null) : (pk === HAT_ADMIN_PK ? 'crown' : null);
+  return { owned, equipped };
+}
+
+function grantHat(pk, hat) {
+  state.hats ||= {};
+  const r = state.hats[pk] ||= { owned: [], equipped: null };
+  if (!r.owned.includes(hat)) r.owned.push(hat);
+  r.equipped = hat; // a fresh purchase goes straight on the head
+}
+
 async function settleLoop() {
   if (!ln || !fwd) return;
   state.lastPayIndex = state.lastPayIndex || 0;
@@ -334,6 +362,15 @@ async function settleLoop() {
     }
     state.lastPayIndex = inv.pay_index || state.lastPayIndex;
     persist();
+    // hat purchases settle here too — grant and keep the sats (that's the point)
+    const hatPending = state.hatInvoices && state.hatInvoices[inv.payment_hash];
+    if (hatPending) {
+      grantHat(hatPending.pubkey, hatPending.hat);
+      delete state.hatInvoices[inv.payment_hash];
+      persist();
+      log(`hat sold: ${hatPending.hat} to ${hatPending.pubkey.slice(0, 12)}`);
+      continue;
+    }
     const offerId = inv.local_offer_id;
     let name = offerId && Object.keys(state.names).find((n) => state.names[n].offerId === offerId);
     // custom offers (a memo'd bolt12 the user minted for e.g. a mining pool)
@@ -626,6 +663,105 @@ Bun.serve({
       const [key, r] = mine[0];
       const [name, domain] = key.split('@');
       return json({ name, domain, uri: r.uri });
+    }
+
+    // --- hats ------------------------------------------------------------
+
+    // Batched display lookup: which hat is each of these heads wearing?
+    // Public data (a hat is worn in public by construction).
+    if (url.pathname === '/hats' && req.method === 'GET') {
+      const pks = (url.searchParams.get('pks') || '')
+        .split(',').filter((p) => /^[0-9a-f]{64}$/.test(p)).slice(0, 100);
+      const hats = {};
+      for (const pk of pks) hats[pk] = hatRec(pk).equipped;
+      return json({ hats });
+    }
+
+    // The shop view: everything one pubkey owns, plus the price list (the
+    // client shows what the server would actually charge).
+    const hm = url.pathname.match(/^\/hats\/([0-9a-f]{64})$/);
+    if (hm && req.method === 'GET') {
+      return json({ ...hatRec(hm[1]), prices: HAT_PRICES });
+    }
+
+    if (url.pathname === '/hats/invoice' && req.method === 'POST') {
+      if (!rateOk(ip)) return json({ error: 'rate limited' }, 429);
+      const bodyText = await req.text();
+      const a = await checkNip98(req, url, bodyText);
+      if (a.error) return json({ error: a.error }, 401);
+      let body;
+      try { body = JSON.parse(bodyText); } catch { return json({ error: 'bad body' }, 400); }
+      const hat = String(body.hat || '');
+      const sat = HAT_PRICES[hat];
+      if (!sat) return json({ error: 'no such hat' }, 400);
+      if (hatRec(a.pubkey).owned.includes(hat)) return json({ error: 'you already own that hat' }, 400);
+      if (!ln) return json({ error: 'the hat stand is closed right now' }, 503);
+      try {
+        const inv = await ln.call('invoice', {
+          amount_msat: sat * 1000,
+          label: `hat-${hat}-${a.pubkey.slice(0, 8)}-${Date.now()}`,
+          description: `coinos hat: ${hat}`,
+          expiry: 900,
+        });
+        state.hatInvoices ||= {};
+        state.hatInvoices[inv.payment_hash] = { pubkey: a.pubkey, hat, sat, ts: Date.now() };
+        for (const [h2, v] of Object.entries(state.hatInvoices)) {
+          if (Date.now() - v.ts > 7 * 86400_000) delete state.hatInvoices[h2];
+        }
+        persist();
+        log(`hat invoice: ${hat} (${sat} sat) for ${a.pubkey.slice(0, 12)}`);
+        return json({ invoice: inv.bolt11, paymentHash: inv.payment_hash, sat });
+      } catch (e) {
+        log('hat invoice failed: ' + e.message);
+        return json({ error: 'could not create an invoice' }, 500);
+      }
+    }
+
+    // The buyer pings us right after paying, so the hat appears without
+    // waiting on the settle loop. Idempotent with it: whoever runs first
+    // grants, the other finds it done.
+    if (url.pathname === '/hats/claim' && req.method === 'POST') {
+      const bodyText = await req.text();
+      const a = await checkNip98(req, url, bodyText);
+      if (a.error) return json({ error: a.error }, 401);
+      let body;
+      try { body = JSON.parse(bodyText); } catch { return json({ error: 'bad body' }, 400); }
+      const hash = String(body.paymentHash || '');
+      const hat = String(body.hat || '');
+      const pending = (state.hatInvoices || {})[hash];
+      if (!pending) {
+        // the settle loop may have beaten us to it
+        if (hat && hatRec(a.pubkey).owned.includes(hat)) return json(hatRec(a.pubkey));
+        return json({ error: 'unknown invoice' }, 404);
+      }
+      if (pending.pubkey !== a.pubkey) return json({ error: 'not your invoice' }, 403);
+      if (!ln) return json({ error: 'the hat stand is closed right now' }, 503);
+      try {
+        const r = await ln.call('listinvoices', { payment_hash: hash });
+        if ((r.invoices || [])[0]?.status !== 'paid') return json({ error: 'invoice not paid yet' }, 402);
+      } catch (e) {
+        return json({ error: 'could not check the invoice' }, 500);
+      }
+      grantHat(pending.pubkey, pending.hat);
+      delete state.hatInvoices[hash];
+      persist();
+      log(`hat sold (claim): ${pending.hat} to ${pending.pubkey.slice(0, 12)}`);
+      return json(hatRec(a.pubkey));
+    }
+
+    if (url.pathname === '/hats/equip' && req.method === 'POST') {
+      const bodyText = await req.text();
+      const a = await checkNip98(req, url, bodyText);
+      if (a.error) return json({ error: a.error }, 401);
+      let body;
+      try { body = JSON.parse(bodyText); } catch { return json({ error: 'bad body' }, 400); }
+      const hat = body.hat ? String(body.hat) : null;
+      if (hat && !hatRec(a.pubkey).owned.includes(hat)) return json({ error: 'you do not own that hat' }, 403);
+      state.hats ||= {};
+      const r = state.hats[a.pubkey] ||= { owned: [], equipped: null };
+      r.equipped = hat;
+      persist();
+      return json(hatRec(a.pubkey));
     }
 
     // --- LNURL-pay (LUD-06/16, NIP-57 zaps) ------------------------------

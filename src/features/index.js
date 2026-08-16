@@ -11,6 +11,7 @@ import { namesFeature } from './names.js';
 import { zapsFeature } from './zaps.js';
 import { syncFeature } from './sync.js';
 import { nwcFeature } from './nwc.js';
+import { hatsFeature } from './hats.js';
 import { messagesFeature } from './messages.js';
 
 // NB order is meaningful where hooks stack: gifts' receive takeover and
@@ -21,5 +22,5 @@ import { messagesFeature } from './messages.js';
 // names sits between ark and zaps: a pasted user@domain resolves over DNS
 // (BIP-353) before the zaps feature treats it as a plain Lightning address.
 export function buildFeatures(ctx) {
-  return [giftsFeature(ctx), arkFeature(ctx), nostrLoginFeature(ctx), namesFeature(ctx), zapsFeature(ctx), nwcFeature(ctx), syncFeature(ctx), messagesFeature(ctx)];
+  return [giftsFeature(ctx), arkFeature(ctx), nostrLoginFeature(ctx), namesFeature(ctx), zapsFeature(ctx), nwcFeature(ctx), hatsFeature(ctx), syncFeature(ctx), messagesFeature(ctx)];
 }

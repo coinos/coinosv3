@@ -528,15 +528,18 @@ function syncHistory() {
 }
 
 // A refresh must land where the user was — on a profile, a settings page, a
-// tab — not back home. history.state survives reload, so the navigation
-// snapshot the last render pushed is still there to re-apply.
+// tab — not back home. history.state survives reload, but any boot-time
+// render runs syncHistory and replaceStates a blank snapshot over it — so
+// the pre-reload nav is captured HERE, at script load, before any render.
+const BOOT_NAV = (() => { try { return (history.state && history.state.nav) || null; } catch { return null; } })();
 function restoreNavFromHistory() {
   try {
-    const st = history.state;
-    if (!st || !st.nav || ui.screen !== 'wallet') return;
-    for (const f of NAV_FIELDS) if (f in st.nav) ui[f] = st.nav[f];
-    navStack = [st.nav];
+    const nav = BOOT_NAV;
+    if (!nav || ui.screen !== 'wallet') return;
+    for (const f of NAV_FIELDS) if (f in nav) ui[f] = nav[f];
+    navStack = [nav];
     navIndex = 0;
+    history.replaceState({ nav, i: 0 }, ''); // undo any boot-render clobber
     render();
   } catch {}
 }

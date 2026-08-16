@@ -62,7 +62,7 @@ export function namesFeature(ctx) {
     return addr ? `bitcoin:?ark=${encodeURIComponent(addr)}` : null;
   }
 
-  async function claim(name, { signer, manager } = {}) {
+  async function claim(name, { signer, manager, quietProfile } = {}) {
     const uri = await currentUri();
     if (!uri) throw new Error(t('namesNeedArk'));
     const j = await post('/register', 'POST', {
@@ -79,9 +79,12 @@ export function namesFeature(ctx) {
     if (prev && prev !== name) {
       post('/register', 'DELETE', { name: prev, domain: DOMAIN }).catch(() => {});
       // the old address just died — a kind 0 still pointing at it would send
-      // zaps into the void, so the profile's lud16 follows the rename
-      // (messages only touches it if it pointed at the released name)
-      Promise.resolve(hook('addressRenamed', `${prev}@${DOMAIN}`, `${name}@${DOMAIN}`)).catch(() => {});
+      // zaps into the void, so the profile's lud16/nip05 follow the rename
+      // (messages only touches them if they pointed at the released name).
+      // quietProfile: the profile editor claims mid-save and folds these
+      // fields into its own publish — a second publish here would race it.
+      if (!quietProfile)
+        Promise.resolve(hook('addressRenamed', `${prev}@${DOMAIN}`, `${name}@${DOMAIN}`)).catch(() => {});
     }
     return j;
   }
@@ -544,7 +547,7 @@ export function namesFeature(ctx) {
     // the onboarding wizard renders the same claim form on its username step
     namesClaimForm() { return claimForm(true); },
     // claim a specific name (the migration flow, after coinos.io released it)
-    namesClaimName(name) { return claim(String(name).toLowerCase()); },
+    namesClaimName(name, opts) { return claim(String(name).toLowerCase(), opts || {}); },
     stop() { clearTimeout(retryTimer); clearTimeout(deadline); deadline = null; },
     receiveModes() {
       if (!available()) return [];

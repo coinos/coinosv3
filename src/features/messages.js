@@ -1129,7 +1129,6 @@ export function messagesFeature(ctx) {
   function openProfile(pk) {
     ui.profilePk = pk;
     ui.profEdit = null; ui.profEditFilled = false;
-    ui.nameOffer = null;
     render();
     fetchFullProfile(pk);
     notesFor(pk);
@@ -1411,6 +1410,7 @@ export function messagesFeature(ctx) {
       for (const [k, v] of Object.entries(fields || {})) {
         if (!v) continue;
         if (fill.has(k) && taken(k)) continue;
+        if (opts.fieldWhen && opts.fieldWhen[k] && !opts.fieldWhen[k](base)) continue;
         merged[k] = v;
       }
       if (merged.name && !(fill.has('name') && taken('name'))) merged.display_name = merged.name;
@@ -1424,15 +1424,6 @@ export function messagesFeature(ctx) {
       return true;
     }
 
-  // A display name reduced to registrar rules (/^[a-z0-9][a-z0-9._-]{0,29}$/),
-  // or null when nothing address-shaped survives.
-  const usernameCandidate = (raw) => {
-    const x = String(raw || '').toLowerCase().normalize('NFKD')
-      .replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, '')
-      .replace(/[^a-z0-9._-]/g, '').replace(/^[._-]+/, '').slice(0, 30);
-    return /^[a-z0-9][a-z0-9._-]{0,29}$/.test(x) ? x : null;
-  };
-
   async function saveProfile() {
     const id = await identity();
     if (!id) { toast(t('msgNoIdentity')); return; }
@@ -1445,17 +1436,27 @@ export function messagesFeature(ctx) {
       const newest = evs.sort((a, b) => b.created_at - a.created_at)[0];
       let base = {};
       try { base = newest ? JSON.parse(newest.content) : {}; } catch {}
+      // A changed username claims first — if the name is taken (or invalid)
+      // the save stops here and the editor stays open to fix it.
+      const oldAddr = hook('namesAddress');
+      let addr = oldAddr;
+      const want = (e.uname || '').trim().toLowerCase();
+      if (oldAddr && want && want !== oldAddr.split('@')[0]) {
+        if (!/^[a-z0-9][a-z0-9._-]{0,29}$/.test(want)) throw new Error(t('profUnameInvalid'));
+        await hook('namesClaimName', want, { quietProfile: true });
+        addr = want + '@' + oldAddr.split('@')[1];
+      }
       const merged = { ...base };
       for (const [k, v] of [['name', e.name], ['about', e.about], ['picture', e.picture]]) {
         if (v.trim()) merged[k] = v.trim();
         else delete merged[k];
       }
-      // Not an editable field: someone else's lightning address is theirs to
-      // manage, and editing it here reads like renaming their coinos account.
-      // We only fill one in when the profile has none, so zaps can find them.
-      if (!merged.lud16) {
-        const addr = hook('namesAddress');
-        if (addr) merged.lud16 = addr;
+      // The address doubles as the lightning address and NIP-05. Fill them
+      // when empty; move them when they pointed at our (old) address. A
+      // deliberately foreign lud16/nip05 is the user's business.
+      if (addr) {
+        for (const k of ['lud16', 'nip05'])
+          if (!merged[k] || merged[k] === oldAddr) merged[k] = addr;
       }
       if (merged.name) merged.display_name = merged.name;
       const partial = { kind: 0, content: JSON.stringify(merged), tags: [], created_at: Math.floor(Date.now() / 1000) };
@@ -1466,13 +1467,6 @@ export function messagesFeature(ctx) {
       profiles.set(id.pubkey, { name: merged.name || null, picture: merged.picture || null });
       ui.profEdit = null; ui.profEditFilled = false;
       toast(t('profSaved'));
-      // A new name usually wants a matching payment address. Offer — never
-      // assume: display names aren't always usernames, and the old address
-      // may be printed somewhere.
-      const curAddr = hook('namesAddress');
-      const cand = usernameCandidate(merged.name);
-      if (curAddr && cand && cand !== curAddr.split('@')[0])
-        ui.nameOffer = { cand, addr: cand + '@' + curAddr.split('@')[1], old: curAddr };
     } catch (err) {
       toast(err.message || String(err));
     } finally {
@@ -1495,9 +1489,11 @@ export function messagesFeature(ctx) {
     // from the local name/picture cache, so the page never reflows when the
     // published kind 0 arrives. saveProfile re-fetches the newest kind 0
     // before merging, so a stale seed can't clobber anything.
+    const myAddr = mine ? hook('namesAddress') : null;
     if (mine && !ui.profEdit) {
       const p = (full === undefined ? profileOf(pk) : full) || {};
       ui.profEdit = {
+        uname: myAddr ? myAddr.split('@')[0] : '',
         name: (full || {}).display_name || p.name || '',
         about: p.about || '',
         picture: p.picture || '',
@@ -1540,20 +1536,6 @@ export function messagesFeature(ctx) {
             h('div', { class: 'chat-title' }, name),
             nip05 ? h('div', { class: 'muted small break' }, nip05) : null,
             showLud ? h('div', { class: 'muted small break' }, '⚡ ' + lud16) : null)),
-        mine && ui.nameOffer ? h('div', { class: 'notice', style: 'display:flex;flex-direction:column;gap:8px' },
-          h('span', { class: 'small' }, t('profAddrOffer', { addr: ui.nameOffer.addr })),
-          h('div', { class: 'row gap6' },
-            h('button', { class: 'btn-ghost grow', disabled: ui.nameOfferBusy,
-              onClick: () => { ui.nameOffer = null; render(); } }, t('profAddrKeep')),
-            h('button', { class: 'btn-primary grow', disabled: ui.nameOfferBusy, onClick: async () => {
-              ui.nameOfferBusy = true; render();
-              try {
-                await hook('namesClaimName', ui.nameOffer.cand);
-                ui.nameOffer = null;
-                toast(t('profAddrUpdated'));
-              } catch (err) { toast(err.message || String(err)); }
-              finally { ui.nameOfferBusy = false; render(); }
-            } }, ui.nameOfferBusy ? h('span', { class: 'spinner sm' }) : t('profAddrUpdate')))) : null,
         // no spinner while the kind 0 loads — prefetch keeps this rare, and
         // an empty beat reads calmer than a spinner
         showAbout && !ui.profEdit ? h('p', { class: 'small', style: 'margin:0;white-space:pre-wrap' }, about.slice(0, 1000)) : null,
@@ -1566,7 +1548,19 @@ export function messagesFeature(ctx) {
         }, npub),
         ui.profEdit
           ? h('div', { class: 'col', style: 'gap:8px' },
-              field(t('profName'), 'name'),
+              // the username IS the payment address and NIP-05 — the frozen
+              // @domain suffix is there so people make that connection
+              myAddr ? h('label', { class: 'field' },
+                h('span', { class: 'lab' }, t('profUsername')),
+                h('div', { class: 'row', style: 'align-items:center;gap:0' },
+                  h('input', {
+                    type: 'text', style: 'flex:1;min-width:0',
+                    autocapitalize: 'none', autocomplete: 'off', spellcheck: 'false',
+                    value: ui.profEdit.uname,
+                    onInput: (ev) => { ui.profEdit.uname = ev.target.value.toLowerCase().replace(/[^a-z0-9._-]/g, ''); ev.target.value = ui.profEdit.uname; },
+                  }),
+                  h('span', { class: 'muted', style: 'white-space:nowrap;padding:0 8px' }, '@' + myAddr.split('@')[1]))) : null,
+              field(t('profDisplayName'), 'name'),
               field(t('profAbout'), 'about', '', true),
               field(t('profPicture'), 'picture', 'https://…'),
               h('button', { class: 'btn-primary btn-block', disabled: ui.profSaving, onClick: saveProfile },
@@ -2282,11 +2276,13 @@ export function messagesFeature(ctx) {
     // wizard sets name + picture through this.
     publishProfile(fields, opts = {}) { return publishProfileFields(fields, opts); },
     // A payment-address rename released the old name: repoint the kind 0's
-    // lud16 — but only when it pointed at the released address (or was empty).
-    // A deliberately different lightning address is not ours to touch.
+    // lud16 and nip05 — but only where they pointed at the released address
+    // (or were empty). Deliberately different values are not ours to touch.
     addressRenamed(oldAddr, newAddr) {
-      return publishProfileFields({ lud16: newAddr }, {
-        onlyWhen: (base) => !base.lud16 || base.lud16 === oldAddr,
+      const follows = (k) => (base) => !base[k] || base[k] === oldAddr;
+      return publishProfileFields({ lud16: newAddr, nip05: newAddr }, {
+        onlyWhen: (base) => ['lud16', 'nip05'].some((k) => follows(k)(base) && base[k] !== newAddr),
+        fieldWhen: { lud16: follows('lud16'), nip05: follows('nip05') },
       }).catch(() => {});
     },
     profileChip(pk, size) {

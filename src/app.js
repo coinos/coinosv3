@@ -1760,9 +1760,18 @@ function softLock() {
   const watch = loadWatchAccounts();
   let blankPw = false;
   try { decryptVault(loadVaultBlob(), ''); blankPw = true; } catch {}
-  // Nothing watchable, or a passwordless vault (locking would mean nothing):
-  // fall back to the classic flow, which offers to set a password.
-  if (!watch.length || !hasVault() || blankPw) { lock({ offerPassword: true }); ui.justLocked = true; return; }
+  // No protecting password yet: locking would protect nothing, so ask for one
+  // right here — keys intact, home still on screen. Submitting saves the
+  // vault under it and locks in place; "Not now" just closes the prompt.
+  // (Tearing the session down first meant "Not now" stranded people on the
+  // wallet list, signed out of a wallet they never asked to leave.)
+  if (!hasVault() || blankPw) {
+    ui.pw = { purpose: 'lock', mode: 'set', v0: '', v1: '', v2: '', error: '' };
+    render();
+    return;
+  }
+  // Nothing watchable: this session can't stay on screen — classic full lock.
+  if (!watch.length) { lock({ offerPassword: true }); ui.justLocked = true; return; }
   // A wallet that isn't IN the vault can't come back from a lock — unlocking
   // decrypts the vault, and this seed isn't there (created while the vault
   // sat locked, so autoSave couldn't write it). Save it first: with the
@@ -2172,6 +2181,12 @@ function goHome() {
   } else if (hasVault()) {
     // Locked with saved wallets: home is the unlock prompt, not the
     // create-a-new-wallet flow — the logo must never read as "start over".
+    // A passwordless vault isn't locked, though: open it silently and land
+    // home instead of demanding a password nobody set.
+    if (attemptVaultUnlock('') && accounts.length) {
+      activateAccount(accounts[0], { fresh: true });
+      return;
+    }
     ui.screen = 'vault';
   } else {
     ui.screen = 'unlock';
@@ -2757,13 +2772,18 @@ function onboardScreen() {
     h('button', { class: 'btn-primary btn-block', style: 'padding:14px', onClick: () => {
       try { localStorage.removeItem(ONB_STEP_KEY); } catch {}
       ui.onb = null;
-      // Spending exists now — latch it on the account (the claimed name
-      // usually proves it, but the flag survives a names hiccup) and land
-      // on the Spending face with the new address showing.
+      // Latch Spending onto the account only when the wizard actually set it
+      // up (a claimed address or funds prove it) — finishing the wizard on a
+      // network without names, or skipping the spend step, must not conjure
+      // a Spending wallet nobody asked for.
       const acc = activeAccount();
-      if (acc && !acc.spendingSetup) { acc.spendingSetup = true; persistAccounts(); }
-      ui.account = 'spending';
-      try { localStorage.setItem(ACCOUNT_KEY, 'spending'); } catch {}
+      const addr = featureHook('namesAddress');
+      const spendReady = (!!addr && !/^npub1/.test(addr)) || (featureHook('spendingSat') || 0) > 0;
+      if (spendReady) {
+        if (acc && !acc.spendingSetup) { acc.spendingSetup = true; persistAccounts(); }
+        ui.account = 'spending';
+        try { localStorage.setItem(ACCOUNT_KEY, 'spending'); } catch {}
+      }
       ui.tab = 'receive';
       render();
     } }, t('onbEnter')),
@@ -2803,6 +2823,11 @@ function walletScreen() {
   if (ui.onb || onbInProgress()) {
     const s = onboardScreen();
     if (s) return s; // null = the wizard just handed over; fall through
+  }
+  // The padlock's set-a-password ask renders here, over the open wallet —
+  // declining it must land back exactly where the tap happened.
+  if (ui.pw && ui.pw.purpose === 'lock') {
+    return h('div', { class: 'col', style: 'gap:16px' }, brandHeader(false), pwPromptCard());
   }
   // A feature can hold the wallet behind a required onboarding step (picking
   // a username). Imported wallets skip it once their name is recovered.
@@ -2872,10 +2897,14 @@ const ACCOUNT_KEY = 'btc-wallet-account';
 // whose name lookup isn't available right now.
 function spendingActive() {
   if (!featureHook('arkReady')) return false;
-  if (activeAccount()?.spendingSetup) return true;
-  if ((featureHook('spendingSat') || 0) > 0) return true;
+  const acc = activeAccount();
+  if (acc?.spendingSetup) return true;
   const addr = featureHook('namesAddress');
-  return !!addr && !/^npub1/.test(addr);
+  const evident = (featureHook('spendingSat') || 0) > 0 || (!!addr && !/^npub1/.test(addr));
+  // Latch demonstrated use onto the record, so the Wallets list keeps showing
+  // this seed's Spending side even while it's locked or not the active one.
+  if (evident && acc && !acc.spendingSetup) { acc.spendingSetup = true; persistAccounts(); }
+  return evident;
 }
 // ---- the flat wallet model -------------------------------------------------
 // Each seed record surfaces as up to two TOP-LEVEL wallets: its Spending (Ark)
@@ -2886,7 +2915,11 @@ function viewsOf(a) {
   if (!a) return [];
   if (a.kind) return [a.kind];
   if (a.type === 'watch') return ['savings'];
-  return ['spending', 'savings'];
+  // Spending is opt-in: a seed starts as its on-chain wallet alone, and grows
+  // a Spending side only once the user sets one up (the wizard's spend step,
+  // an explicit Add wallet, or funds/an address arriving — see the latch in
+  // spendingActive).
+  return a.spendingSetup ? ['spending', 'savings'] : ['savings'];
 }
 // How a SEED reads to the user: the names of the wallets it carries
 // ("Spending + Savings") — its internal record label never surfaces.

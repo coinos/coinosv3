@@ -43,7 +43,7 @@ const STR = {
     entropyToggle: 'Use my own entropy',
     entropyHint: 'Type anything random — dice rolls, coin flips, shuffled cards. It gets mixed with this device’s own randomness, so it can only make the seed stronger.',
     entropyPlaceholder: '4 2 6 6 1 3 5 2 …',
-    logoutPopBlurb: 'Your wallets stay saved on this device, one unlock away.',
+    logoutPopBlurb: 'Your wallets stay saved on this device.',
     clearAllWarn: '⚠ This removes every wallet from this device. Any wallet whose recovery phrase or key you have not backed up will be lost for good.',
     removeWalletTitle: 'Remove wallet',
     removeWalletWarn: '⚠ Remove “{name}” from this device? It will be gone from this browser — make sure you have its recovery phrase. Other wallets aren’t affected.',

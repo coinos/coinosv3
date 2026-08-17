@@ -896,9 +896,9 @@ function pickConfirm(words) {
 function entropyPanel(openKey, textKey, onText) {
   return [
     h('button', {
-      class: 'linklike small', style: 'align-self:flex-start',
+      class: 'btn-sm', style: 'align-self:flex-start',
       onClick: () => { ui[openKey] = !ui[openKey]; render(); },
-    }, (ui[openKey] ? '▾ ' : '▸ ') + t('entropyToggle')),
+    }, t('entropyToggle')),
     ui[openKey]
       ? h('div', { class: 'col gap6' },
           h('p', { class: 'small muted', style: 'margin:0' }, t('entropyHint')),

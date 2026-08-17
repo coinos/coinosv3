@@ -40,7 +40,7 @@ const STR = {
     addWallet: 'Add wallet',
     clearAll: 'Delete all',
     logoutForget: 'Logout & forget all data',
-    entropyToggle: 'Use my own entropy',
+    entropyToggle: 'Entropy',
     entropyHint: 'The seed comes from exactly what you type. Entering the same text again recreates the same wallet, on any device.',
     entropyWarn: '⚠ Anyone who can guess this text can take your money. Use plenty of real-world randomness — 100+ dice rolls, or the order of a fully shuffled deck of cards.',
     entropyPlaceholder: '4 2 6 6 1 3 5 2 …',

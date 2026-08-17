@@ -1710,12 +1710,12 @@ function lock({ offerPassword = false } = {}) {
   ui.txDetail = null;
   ui.broadcastTx = null;
   ui.bump = null;
-  // After the resets above (which clear ui.pw): locking with no password locks
-  // NOTHING — the wallets reopen by themselves. So a person who taps the
-  // padlock gets the password prompt every time until one exists; without it
-  // the tap would just be a confusing trip to the wallet list. (The idle
-  // timer still never nags.)
-  if (noPassword && offerPassword) {
+  // Offer to set a password on the way out — but once, ever: someone who said
+  // "Not now" has answered, and a wallet that nags is a wallet people stop
+  // reading. (The padlock is different: it asks every time via softLock's
+  // in-place prompt, because locking without a password is impossible and
+  // the tap would otherwise be a confusing trip to the wallet list.)
+  if (noPassword && offerPassword && !lockPwAsked()) {
     ui.pw = { purpose: 'lock', mode: 'set', v0: '', v1: '', v2: '', error: '' };
   }
   render();

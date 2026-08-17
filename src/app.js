@@ -682,6 +682,9 @@ function unitTag(cls = '') {
 // The create/import card on its own — the unlock screen wraps it in the
 // classic chrome, the onboarding wizard's "Get started" step shows it bare.
 function unlockCard() {
+  // The entropy page takes the card over entirely — seed words, tabs and
+  // other controls step aside until Submit or Back.
+  if (ui.entropyPage) return h('div', { class: 'card col' }, entropyPage());
   return h(
     'div',
     { class: 'card col' },
@@ -811,15 +814,16 @@ function createPane() {
             },
           },
           t('regenerate')
+        ),
+        h(
+          'button',
+          {
+            class: 'btn-ghost btn-sm',
+            onClick: () => { ui.entropyPage = 'create'; ui.entropyEntry = ui.ownEntropy || ''; render(); },
+          },
+          t('entropyToggle')
         )
       ),
-      // BYO randomness — tucked below the generated phrase so newcomers never
-      // have to parse it. Deterministic on purpose: the typed text alone
-      // derives the words (live, as you type), so re-typing it IS an import;
-      // clearing the field brings the randomly generated phrase back.
-      ...entropyPanel('ownEntropyOpen', 'ownEntropy', (txt) => {
-        ui.draftMnemonic = txt ? newMnemonic(128, txt) : (ui.draftRandom || ui.draftMnemonic);
-      }),
       optionsPanel(),
       h(
         'button',
@@ -890,31 +894,45 @@ function pickConfirm(words) {
   return [...idx].sort((a, b) => a - b).map((index) => ({ index, value: '' }));
 }
 
-// The BYO-entropy fold, shared by Create (re-derives the draft phrase) and
+// The BYO-entropy page, shared by Create (re-derives the draft phrase) and
 // Import (fills the phrase field): the typed text alone determines the seed,
-// so the same text recreates the same wallet anywhere.
-function entropyPanel(openKey, textKey, onText) {
-  return [
-    h('button', {
-      class: 'btn-sm', style: 'align-self:flex-start',
-      onClick: () => { ui[openKey] = !ui[openKey]; render(); },
-    }, t('entropyToggle')),
-    ui[openKey]
-      ? h('div', { class: 'col gap6' },
-          h('p', { class: 'small muted', style: 'margin:0' }, t('entropyHint')),
-          h('div', { class: 'warn-box small' }, t('entropyWarn')),
-          h('textarea', {
-            rows: '2', style: 'font-family:var(--sans)', placeholder: t('entropyPlaceholder'),
-            autocapitalize: 'none', autocomplete: 'off', spellcheck: 'false',
-            value: ui[textKey] || '',
-            onInput: (e) => {
-              ui[textKey] = e.target.value;
-              onText(ui[textKey].trim());
-              render();
-            },
-          }))
-      : null,
-  ];
+// so the same text recreates the same wallet anywhere. Nothing derives while
+// typing — Submit does it once, then hands back the phrase view.
+function entropyPage() {
+  const forCreate = ui.entropyPage === 'create';
+  return h(
+    'div',
+    { class: 'col', style: 'gap:10px' },
+    h('h3', { style: 'margin:0' }, t('entropyToggle')),
+    h('p', { class: 'small muted', style: 'margin:0' }, t('entropyHint')),
+    h('div', { class: 'warn-box small' }, t('entropyWarn')),
+    h('textarea', {
+      rows: '3', style: 'font-family:var(--sans)', placeholder: t('entropyPlaceholder'),
+      autocapitalize: 'none', autocomplete: 'off', spellcheck: 'false',
+      value: ui.entropyEntry || '',
+      onInput: (e) => (ui.entropyEntry = e.target.value),
+    }),
+    h(
+      'div',
+      { class: 'row gap6' },
+      h('button', { class: 'btn-ghost grow', onClick: () => { ui.entropyPage = null; render(); } }, t('back')),
+      h('button', { class: 'btn-primary grow', onClick: () => {
+        const txt = (ui.entropyEntry || '').trim();
+        if (forCreate) {
+          ui.ownEntropy = txt;
+          ui.draftMnemonic = txt ? newMnemonic(128, txt) : (ui.draftRandom || ui.draftMnemonic || newMnemonic());
+        } else {
+          ui.importEntropy = txt;
+          // fills the phrase field with its derived words; clearing the text
+          // clears only what it filled — a pasted phrase is left alone
+          if (txt) ui.importText = ui._entropyFilled = newMnemonic(128, txt);
+          else if (ui.importText === ui._entropyFilled) ui.importText = '';
+        }
+        ui.entropyPage = null;
+        render();
+      } }, t('entropySubmit'))
+    )
+  );
 }
 
 function importPane() {
@@ -935,16 +953,16 @@ function importPane() {
       h('span', { class: 'lab' }, t('importLabel')),
       pasteInto(ta, (text) => { ta.value = text; ui.importText = text; })
     ),
-    // A wallet born from typed entropy comes back the same way: the text
-    // fills the phrase field with its derived words, visibly. Clearing the
-    // text clears only what it filled — a pasted phrase is left alone.
-    ...entropyPanel('importEntropyOpen', 'importEntropy', (txt) => {
-      if (txt) {
-        ui.importText = ui._entropyFilled = newMnemonic(128, txt);
-      } else if (ui.importText === ui._entropyFilled) {
-        ui.importText = '';
-      }
-    }),
+    // A wallet born from typed entropy comes back the same way: the entropy
+    // page fills the phrase field with its derived words, visibly.
+    h(
+      'button',
+      {
+        class: 'btn-ghost btn-sm', style: 'align-self:flex-start',
+        onClick: () => { ui.entropyPage = 'import'; ui.entropyEntry = ui.importEntropy || ''; render(); },
+      },
+      t('entropyToggle')
+    ),
     optionsPanel(),
     h('button', { class: 'btn-primary btn-block', onClick: () => openWallet(ui.importText) }, t('openWallet'))
   );
@@ -1755,6 +1773,10 @@ function lock({ offerPassword = false } = {}) {
   ui.createStep = 'gen';
   ui.draftMnemonic = '';
   ui.importText = '';
+  ui.entropyPage = null;
+  ui.entropyEntry = '';
+  ui.ownEntropy = '';
+  ui.importEntropy = '';
   ui.passphrase = '';
   ui.confirmPass = '';
   ui.confirm = [];
@@ -2238,6 +2260,7 @@ function goHome() {
     ui.createStep = 'gen';
     ui.draftMnemonic = '';
     ui.importText = '';
+    ui.entropyPage = null;
     ui.confirm = [];
     ui.unlockError = '';
   } else if (hasVault()) {

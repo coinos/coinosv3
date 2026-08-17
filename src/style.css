@@ -494,6 +494,13 @@ hr.divider { margin: 16px 0; }
 .hat-btn.wearing { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
 .hat-btn.confirm { border-color: var(--green); color: var(--green); }
 
+/* a small centered confirm popup over a dimmed page */
+.confirm-pop-backdrop {
+  position: fixed; inset: 0; z-index: 50; background: rgba(0, 0, 0, .45);
+  display: flex; align-items: center; justify-content: center; padding: 24px;
+}
+.confirm-pop { width: 100%; max-width: 340px; }
+
 /* staging builds: an unmissable stamp across the header logo */
 .brand.staging { position: relative; }
 .staging-badge {

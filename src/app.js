@@ -2169,6 +2169,7 @@ function goHome() {
     ui.zapSetup = null;
     ui.arkExitPage = null;
     ui.settingsPage = null;
+    ui.logoutConfirm = null;
     ui.addrScan = false;
     ui.arkMoveOpen = false;
     ui.nameEditOpen = null;

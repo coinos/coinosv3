@@ -28,7 +28,9 @@ const vaultSize = () => page.evaluate(() => (localStorage.getItem('btc-wallet-va
 const logout = async () => {
   await page.evaluate(() => document.querySelector('.header-avatar')?.click());
   await sleep(800);
-  await click('button', 'Log out');
+  await click('button', 'Log out'); // opens the confirm popup
+  await sleep(500);
+  await page.evaluate(() => document.querySelector('.confirm-pop .btn-primary')?.click());
   await sleep(1200);
 };
 const enterSavings = async () => {
@@ -123,7 +125,10 @@ try {
   await page.evaluate(() => document.querySelector('.header-avatar')?.click());
   await sleep(800);
   txt = await body();
-  check('the profile offers the drastic exit too', /forget this device/i.test(txt), txt.slice(0, 160).replace(/\n+/g, ' | '));
+  await click('button', 'Log out'); // the popup carries both exits
+  await sleep(500);
+  txt = await body();
+  check('the popup offers the drastic exit too', /forget this device/i.test(txt), txt.slice(0, 160).replace(/\n+/g, ' | '));
   await click('button', 'forget this device');
   await sleep(600);
   txt = await body();

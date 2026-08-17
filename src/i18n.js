@@ -40,6 +40,7 @@ const STR = {
     addWallet: 'Add wallet',
     clearAll: 'Delete all',
     logoutForget: 'Log out & forget this device',
+    logoutPopBlurb: 'Your wallets stay saved on this device, one unlock away.',
     clearAllWarn: '⚠ This removes every wallet from this device. Any wallet whose recovery phrase or key you have not backed up will be lost for good.',
     removeWalletTitle: 'Remove wallet',
     removeWalletWarn: '⚠ Remove “{name}” from this device? It will be gone from this browser — make sure you have its recovery phrase. Other wallets aren’t affected.',

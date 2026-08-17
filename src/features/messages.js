@@ -1131,7 +1131,7 @@ export function messagesFeature(ctx) {
 
   function openProfile(pk) {
     ui.profilePk = pk;
-    ui.profEdit = null; ui.profEditFilled = false;
+    ui.profEdit = null; ui.profEditFilled = false; ui.logoutConfirm = null;
     render();
     fetchFullProfile(pk);
     notesFor(pk);
@@ -1483,17 +1483,30 @@ export function messagesFeature(ctx) {
     const mine = isMe(pk) || (ctx.shownPubkey && pk === ctx.shownPubkey());
     const logoutBtn = () => h('button', {
       class: 'btn-block', style: 'color:var(--red,#c0392b);display:flex;align-items:center;justify-content:center;gap:8px',
-      onClick: () => { ui.profilePk = null; ui.profEdit = null; ui.profEditFilled = false; ctx.logout && ctx.logout(); },
+      onClick: () => { ui.logoutConfirm = true; render(); },
     },
       h('span', { style: 'display:flex', html: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>' }),
       t('logout'));
-    // Two clearly-named exits: leave (wallets stay saved, one unlock away),
-    // or leave and take everything with you — the latter behind the
-    // Delete-all warning, never a single tap.
-    const forgetBtn = () => ctx.logoutForget ? h('button', {
-      class: 'btn-ghost btn-block small', style: 'color:var(--muted)',
-      onClick: () => ctx.logoutForget(),
-    }, t('logoutForget')) : null;
+    // One Log out button; the popup offers the two exits — leave (wallets
+    // stay saved, one unlock away) or leave and take everything with you.
+    // The full wipe still routes through the Delete-all warning after this.
+    const logoutPop = () => !ui.logoutConfirm ? null : h('div', {
+      class: 'confirm-pop-backdrop',
+      onClick: (e) => { if (e.target === e.currentTarget) { ui.logoutConfirm = null; render(); } },
+    },
+      h('div', { class: 'card col confirm-pop', style: 'gap:10px' },
+        h('h3', { style: 'margin:0' }, t('logout') + '?'),
+        h('p', { class: 'small muted', style: 'margin:0' }, t('logoutPopBlurb')),
+        h('button', { class: 'btn-primary btn-block', onClick: () => {
+          ui.logoutConfirm = null;
+          ui.profilePk = null; ui.profEdit = null; ui.profEditFilled = false;
+          ctx.logout && ctx.logout();
+        } }, t('logout')),
+        ctx.logoutForget ? h('button', {
+          class: 'btn-block small', style: 'color:var(--red,#c0392b)',
+          onClick: () => { ui.logoutConfirm = null; ctx.logoutForget(); },
+        }, t('logoutForget')) : null,
+        h('button', { class: 'btn-ghost btn-block', onClick: () => { ui.logoutConfirm = null; render(); } }, t('back'))));
     const full = fullProfiles.get(pk);
     // Your own profile IS the editor — and it renders IMMEDIATELY, seeded
     // from the local name/picture cache, so the page never reflows when the
@@ -1576,10 +1589,9 @@ export function messagesFeature(ctx) {
               h('button', { class: 'btn-primary btn-block', disabled: ui.profSaving, onClick: saveProfile },
                 ui.profSaving ? h('span', { class: 'spinner sm' }) : t('save')),
               hook('hatShopEntry'),
-              logoutBtn(),
-              forgetBtn())
+              logoutBtn())
           : mine
-            ? h('div', { class: 'col', style: 'gap:8px' }, logoutBtn(), forgetBtn()) // the editor renders above once the kind 0 loads
+            ? logoutBtn() // the editor renders above once the kind 0 loads
             : h('div', { class: 'row gap6 wrap' },
                 h('button', { class: 'btn-primary grow', onClick: () => {
                   const peer = pk;
@@ -1615,7 +1627,8 @@ export function messagesFeature(ctx) {
               noteRow(pk, ev, name),
             ])));
       })(),
-      h('button', { class: 'btn-ghost btn-block', onClick: () => { ui.profilePk = null; ui.profEdit = null; ui.profEditFilled = false; render(); } }, t('back')));
+      h('button', { class: 'btn-ghost btn-block', onClick: () => { ui.profilePk = null; ui.profEdit = null; ui.profEditFilled = false; render(); } }, t('back')),
+      mine ? logoutPop() : null);
   }
 
   const backBtn = (onClick) => h('button', { class: 'iconbtn chat-back', onClick }, '‹');

@@ -817,26 +817,9 @@ function createPane() {
       // have to parse it. Deterministic on purpose: the typed text alone
       // derives the words (live, as you type), so re-typing it IS an import;
       // clearing the field brings the randomly generated phrase back.
-      h('button', {
-        class: 'linklike small', style: 'align-self:flex-start',
-        onClick: () => { ui.ownEntropyOpen = !ui.ownEntropyOpen; render(); },
-      }, (ui.ownEntropyOpen ? '▾ ' : '▸ ') + t('entropyToggle')),
-      ui.ownEntropyOpen
-        ? h('div', { class: 'col gap6' },
-            h('p', { class: 'small muted', style: 'margin:0' }, t('entropyHint')),
-            h('div', { class: 'warn-box small' }, t('entropyWarn')),
-            h('textarea', {
-              rows: '2', style: 'font-family:var(--sans)', placeholder: t('entropyPlaceholder'),
-              autocapitalize: 'none', autocomplete: 'off', spellcheck: 'false',
-              value: ui.ownEntropy || '',
-              onInput: (e) => {
-                ui.ownEntropy = e.target.value;
-                const txt = ui.ownEntropy.trim();
-                ui.draftMnemonic = txt ? newMnemonic(128, txt) : (ui.draftRandom || ui.draftMnemonic);
-                render();
-              },
-            }))
-        : null,
+      ...entropyPanel('ownEntropyOpen', 'ownEntropy', (txt) => {
+        ui.draftMnemonic = txt ? newMnemonic(128, txt) : (ui.draftRandom || ui.draftMnemonic);
+      }),
       optionsPanel(),
       h(
         'button',
@@ -907,6 +890,33 @@ function pickConfirm(words) {
   return [...idx].sort((a, b) => a - b).map((index) => ({ index, value: '' }));
 }
 
+// The BYO-entropy fold, shared by Create (re-derives the draft phrase) and
+// Import (fills the phrase field): the typed text alone determines the seed,
+// so the same text recreates the same wallet anywhere.
+function entropyPanel(openKey, textKey, onText) {
+  return [
+    h('button', {
+      class: 'linklike small', style: 'align-self:flex-start',
+      onClick: () => { ui[openKey] = !ui[openKey]; render(); },
+    }, (ui[openKey] ? '▾ ' : '▸ ') + t('entropyToggle')),
+    ui[openKey]
+      ? h('div', { class: 'col gap6' },
+          h('p', { class: 'small muted', style: 'margin:0' }, t('entropyHint')),
+          h('div', { class: 'warn-box small' }, t('entropyWarn')),
+          h('textarea', {
+            rows: '2', style: 'font-family:var(--sans)', placeholder: t('entropyPlaceholder'),
+            autocapitalize: 'none', autocomplete: 'off', spellcheck: 'false',
+            value: ui[textKey] || '',
+            onInput: (e) => {
+              ui[textKey] = e.target.value;
+              onText(ui[textKey].trim());
+              render();
+            },
+          }))
+      : null,
+  ];
+}
+
 function importPane() {
   const ta = h('textarea', {
     placeholder: t('importPlaceholder'),
@@ -925,6 +935,16 @@ function importPane() {
       h('span', { class: 'lab' }, t('importLabel')),
       pasteInto(ta, (text) => { ta.value = text; ui.importText = text; })
     ),
+    // A wallet born from typed entropy comes back the same way: the text
+    // fills the phrase field with its derived words, visibly. Clearing the
+    // text clears only what it filled — a pasted phrase is left alone.
+    ...entropyPanel('importEntropyOpen', 'importEntropy', (txt) => {
+      if (txt) {
+        ui.importText = ui._entropyFilled = newMnemonic(128, txt);
+      } else if (ui.importText === ui._entropyFilled) {
+        ui.importText = '';
+      }
+    }),
     optionsPanel(),
     h('button', { class: 'btn-primary btn-block', onClick: () => openWallet(ui.importText) }, t('openWallet'))
   );

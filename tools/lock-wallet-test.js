@@ -1,4 +1,4 @@
-// "Log out" locks; only "Clear all" deletes.
+// "Log out" locks; only "Delete all" deletes.
 //
 // Wallets save themselves to this device under an empty password unless the
 // user sets one. Logging out of a passwordless vault offers a password ONCE
@@ -119,14 +119,14 @@ try {
   check('the password opens it', await waitText('receive'));
   await sleep(1000);
 
-  console.log('\n[clear all is the destructive one]');
+  console.log('\n[delete all is the destructive one]');
   await click('button', 'Wallets');
   await sleep(800);
-  await click('button', 'Clear all');
+  await click('button', 'Delete all');
   await sleep(600);
   txt = await body();
-  check('it warns first', /clear all/i.test(txt) && /(delete|remove|erase|wipe|lose)/i.test(txt), txt.slice(0, 160).replace(/\n+/g, ' | '));
-  await page.evaluate(() => { const b = [...document.querySelectorAll('.btn-primary')].find((e) => /clear all/i.test(e.textContent)); if (b) b.click(); });
+  check('it warns first', /delete all/i.test(txt) && /(delete|remove|erase|wipe|lose)/i.test(txt), txt.slice(0, 160).replace(/\n+/g, ' | '));
+  await page.evaluate(() => { const b = [...document.querySelectorAll('.btn-primary')].find((e) => /delete all/i.test(e.textContent)); if (b) b.click(); });
   await sleep(1200);
   txt = await body();
   check('everything is gone', (await vaultSize()) === 0);
@@ -137,5 +137,5 @@ try {
   await browser.close();
   server.stop(true);
 }
-console.log(fails ? '\n❌ failures above' : '\n✅ log out locks, clear all deletes');
+console.log(fails ? '\n❌ failures above' : '\n✅ log out locks, delete all deletes');
 process.exit(fails ? 1 : 0);

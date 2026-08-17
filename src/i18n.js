@@ -38,7 +38,7 @@ const STR = {
     lockWallet: 'Lock wallet',
     accounts: 'Wallets',
     addWallet: 'Add wallet',
-    clearAll: 'Clear all',
+    clearAll: 'Delete all',
     clearAllWarn: '⚠ This removes every wallet from this device. Any wallet whose recovery phrase or key you have not backed up will be lost for good.',
     removeWalletTitle: 'Remove wallet',
     removeWalletWarn: '⚠ Remove “{name}” from this device? It will be gone from this browser — make sure you have its recovery phrase. Other wallets aren’t affected.',

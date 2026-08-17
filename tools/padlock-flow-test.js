@@ -59,7 +59,7 @@ try {
   await sleep(600);
   txt = await body();
   check('declining lands back home', /receive/i.test(txt) && /balance/i.test(txt), txt.slice(0, 120).replace(/\n+/g, ' | '));
-  check('not on the wallets list', !/add wallet|clear all/i.test(txt));
+  check('not on the wallets list', !/add wallet|delete all/i.test(txt));
 
   console.log('\n[the logo still means home]');
   await page.evaluate(() => document.querySelector('.brand')?.click());

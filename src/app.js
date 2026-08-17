@@ -2497,6 +2497,10 @@ function accountSettingsScreen() {
 // Wipe every wallet from this device: session accounts, the encrypted vault,
 // and saved watch-only accounts. Unbacked-up seeds are unrecoverable after this.
 function clearAll() {
+  // Forget means forget: cached balances, history and feature state go with
+  // the seeds (best effort — a still-locked vault's mnemonic-keyed caches
+  // can't be found without its password; the xpub-keyed ones still match).
+  for (const a of [...accounts, ...loadWatchAccounts()]) wipeAccountCache(a);
   try { localStorage.removeItem(VAULT_KEY); } catch {}
   try { localStorage.removeItem(WATCH_KEY); } catch {}
   ui.confirmClear = false;
@@ -4166,6 +4170,14 @@ const ctx = {
     // Logging out means the front door, not the password prompt: land on the
     // start page (Get started / sign in). Saved wallets stay one Unlock away.
     if (!ui.pw) { ui.screen = 'unlock'; ui.unlockTab = 'create'; ui.onb = { step: 'welcome' }; render(); }
+  },
+  // The drastic exit: leave AND remove everything saved on this device.
+  // Routes through the Delete-all warning — never a single tap.
+  logoutForget: () => {
+    ui.profilePk = null; ui.profEdit = null; ui.profEditFilled = false; ui.chatOpen = false;
+    ui.screen = 'accounts';
+    ui.confirmClear = true;
+    render();
   },
   // the identity the header avatar currently wears (login > seed key >
   // remembered) — profile "mine"-ness must match what the user clicked

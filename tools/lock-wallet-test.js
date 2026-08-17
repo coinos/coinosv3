@@ -119,6 +119,19 @@ try {
   check('the password opens it', await waitText('receive'));
   await sleep(1000);
 
+  console.log('\n[log out & forget is the other exit]');
+  await page.evaluate(() => document.querySelector('.header-avatar')?.click());
+  await sleep(800);
+  txt = await body();
+  check('the profile offers the drastic exit too', /forget this device/i.test(txt), txt.slice(0, 160).replace(/\n+/g, ' | '));
+  await click('button', 'forget this device');
+  await sleep(600);
+  txt = await body();
+  check('it routes through the Delete-all warning', /delete all/i.test(txt) && /lost for good/i.test(txt), txt.slice(0, 160).replace(/\n+/g, ' | '));
+  await click('button', 'Back');
+  await sleep(600);
+  check('backing out deletes nothing', (await vaultSize()) > 0);
+
   console.log('\n[delete all is the destructive one]');
   await click('button', 'Wallets');
   await sleep(800);

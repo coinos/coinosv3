@@ -706,7 +706,7 @@ function unlockScreen() {
     brandHeader(false),
     unlockCard(),
     featureHook('unlockExtra'),
-    ui.fromWallet && accounts.length
+    ui.fromWallet && accounts.length && !ui.entropyPage
       ? h('button', { class: 'btn-ghost btn-block', onClick: () => { ui.fromWallet = false; ui.screen = 'wallet'; ui.unlockError = ''; render(); } }, t('back'))
       : null
   );
@@ -2764,7 +2764,8 @@ function onboardScreen() {
     return page([
       title(t('onbSeedTitle')),
       unlockCard(),
-      h('button', { class: 'linklike small', onClick: () => { ui.unlockError = ''; o.step = 'welcome'; render(); } }, t('back')),
+      // the entropy page brings its own Back — one is enough
+      ui.entropyPage ? null : h('button', { class: 'linklike small', onClick: () => { ui.unlockError = ''; o.step = 'welcome'; render(); } }, t('back')),
     ]);
   }
   if (o.step === 'signin') {

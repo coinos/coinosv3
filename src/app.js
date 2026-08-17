@@ -770,29 +770,12 @@ function createPane() {
         'div',
         { class: 'col' },
         h('p', { class: 'muted' }, t('genIntro')),
-        // BYO randomness for the seed — folded away so the common path stays
-        // one button. Deterministic on purpose: the typed text alone derives
-        // the seed (see newMnemonic), so re-typing it IS an import.
-        h('button', {
-          class: 'linklike small', style: 'align-self:flex-start',
-          onClick: () => { ui.ownEntropyOpen = !ui.ownEntropyOpen; render(); },
-        }, (ui.ownEntropyOpen ? '▾ ' : '▸ ') + t('entropyToggle')),
-        ui.ownEntropyOpen
-          ? h('div', { class: 'col gap6' },
-              h('p', { class: 'small muted', style: 'margin:0' }, t('entropyHint')),
-              h('div', { class: 'warn-box small' }, t('entropyWarn')),
-              h('textarea', {
-                rows: '2', style: 'font-family:var(--sans)', placeholder: t('entropyPlaceholder'),
-                autocapitalize: 'none', autocomplete: 'off', spellcheck: 'false',
-                value: ui.ownEntropy || '', onInput: (e) => (ui.ownEntropy = e.target.value),
-              }))
-          : null,
         h(
           'button',
           {
             class: 'btn-primary btn-block',
             onClick: () => {
-              ui.draftMnemonic = newMnemonic(128, (ui.ownEntropy || '').trim());
+              ui.draftRandom = ui.draftMnemonic = newMnemonic();
               render();
             },
           },
@@ -823,13 +806,37 @@ function createPane() {
           {
             class: 'btn-ghost btn-sm',
             onClick: () => {
-              ui.draftMnemonic = newMnemonic();
+              ui.draftRandom = ui.draftMnemonic = newMnemonic();
               render();
             },
           },
           t('regenerate')
         )
       ),
+      // BYO randomness — tucked below the generated phrase so newcomers never
+      // have to parse it. Deterministic on purpose: the typed text alone
+      // derives the words (live, as you type), so re-typing it IS an import;
+      // clearing the field brings the randomly generated phrase back.
+      h('button', {
+        class: 'linklike small', style: 'align-self:flex-start',
+        onClick: () => { ui.ownEntropyOpen = !ui.ownEntropyOpen; render(); },
+      }, (ui.ownEntropyOpen ? '▾ ' : '▸ ') + t('entropyToggle')),
+      ui.ownEntropyOpen
+        ? h('div', { class: 'col gap6' },
+            h('p', { class: 'small muted', style: 'margin:0' }, t('entropyHint')),
+            h('div', { class: 'warn-box small' }, t('entropyWarn')),
+            h('textarea', {
+              rows: '2', style: 'font-family:var(--sans)', placeholder: t('entropyPlaceholder'),
+              autocapitalize: 'none', autocomplete: 'off', spellcheck: 'false',
+              value: ui.ownEntropy || '',
+              onInput: (e) => {
+                ui.ownEntropy = e.target.value;
+                const txt = ui.ownEntropy.trim();
+                ui.draftMnemonic = txt ? newMnemonic(128, txt) : (ui.draftRandom || ui.draftMnemonic);
+                render();
+              },
+            }))
+        : null,
       optionsPanel(),
       h(
         'button',

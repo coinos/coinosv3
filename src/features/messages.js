@@ -1503,7 +1503,7 @@ export function messagesFeature(ctx) {
           ctx.logout && ctx.logout();
         } }, t('logout')),
         ctx.logoutForget ? h('button', {
-          class: 'btn-block small', style: 'color:var(--red,#c0392b)',
+          class: 'btn-block', style: 'color:var(--red,#c0392b)',
           onClick: () => { ui.logoutConfirm = null; ctx.logoutForget(); },
         }, t('logoutForget')) : null,
         h('button', { class: 'btn-ghost btn-block', onClick: () => { ui.logoutConfirm = null; render(); } }, t('back'))));

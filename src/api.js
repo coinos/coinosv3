@@ -6,6 +6,8 @@
 //   - a 429 from ANY request immediately backs off ALL subsequent requests
 //     (global exponential pause), easing back as requests succeed.
 
+import { STAGING } from './build-flags.js';
+
 // Block explorer selection, stored per network (see the per-network presets +
 // nk() helper below). Each network defaults to its first esplora preset; users
 // can pick another or a custom Esplora/electrs REST URL (their own node).
@@ -41,7 +43,9 @@ export function getNetwork() {
     const n = localStorage.getItem(NETWORK_KEY);
     if (NETWORKS.some((x) => x.id === n)) return n;
   } catch {}
-  return 'mainnet';
+  // Staging builds default fresh profiles to mutinynet (play money); a
+  // stored choice — including mainnet — always wins over the default.
+  return STAGING ? 'mutinynet' : 'mainnet';
 }
 export function setNetwork(net) {
   try { localStorage.setItem(NETWORK_KEY, net); } catch {}

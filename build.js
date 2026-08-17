@@ -225,12 +225,26 @@ const featurePlugin = (enabled) => ({
   },
 });
 
-export async function buildHtml({ minify = true, pwa = minify, features = process.env.HAL_FEATURES } = {}) {
+// HAL_TARGET=staging flips src/build-flags.js in the bundle: mutinynet-first
+// defaults and a visible staging stamp, without a diverging branch.
+export const isStaging = (target = process.env.HAL_TARGET) => target === 'staging';
+
+const flagsPlugin = (staging) => ({
+  name: 'coinos-build-flags',
+  setup(b) {
+    b.onLoad({ filter: /src[\/\\]build-flags\.js$/ }, () => ({
+      contents: `export const STAGING = ${!!staging};\n`,
+      loader: 'js',
+    }));
+  },
+});
+
+export async function buildHtml({ minify = true, pwa = minify, features = process.env.HAL_FEATURES, staging = isStaging() } = {}) {
   const result = await Bun.build({
     entrypoints: ['./src/app.js'],
     target: 'browser',
     minify,
-    plugins: [featurePlugin(enabledFeatures(features))],
+    plugins: [featurePlugin(enabledFeatures(features)), flagsPlugin(staging)],
   });
   if (!result.success) {
     for (const log of result.logs) console.error(log);
@@ -247,7 +261,7 @@ export async function buildHtml({ minify = true, pwa = minify, features = proces
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, interactive-widget=resizes-content">
 <meta name="color-scheme" content="light dark">
-<title>Coinos</title>
+<title>${staging ? 'Coinos Staging' : 'Coinos'}</title>
 <link rel="icon" href="${FAVICON}">
 <script>try{var t=localStorage.getItem('btc-wallet-theme');if(t!=='dark'&&t!=='light')t=matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';document.documentElement.dataset.theme=t;}catch(e){}</script>
 ${pwa ? PWA_HEAD : ''}<style>${css}</style>
@@ -278,8 +292,12 @@ if (import.meta.main) {
   const locales = await readdir('src/locales');
   for (const f of locales) await Bun.write('dist/locales/' + f, Bun.file('src/locales/' + f));
 
-  // PWA sidecars.
-  await Bun.write('dist/manifest.webmanifest', JSON.stringify(MANIFEST, null, 2));
+  // PWA sidecars. The staging install gets its own name so the two icons are
+  // tellable apart on a phone's home screen (identity is per-origin anyway).
+  const manifest = isStaging()
+    ? { ...MANIFEST, name: 'Coinos Staging', short_name: 'Staging' }
+    : MANIFEST;
+  await Bun.write('dist/manifest.webmanifest', JSON.stringify(manifest, null, 2));
   // Full builds get the auto-answering NWC worker; feature-stripped builds
   // keep the notify-only handler (the responder would just dead-weight them).
   const feats = enabledFeatures();

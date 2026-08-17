@@ -493,6 +493,16 @@ hr.divider { margin: 16px 0; }
 .hat-btn { white-space: nowrap; flex-shrink: 0; }
 .hat-btn.wearing { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
 .hat-btn.confirm { border-color: var(--green); color: var(--green); }
+
+/* staging builds: an unmissable stamp across the header logo */
+.brand.staging { position: relative; }
+.staging-badge {
+  position: absolute; left: 2px; bottom: -3px; z-index: 2; pointer-events: none;
+  background: #f7931a; color: #fff; font-size: 9px; font-weight: 750;
+  letter-spacing: .06em; text-transform: uppercase; line-height: 1;
+  padding: 2px 6px; border-radius: 5px; transform: rotate(-6deg);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, .25);
+}
 .wallet-row-btn { font-size: 19px; line-height: 1; padding: 8px 12px; }
 .chat-avatar.header-ava.fallback { align-items: center; justify-content: center; display: flex; color: var(--muted); }
 

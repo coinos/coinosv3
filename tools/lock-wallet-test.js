@@ -128,8 +128,8 @@ try {
   await click('button', 'Log out'); // the popup carries both exits
   await sleep(500);
   txt = await body();
-  check('the popup offers the drastic exit too', /forget this device/i.test(txt), txt.slice(0, 160).replace(/\n+/g, ' | '));
-  await click('button', 'forget this device');
+  check('the popup offers the drastic exit too', /forget all data/i.test(txt), txt.slice(0, 160).replace(/\n+/g, ' | '));
+  await click('button', 'forget all data');
   await sleep(600);
   txt = await body();
   check('it routes through the Delete-all warning', /delete all/i.test(txt) && /lost for good/i.test(txt), txt.slice(0, 160).replace(/\n+/g, ' | '));

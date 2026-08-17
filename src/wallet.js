@@ -9,7 +9,7 @@
 // transactions, only the (txid, vout, value, address) of each UTXO.
 
 import { HDKey } from '@scure/bip32';
-import { generateMnemonic, mnemonicToSeedSync, validateMnemonic } from '@scure/bip39';
+import { generateMnemonic, mnemonicToSeedSync, validateMnemonic, entropyToMnemonic } from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english';
 import { hex, base64urlnopad, base32nopad, base58check } from '@scure/base';
 import { sha256 } from '@noble/hashes/sha256';
@@ -64,8 +64,16 @@ export const NETS = {
   regtest: { net: { ...btc.TEST_NETWORK, bech32: 'bcrt' }, coin: 1 },
 };
 
-export function newMnemonic(strengthBits = 128) {
-  return generateMnemonic(wordlist, strengthBits);
+export function newMnemonic(strengthBits = 128, extraEntropy = '') {
+  if (!extraEntropy) return generateMnemonic(wordlist, strengthBits);
+  // User entropy is MIXED with the CSPRNG, never used alone: hashing the two
+  // together can only add randomness — weak dice can't weaken the seed, and
+  // a distrusted device RNG can't fully determine it either.
+  const txt = new TextEncoder().encode(extraEntropy);
+  const rnd = crypto.getRandomValues(new Uint8Array(strengthBits / 8));
+  const mix = new Uint8Array(txt.length + rnd.length);
+  mix.set(txt); mix.set(rnd, txt.length);
+  return entropyToMnemonic(sha256(mix).slice(0, strengthBits / 8), wordlist);
 }
 
 // The base localStorage cache key for a wallet identity (xpub, xprv, or

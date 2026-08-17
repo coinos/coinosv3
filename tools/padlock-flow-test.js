@@ -86,6 +86,102 @@ try {
   await sleep(600);
   txt = await body();
   check('unlock needs the password', /password/i.test(txt), txt.slice(0, 120).replace(/\n+/g, ' | '));
+
+  // ---- a second wallet meets the vault (fresh device) ----------------------
+  const ctx2 = await browser.createBrowserContext();
+  const p2 = await ctx2.newPage();
+  await p2.setViewport({ width: 420, height: 880 });
+  const click2 = (t) => p2.evaluate((x) => { const e = [...document.querySelectorAll('button')].find((n) => n.textContent.trim().toLowerCase().includes(x.toLowerCase())); if (e) { e.click(); return true; } return false; }, t);
+  const clickTitle2 = (t) => p2.evaluate((x) => { const b = [...document.querySelectorAll('button')].find((n) => n.title === x); if (b) { b.click(); return true; } return false; }, t);
+  const body2 = () => p2.evaluate(() => document.body.innerText);
+  const waitText2 = async (x, ms = 20000) => { for (let i = 0; i < ms / 250; i++) { if ((await body2()).toLowerCase().includes(x.toLowerCase())) return true; await sleep(250); } return false; };
+  const importWallet = async () => {
+    await click2('Import existing');
+    await sleep(400);
+    await p2.waitForSelector('textarea');
+    await p2.type('textarea', generateMnemonic(wordlist));
+    await click2('Open wallet');
+    return waitText2('receive');
+  };
+  const addWallet = async () => {
+    await click2('Wallets'); await sleep(600);
+    await click2('Add wallet'); await sleep(400);
+    await click2('Savings'); await sleep(200);
+    await click2('Continue'); await sleep(600);
+    return importWallet();
+  };
+  const savingsRows = () => p2.evaluate(() => [...document.querySelectorAll('button')].map((e) => e.textContent.trim()).filter((x) => /^[●○] Savings/.test(x)).length);
+
+  console.log('\n[a wallet created after a reload still auto-saves]');
+  await p2.goto('http://localhost:5236/', { waitUntil: 'domcontentloaded' });
+  await p2.evaluate(() => localStorage.setItem('btc-wallet-network', 'regtest'));
+  await p2.reload({ waitUntil: 'domcontentloaded' });
+  await sleep(400);
+  await click2('Get started');
+  await sleep(500);
+  check('wallet A open', await importWallet());
+  await sleep(2000);
+  await p2.reload({ waitUntil: 'domcontentloaded' }); // session restore: vault untouched this session
+  check('back after reload', await waitText2('receive'));
+  await sleep(1000);
+  check('wallet B open', await addWallet());
+  await sleep(2000);
+  await clickTitle2('Lock wallet');
+  await sleep(600);
+  txt = await body2();
+  check('padlock offers to SET a password (B is saved, vault is passwordless)',
+    /protect this device/i.test(txt) && !/already saved on this device/i.test(txt), txt.slice(0, 140).replace(/\n+/g, ' | '));
+  let f2 = await p2.$$('input[type=password]');
+  await f2[0].type('hunter22');
+  await f2[1].type('hunter22');
+  await click2('Save');
+  await sleep(1200);
+  check('locked in place', await waitText2('receive'));
+
+  console.log('\n[setting the password kept every saved wallet]');
+  await p2.reload({ waitUntil: 'domcontentloaded' });
+  check('reload keeps the locked view on screen', await waitText2('receive'));
+  await clickTitle2('Unlock');
+  await sleep(600);
+  check('re-entry asks for the password', /unlock saved wallets|enter your password/i.test(await body2()));
+  await (await p2.$('input[type=password]')).type('hunter22');
+  await click2('Unlock');
+  check('password opens it', await waitText2('receive'));
+  await sleep(1000);
+  await click2('Wallets'); await sleep(600);
+  check('both wallets survived the re-encrypt', (await savingsRows()) === 2, `${await savingsRows()} row(s)`);
+  await click2('Back'); await sleep(500);
+
+  console.log('\n[a new wallet against a passworded vault: the ask explains itself]');
+  await p2.reload({ waitUntil: 'domcontentloaded' }); // session restore again: vault password not in memory
+  check('back after reload', await waitText2('receive'));
+  await sleep(1000);
+  check('wallet C open', await addWallet());
+  await sleep(2000);
+  await clickTitle2('Lock wallet');
+  await sleep(600);
+  txt = await body2();
+  check('it says WHICH password it wants', /already saved on this device/i.test(txt), txt.slice(0, 160).replace(/\n+/g, ' | '));
+  await (await p2.$('input[type=password]')).type('wrong-guess');
+  await click2('Lock');
+  await sleep(600);
+  check('a wrong password is refused', /wrong password/i.test(await body2()));
+  await p2.evaluate(() => { const i = document.querySelector('input[type=password]'); i.value = ''; i.dispatchEvent(new Event('input', { bubbles: true })); });
+  await (await p2.$('input[type=password]')).type('hunter22');
+  await click2('Lock');
+  await sleep(1500);
+  check('the right one saves C and locks in place', await waitText2('receive'));
+  await p2.reload({ waitUntil: 'domcontentloaded' });
+  check('locked view survives the reload', await waitText2('receive'));
+  await clickTitle2('Unlock');
+  await sleep(600);
+  await (await p2.$('input[type=password]')).type('hunter22');
+  await click2('Unlock');
+  check('unlocked once more', await waitText2('receive'));
+  await sleep(1000);
+  await click2('Wallets'); await sleep(600);
+  check('all three wallets are in the vault', (await savingsRows()) === 3, `${await savingsRows()} row(s)`);
+  await ctx2.close();
 } catch (e) {
   check('run completed', false, e.message);
 } finally {

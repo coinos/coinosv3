@@ -1329,14 +1329,24 @@ function mergeVaultList(list) {
 
 // Keeping a wallet is the default: a seed that only lives in this tab is one
 // refresh away from being gone, and that surprise costs people money. So a
-// wallet saves itself to the device unless we can't write the vault — when
-// one exists but is locked, the manual Save button still covers it. No
-// password is set here; Settings can add one later.
+// wallet saves itself to the device unless the vault is locked behind a real
+// password — then the manual Save button (and the padlock's save-first ask)
+// still covers it. No password is set here; Settings can add one later.
 function autoSave(acc) {
   if (!acc || acc.type !== 'full' || acc.persisted || acc.provisional) return;
   if (vaultPassword == null) {
-    if (hasVault()) return; // locked vault: needs their password, leave it manual
-    vaultPassword = '';
+    if (hasVault()) {
+      // A blank-password vault opens by itself — treating it as locked left
+      // every wallet created after a plain reload silently unsaved. Fold its
+      // wallets into the session first: writeVault rebuilds the blob from
+      // session accounts, and the saved ones must not fall out of it here.
+      let list;
+      try { list = decryptVault(loadVaultBlob(), ''); } catch { return; } // a real password: manual
+      vaultPassword = '';
+      mergeVaultList(list);
+    } else {
+      vaultPassword = '';
+    }
   }
   acc.persisted = true;
   writeVault();
@@ -1430,6 +1440,11 @@ function submitPw() {
   if (p.purpose === 'lock') {
     if (!p.v1) { p.error = t('pwNeededToLock'); render(); return; }
     if (p.v1 !== p.v2) { p.error = t('pwMismatch'); render(); return; }
+    // Fold any blank-password vault contents into the session before the
+    // re-encrypt: writeVault rebuilds the blob from session accounts, and a
+    // wallet saved by an earlier session must not fall out of the vault just
+    // because a password is being set now.
+    try { mergeVaultList(decryptVault(loadVaultBlob(), '')); } catch {}
     vaultPassword = p.v1;
     writeVault();
     persistAccounts();

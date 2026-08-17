@@ -80,7 +80,7 @@ const STR = {
     profUsername: 'Username',
     profDisplayName: 'Display name',
     profUnameInvalid: 'Usernames can only use letters, numbers, dots, dashes and underscores.',
-    lockSaveDesc: 'Enter your password to lock your wallet.',
+    lockSaveDesc: 'The wallets already saved on this device are protected by a password. Enter it to save this wallet with them and lock.',
     lockAction: 'Lock',
     password: 'Password',
     confirmPassword: 'Confirm password',

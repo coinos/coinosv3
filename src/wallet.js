@@ -66,14 +66,13 @@ export const NETS = {
 
 export function newMnemonic(strengthBits = 128, extraEntropy = '') {
   if (!extraEntropy) return generateMnemonic(wordlist, strengthBits);
-  // User entropy is MIXED with the CSPRNG, never used alone: hashing the two
-  // together can only add randomness — weak dice can't weaken the seed, and
-  // a distrusted device RNG can't fully determine it either.
-  const txt = new TextEncoder().encode(extraEntropy);
-  const rnd = crypto.getRandomValues(new Uint8Array(strengthBits / 8));
-  const mix = new Uint8Array(txt.length + rnd.length);
-  mix.set(txt); mix.set(rnd, txt.length);
-  return entropyToMnemonic(sha256(mix).slice(0, strengthBits / 8), wordlist);
+  // User entropy is used ALONE, deterministically: seed = BIP-39 from
+  // SHA-256 of exactly the typed text. The same text recreates the same
+  // wallet on any device (that's the point — it doubles as an import), and
+  // the derivation is simple enough to verify elsewhere. The flip side —
+  // guessable text is stealable money — is the UI's warning to give.
+  const digest = sha256(new TextEncoder().encode(extraEntropy));
+  return entropyToMnemonic(digest.slice(0, strengthBits / 8), wordlist);
 }
 
 // The base localStorage cache key for a wallet identity (xpub, xprv, or

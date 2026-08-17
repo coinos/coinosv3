@@ -771,8 +771,8 @@ function createPane() {
         { class: 'col' },
         h('p', { class: 'muted' }, t('genIntro')),
         // BYO randomness for the seed — folded away so the common path stays
-        // one button. Whatever is typed here is hashed together with the
-        // device's own randomness (see newMnemonic), never used alone.
+        // one button. Deterministic on purpose: the typed text alone derives
+        // the seed (see newMnemonic), so re-typing it IS an import.
         h('button', {
           class: 'linklike small', style: 'align-self:flex-start',
           onClick: () => { ui.ownEntropyOpen = !ui.ownEntropyOpen; render(); },
@@ -780,6 +780,7 @@ function createPane() {
         ui.ownEntropyOpen
           ? h('div', { class: 'col gap6' },
               h('p', { class: 'small muted', style: 'margin:0' }, t('entropyHint')),
+              h('div', { class: 'warn-box small' }, t('entropyWarn')),
               h('textarea', {
                 rows: '2', style: 'font-family:var(--sans)', placeholder: t('entropyPlaceholder'),
                 autocapitalize: 'none', autocomplete: 'off', spellcheck: 'false',
@@ -815,12 +816,14 @@ function createPane() {
         'div',
         { class: 'row gap6' },
         copyBtn(ui.draftMnemonic, t('copyPhrase')),
-        h(
+        // With own entropy the phrase is a pure function of the text —
+        // "Regenerate" would hand back the identical words, so it hides.
+        (ui.ownEntropy || '').trim() ? null : h(
           'button',
           {
             class: 'btn-ghost btn-sm',
             onClick: () => {
-              ui.draftMnemonic = newMnemonic(128, (ui.ownEntropy || '').trim());
+              ui.draftMnemonic = newMnemonic();
               render();
             },
           },

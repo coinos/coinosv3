@@ -2867,7 +2867,9 @@ function onboardScreen() {
       // network without names, or skipping the spend step, must not conjure
       // a Spending wallet nobody asked for.
       const acc = activeAccount();
-      const addr = featureHook('namesAddress');
+      // same mainnet-only rule as spendingActive: a stored mainnet name must
+      // not vouch for spending on another network
+      const addr = getNetwork() === 'mainnet' ? featureHook('namesAddress') : null;
       const spendReady = (!!addr && !/^npub1/.test(addr)) || (featureHook('spendingSat') || 0) > 0;
       if (spendReady) {
         if (acc && !acc.spendingSetup) { acc.spendingSetup = true; persistAccounts(); }
@@ -2989,7 +2991,10 @@ function spendingActive() {
   if (!featureHook('arkReady')) return false;
   const acc = activeAccount();
   if (acc?.spendingSetup) return true;
-  const addr = featureHook('namesAddress');
+  // A claimed payment address proves spending on MAINNET only: names feature
+  // state is stored per-wallet without a network, so a mainnet name would
+  // otherwise conjure a Spending wallet on mutinynet nobody set up.
+  const addr = getNetwork() === 'mainnet' ? featureHook('namesAddress') : null;
   const evident = (featureHook('spendingSat') || 0) > 0 || (!!addr && !/^npub1/.test(addr));
   // Latch demonstrated use onto the record, so the Wallets list keeps showing
   // this seed's Spending side even while it's locked or not the active one.

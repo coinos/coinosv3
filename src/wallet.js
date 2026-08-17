@@ -1871,7 +1871,12 @@ export class Wallet {
       // cache yet — fall back to the xpub mirror so it shows instantly.
       if (!raw && !this.watchOnly) raw = localStorage.getItem(this._xpubCacheKey());
       if (!raw) return false;
-      this._applySnapshot(JSON.parse(raw));
+      const snap = JSON.parse(raw);
+      // The seed-keyed cache slot is shared across networks (the key hashes
+      // only the seed), so a wallet switched to mutinynet would restore — and
+      // show — its mainnet balance. A snapshot only counts on its own network.
+      if (snap.netName && snap.netName !== this.netName) return false;
+      this._applySnapshot(snap);
       this.emit();
       return true;
     } catch {

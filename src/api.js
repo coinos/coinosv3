@@ -31,6 +31,17 @@ export function setExplorerConfig({ server, url }, net = getNetwork()) {
 // blocks) for testing — same address format as testnet, its own explorer at
 // mutinynet.com. Data-source choices are stored per network (see nk()).
 const NETWORK_KEY = 'btc-wallet-network';
+// Staging's default is mutinynet, but a "mainnet" stored BEFORE the staging
+// flag existed would pin early testers to mainnet forever. Clear it once —
+// anyone who picks mainnet on staging after this keeps their choice.
+if (STAGING) {
+  try {
+    if (!localStorage.getItem(NETWORK_KEY + '-staged')) {
+      localStorage.setItem(NETWORK_KEY + '-staged', '1');
+      if (localStorage.getItem(NETWORK_KEY) === 'mainnet') localStorage.removeItem(NETWORK_KEY);
+    }
+  } catch {}
+}
 export const NETWORKS = [
   { id: 'mainnet', label: 'Mainnet' },
   { id: 'testnet', label: 'Testnet' },

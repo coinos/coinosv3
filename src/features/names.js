@@ -54,7 +54,12 @@ export function namesFeature(ctx) {
   const load = () => wallet.loadFeatureState('names', {});
   const save = (st) => wallet.saveFeatureState('names', st);
 
-  const available = () => getNetwork() === 'mainnet' && !wallet.watchOnly
+  // Mainnet and mutinynet: staging's play network gets the full payment-
+  // address experience (claims already registered fine — the record simply
+  // carries a testnet ark address). Ark-to-name sends between mutinynet
+  // wallets resolve and pay normally; only foreign-LNURL receives assume
+  // mainnet. NB the names live in the ONE shared registry either way.
+  const available = () => ['mainnet', 'mutinynet'].includes(getNetwork()) && !wallet.watchOnly
     && !!wallet.nostrSign && !!hook('arkReady');
 
   async function currentUri() {

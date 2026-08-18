@@ -245,6 +245,18 @@ const flagsPlugin = (staging) => ({
   },
 });
 
+// The commit this build came from: the deploy hook passes GIT_COMMIT (the
+// worktree it builds in has no .git), local builds ask git directly.
+function gitCommit() {
+  if (process.env.GIT_COMMIT) return process.env.GIT_COMMIT.slice(0, 7);
+  try {
+    const r = Bun.spawnSync(['git', 'rev-parse', '--short', 'HEAD']);
+    const out = r.stdout.toString().trim();
+    if (/^[0-9a-f]{6,}$/.test(out)) return out;
+  } catch {}
+  return 'dev';
+}
+
 export async function buildHtml({ minify = true, pwa = minify, features = process.env.HAL_FEATURES, staging = isStaging() } = {}) {
   const result = await Bun.build({
     entrypoints: ['./src/app.js'],
@@ -276,7 +288,7 @@ ${pwa ? PWA_HEAD : ''}<style>${css}</style>
 <div id="app"></div>
 <script>${js}</script>
 ${pwa ? SW_REGISTER + '\n' : ''}</body>
-</html>`;
+</html>`.replaceAll('{{COMMIT}}', gitCommit());
 }
 
 if (import.meta.main) {

@@ -230,9 +230,10 @@ function footer() {
       h('span', { class: 'faint' }, ' · '),
       t('footerSourceOn') + ' ',
       h('a', { href: 'https://github.com/coinos/coinosv3', target: '_blank', rel: 'noopener' }, 'GitHub'),
-      // The build stamp settles every "is my PWA fresh?" question at a glance
-      // ({{VERSION}} is filled at build time, like the service worker's).
-      h('span', { class: 'faint' }, ' · {{VERSION}}')
+      // The commit stamp settles "is my PWA fresh?" AND "what code is this?"
+      // in one glance — filled at build time, links to the commit on GitHub.
+      h('span', { class: 'faint' }, ' · '),
+      h('a', { class: 'faint', href: 'https://github.com/coinos/coinosv3/commit/{{COMMIT}}', target: '_blank', rel: 'noopener' }, 'commit {{COMMIT}}')
     ),
     h(
       'div',

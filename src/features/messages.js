@@ -395,7 +395,7 @@ export function messagesFeature(ctx) {
     if (!id) { noIdToast(); return; }
     // The rumor id is a plain hash, so the message can be on screen before
     // any signing, encryption or network runs. The pending flag renders as a
-    // dimmed bubble; a relay accepting the wrap clears it and shows the tick.
+    // dimmed bubble; a relay accepting the wrap brings it to full strength.
     const { created_at, ms } = msTags(Date.now());
     const rumor = rumorWithId({
       kind: 9, pubkey: id.pubkey, content: text,
@@ -411,7 +411,7 @@ export function messagesFeature(ctx) {
       const wrap = await wrapRumor(rumor, id.signer, room.chStream(chId));
       seenWraps.add(wrap.id); // our own echo has nothing to add
       const ok = await publishOn(room.relays, wrap);
-      if (!ok) { toast(t('msgSendFailed')); return; } // stays dimmed, no tick
+      if (!ok) { toast(t('msgSendFailed')); return; } // stays dimmed
       delete entry.pending;
       render();
       ensureJoined(room, id).catch(() => {});
@@ -1013,7 +1013,7 @@ export function messagesFeature(ctx) {
     if (!id) { noIdToast(); return; }
     if (!(id.signer instanceof Uint8Array) && !id.signer.encryptTo) { toast(t('msgSignerNoDm')); return; }
     // Same optimistic shape as channel sends: the rumor is synchronous, the
-    // bubble shows dimmed at once, and the tick lands when a relay takes the
+    // bubble shows dimmed at once, and undims when a relay takes the
     // recipient's wrap. Wrapping the same rumor keeps the id, so the sent-copy
     // echo folds into this entry instead of duplicating it.
     const rumor = makeDMRumor(id.pubkey, peer, text);
@@ -1029,7 +1029,7 @@ export function messagesFeature(ctx) {
       const inbox = (await fetchInboxRelays(peer)).slice(0, 4);
       const ok = await publishOn([...new Set([...inbox, ...DM_RELAYS])], toPeer);
       publishOn(DM_RELAYS, toSelf);
-      if (!ok) { toast(t('msgSendFailed')); return; } // stays dimmed, no tick
+      if (!ok) { toast(t('msgSendFailed')); return; } // stays dimmed
       delete entry.pending;
       render();
       persistDms();
@@ -2091,7 +2091,6 @@ export function messagesFeature(ctx) {
           h('div', { class: 'chat-bubble' },
             text,
             edit ? h('span', { class: 'chat-edited' }, ' ', t('msgEdited')) : null,
-            mine && !m.pending ? h('span', { class: 'chat-tick' }, '✓') : null,
             mine
               ? h('button', { class: 'chat-del', title: t('msgDelete'), onClick: () => deleteMessage(room, chId, m) }, '×')
               : null),
@@ -2276,8 +2275,7 @@ export function messagesFeature(ctx) {
         ? msgs.map((m) =>
             h('div', { class: 'chat-row dm' + (m.mine ? ' mine' : '') + (m.pending ? ' pending' : '') },
               h('div', { class: 'chat-body' },
-                h('div', { class: 'chat-bubble' + (m.mine ? ' me' : '') }, m.rumor.content,
-                  m.mine && !m.pending ? h('span', { class: 'chat-tick' }, '✓') : null),
+                h('div', { class: 'chat-bubble' + (m.mine ? ' me' : '') }, m.rumor.content),
                 h('div', { class: 'chat-time' }, timeLabel(m.rumor.created_at * 1000)))))
         : [h('div', { class: 'muted small', style: 'text-align:center;padding:24px 0' }, t('msgNoDmsYet'))])),
       composer(t('msgDmPlaceholder'), () => sendDM(peer)));

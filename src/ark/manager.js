@@ -298,7 +298,16 @@ export class ArkManager {
     const ourKeys = [hex.encode(this._key(0).pubkey)];
     const tip = await this._tipMemo();
     for (const v of m.vtxos) {
-      if (this._vtxo(v.id)) continue;
+      if (this._vtxo(v.id)) {
+        // The vtxo beat the message here (a mirror or snapshot merge carried
+        // it) — the money is present but the story is missing. Backfill the
+        // receive movement so history matches the balance.
+        if (!this.state.movements.some((x) => x.vtxoId === v.id)) {
+          this._movement({ type: 'receive', amountSat: v.amountSat, status: 'complete', vtxoId: v.id, ts: this._estimateReceiveTs(this._decoded(this._vtxo(v.id)), tip) });
+          changed = true;
+        }
+        continue;
+      }
       try {
         await validateVtxo(v, { serverPubkey: this.serverPub, chain: this.chain, expectPubkeys: ourKeys });
       } catch (e) {

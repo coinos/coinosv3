@@ -229,11 +229,7 @@ function footer() {
       h('a', { href: 'https://adamsoltys.com', target: '_blank', rel: 'noopener' }, 'Adam Soltys'),
       h('span', { class: 'faint' }, ' · '),
       t('footerSourceOn') + ' ',
-      h('a', { href: 'https://github.com/coinos/coinosv3', target: '_blank', rel: 'noopener' }, 'GitHub'),
-      // The commit stamp settles "is my PWA fresh?" AND "what code is this?"
-      // in one glance — filled at build time; the hash links to GitHub.
-      h('span', { class: 'faint' }, ' · Running '),
-      h('a', { class: 'faint', href: 'https://github.com/coinos/coinosv3/commit/{{COMMIT}}', target: '_blank', rel: 'noopener' }, '{{COMMIT}}')
+      h('a', { href: 'https://github.com/coinos/coinosv3', target: '_blank', rel: 'noopener' }, 'GitHub')
     ),
     h(
       'div',
@@ -250,7 +246,12 @@ function footer() {
       h('span', { class: 'faint' }, ' · '),
       h('button', { class: 'linklike', style: 'font-weight:400', onClick: toggleTheme }, resolvedTheme() === 'dark' ? t('lightMode') : t('darkMode'))
     ),
-    h('div', { style: 'margin-top:8px' }, languagePicker())
+    h('div', { style: 'margin-top:8px' }, languagePicker()),
+    // The commit stamp settles "is my PWA fresh?" AND "what code is this?" in
+    // one glance — its own last line, so it never wraps the credits on mobile.
+    h('div', { class: 'faint', style: 'margin-top:6px' },
+      'Running git commit ',
+      h('a', { class: 'faint', href: 'https://github.com/coinos/coinosv3/commit/{{COMMIT}}', target: '_blank', rel: 'noopener' }, '{{COMMIT}}'))
   );
 }
 

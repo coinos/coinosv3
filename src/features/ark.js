@@ -183,7 +183,11 @@ export function mergeArkStates(a, b) {
     else { lg.claimed = lg.claimed || rg.claimed; lg.revoked = lg.revoked || rg.revoked; }
   }
   out.gifts = [...gifts.values()];
-  out.mailboxCheckpoint = Math.max(a.mailboxCheckpoint || 0, b.mailboxCheckpoint || 0);
+  // The checkpoint is READING PROGRESS, not state: adopting a remote one
+  // skips every message this device never processed — balance appears (the
+  // vtxo unions in) but its receive movement and celebration never happen.
+  // Keep the local checkpoint; re-read messages dedupe harmlessly.
+  out.mailboxCheckpoint = a.mailboxCheckpoint || 0;
   out.nextKeyIndex = Math.max(a.nextKeyIndex || 1, b.nextKeyIndex || 1);
   out.nextLnRecvIndex = Math.max(a.nextLnRecvIndex || 0, b.nextLnRecvIndex || 0);
   out.receiveAckTs = Math.max(a.receiveAckTs || 0, b.receiveAckTs || 0);

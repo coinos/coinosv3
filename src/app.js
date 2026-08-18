@@ -3147,14 +3147,19 @@ function balanceCard() {
     ...(hasSpending ? featureAll('balanceActions') : []).map((a2) =>
       h('button', { class: 'btn-sm', style: 'margin-top:10px', onClick: a2.onClick }, a2.label)),
     // A seed with only a Savings side is one tap from growing a Spending one:
-    // the offer sits right on the balance card, and the tap simply DOES it —
-    // same seed, a "Spending" side appears, no wizard in the way. (Explicit
-    // latches carry a timestamp; the self-heal only eats the legacy booleans.)
+    // the offer sits right on the balance card. The tap creates it outright —
+    // same seed, a "Spending" side, latched before any prompt so backing out
+    // of the niceties can't take it away — then walks the username + avatar
+    // steps, since a spending account is best enjoyed with a payment address.
+    // (Explicit latches carry a timestamp; self-heal only eats legacy booleans.)
     !hasSpending && !kindLocked && featureHook('arkReady') && !wallet.watchOnly && acc0 && acc0.type === 'full'
       ? h('button', { class: 'btn-sm', style: 'margin-top:10px', onClick: () => {
           acc0.spendingSetup = Date.now();
           persistAccounts();
           setAccountSel('spending', 'right');
+          ui.onbError = '';
+          ui.onb = { step: 'spend' };
+          render();
         } }, t('spendSetup'))
       : null,
     // A feature can unfold UI right on the card (ark's inline move panel).

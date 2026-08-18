@@ -36,13 +36,6 @@ const HATS = [
       <path d="M15 33 V39.5 M23 32.5 V40.5 M31 32.5 V40.5 M39 32.5 V40.5 M47 33 V39.5" stroke="#b23a32" stroke-width="2"/>`),
   },
   {
-    id: 'party', nameKey: 'hatParty', sat: 2100, w: 78, b: 75, r: -11,
-    art: svg(`<path d="M32 5 L46 39 Q32 44 18 39 Z" fill="#2fb3a5"/>
-      <path d="M26.5 18.5 Q32 20.5 37.5 18.5 L40 24.5 Q32 27 24 24.5 Z" fill="#ff7bac"/>
-      <path d="M21.5 30.5 Q32 34 42.5 30.5 L44.5 35.5 Q32 40 19.5 35.5 Z" fill="#ffd166"/>
-      <circle cx="32" cy="5" r="4.2" fill="#ffd166"/>`),
-  },
-  {
     id: 'trucker', nameKey: 'hatTrucker', sat: 2100, w: 106, b: 68, r: -6,
     art: svg(`<path d="M9 33 Q9 10 29 10 Q49 10 49 33 Z" fill="#3579c2"/>
       <path d="M17 33 Q17 14 29 14 Q41 14 41 33 Z" fill="#f2f5f8"/>

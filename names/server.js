@@ -333,7 +333,7 @@ async function publishZapReceipt(pending, inv) {
 
 const HAT_ADMIN_PK = '98ae4da926c471c23fd12d1ebdd5839ba82917baa618e184e0c9916d93dcf4f7';
 const HAT_PRICES = {
-  beanie: 21, party: 2100, trucker: 2100, cowboy: 21000, fedora: 21000,
+  beanie: 21, trucker: 2100, cowboy: 21000, fedora: 21000,
   bowler: 210000, top: 210000, wizard: 2100000,
 };
 

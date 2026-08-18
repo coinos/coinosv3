@@ -194,8 +194,12 @@ export function hatsFeature(ctx) {
 
   function openShop() {
     ui.hatShop = true;
-    ui.hatShopData = null;
     ui.hatConfirm = null;
+    loadShop();
+  }
+
+  function loadShop() {
+    ui.hatShopData = null;
     render();
     const me = ctx.shownPubkey();
     if (!me) { ui.hatShopData = { owned: [], equipped: null }; render(); return; }
@@ -309,12 +313,12 @@ export function hatsFeature(ctx) {
       h('div', { class: 'card col', style: 'gap:12px' },
         h('h3', { style: 'margin:0' }, '🎩 ' + t('hatShopTitle')),
         h('p', { class: 'small muted', style: 'margin:0' }, t('hatShopBlurb')),
-        d === null
+        d == null
           ? h('div', { style: 'text-align:center;padding:16px' }, h('span', { class: 'spinner' }))
           : h('div', { class: 'col', style: 'gap:2px' },
               // the crown is not merchandise — it appears only in the
               // collection of the head that owns it, never as a listing
-              ...HATS.filter((hat) => hat.id !== 'crown' || (d.owned || []).includes('crown'))
+              ...HATS.filter((hat) => hat.id !== 'crown' || ((d && d.owned) || []).includes('crown'))
                 .map((hat) => shopRow(hat, d, me))),
         d && d.offline ? h('div', { class: 'small faint', style: 'text-align:center' }, t('hatShopOffline')) : null),
       h('button', { class: 'btn-ghost btn-block', onClick: closeShop }, t('back')));
@@ -339,6 +343,11 @@ export function hatsFeature(ctx) {
     },
     screenView() {
       if (ui.screen !== 'wallet' || !ui.hatShop) return null;
+      // A restored session brings the shop screen back WITHOUT its data
+      // (hatShop rides the nav snapshot; the fetch result doesn't) — refetch
+      // instead of rendering a collection nobody loaded. undefined = never
+      // fetched; null = fetch in flight.
+      if (ui.hatShopData === undefined) setTimeout(loadShop, 0);
       return shopScreen();
     },
   };

@@ -3223,8 +3223,13 @@ function tabContent() {
 // within the last couple hours. This is a hard guard so an old payment can never
 // trigger the celebration on import, regardless of receive-index bookkeeping.
 function hasRecentIncoming() {
+  // "Recent" means "plausibly the payment you're watching for right now".
+  // The open-time baseline can't cover a payment the socket only DISCOVERS
+  // seconds after it was taken — with a 2h window, money that landed a while
+  // ago celebrated on open as if it had just arrived. A payment confirmed
+  // more than 15 minutes ago is news, not an event.
   const now = Date.now() / 1000;
-  return wallet.txs.some((tx) => tx.net > 0 && (!tx.confirmed || (tx.blockTime && now - tx.blockTime < 2 * 3600)));
+  return wallet.txs.some((tx) => tx.net > 0 && (!tx.confirmed || (tx.blockTime && now - tx.blockTime < 900)));
 }
 
 // ---------------------------------------------------------------- Receive

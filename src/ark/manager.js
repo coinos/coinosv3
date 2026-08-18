@@ -266,6 +266,14 @@ export class ArkManager {
     }
     if (changed) this._save();
     await this.resumePending();
+    // The display is only as honest as the last reconcile: state restored
+    // from a snapshot (or mirrored by the NWC worker) can show coins the
+    // server already saw spent — a balance you can look at but not spend.
+    // Sweep that drift on a slow cadence, not just at pay time.
+    if (Date.now() - (this._reconciledAt || 0) > 10 * 60_000) {
+      this._reconciledAt = Date.now();
+      await this.reconcile().catch(() => {});
+    }
   }
 
   // Handle one mailbox message (from a poll or the live stream). Returns
@@ -1481,6 +1489,38 @@ export class ArkManager {
     return [{ amountSat: action.outAmountSat, userPubkey: this._key(action.outKeyIndex).pubkey }];
   }
 
+  // Ask the server which of a rejected participation's inputs are dead, mark
+  // those spent, and rebuild the action around the survivors — or fail it and
+  // release them if nothing changed (the cause isn't a spent input) or what
+  // remains is under the server's output minimum.
+  async _repairRefresh(action, inputRecs) {
+    const states = await Promise.all(inputRecs.map((v) =>
+      getVtxoStatus(this.arkUrl, this._decoded(v).point.raw, this._keyForVtxo(v).privkey)
+        .catch(() => null)));
+    const live = [];
+    inputRecs.forEach((v, i) => {
+      if (states[i] === VTXO_STATE_SPENT) {
+        v.state = 'spent';
+        this._movement({ type: 'reconcile', amountSat: v.amountSat, status: 'complete', vtxoId: v.id, detail: 'spent elsewhere (server vtxo status)' });
+      } else live.push(v);
+    });
+    const dropped = inputRecs.length - live.length;
+    const tip = await this.chain.tipHeight();
+    const totalSat = live.reduce((n, v) => n + v.amountSat, 0);
+    const feeSat = live.length ? this.refreshFee(live, tip) : 0;
+    if (dropped && live.length && totalSat - feeSat >= 330) {
+      action.inputIds = live.map((v) => v.id);
+      action.outAmountSat = totalSat - feeSat;
+      action.feeSat = feeSat;
+      // still 'created': the next sync submits the repaired set
+    } else {
+      for (const v of live) v.state = 'spendable';
+      action.step = 'failed';
+      action.lastError = dropped ? 'refresh inputs were spent elsewhere' : 'server rejected refresh inputs';
+    }
+    this._save();
+  }
+
   async _driveRefresh(action) {
     const outputs = this._refreshOutputs(action);
     const inputRecs = action.inputIds.map((id) => this._vtxo(id));
@@ -1488,10 +1528,21 @@ export class ArkManager {
     if (action.step === 'created') {
       const inputBytes = inputRecs.map((v) => hex.decode(v.bytes));
       await registerVtxoTransactions(this.arkUrl, inputBytes);
-      const unlockHash = await submitRoundParticipation(this.arkUrl, {
-        inputs: inputRecs.map((v) => ({ vtxo: this._decoded(v), keys: this._keyForVtxo(v) })),
-        outputs,
-      });
+      let unlockHash;
+      try {
+        unlockHash = await submitRoundParticipation(this.arkUrl, {
+          inputs: inputRecs.map((v) => ({ vtxo: this._decoded(v), keys: this._keyForVtxo(v) })),
+          outputs,
+        });
+      } catch (e) {
+        // "unusable inputs" never becomes usable by resubmission — some input
+        // was spent elsewhere and this state didn't know. Repair instead of
+        // retrying the same doomed set on every sync forever (which also
+        // holds the inputs pending, blocking every future auto-refresh).
+        if (!/unusable/i.test(e.message || '')) throw e; // transient: retry on next sync
+        await this._repairRefresh(action, inputRecs);
+        return;
+      }
       action.unlockHash = hex.encode(unlockHash);
       action.step = 'submitted';
       this._save();
@@ -1540,5 +1591,46 @@ export class ArkManager {
       this._movement({ type: 'refresh', amountSat: action.outAmountSat, status: 'complete', detail: `${inputRecs.length} in -> ${newVtxos.length} out` });
       this._save();
     }
+  }
+
+  // Rebuild a refresh claim from its unlock hash — for a participation whose
+  // action was lost (snapshot rollback, device wipe) after its round ran,
+  // leaving the output stranded 'unclaimed' on the server. The server replays
+  // the funding tx and output vtxos; our key index is rediscovered by
+  // scanning; the forfeit handshake needs the original input records, which
+  // must still exist in this wallet's state (already marked spent is fine).
+  // inputVtxoIds comes from the operator (the server knows which inputs the
+  // participation locked; there is no client-facing API for that lookup).
+  async rescueParticipation(unlockHashHex, inputVtxoIds) {
+    const missing = (inputVtxoIds || []).filter((id) => !this._vtxo(id));
+    if (!inputVtxoIds?.length) throw new Error('input vtxo ids required');
+    if (missing.length) throw new Error('input records not in this wallet: ' + missing.join(', '));
+    if (this.state.actions.some((a) => a.unlockHash === unlockHashHex && a.step !== 'failed')) {
+      throw new Error('an action for this participation already exists — sync drives it');
+    }
+    const status = await roundParticipationStatus(this.arkUrl, hex.decode(unlockHashHex));
+    if (status.status === 0 || !status.fundingTx) throw new Error('the round for this participation has not run');
+    const outs = status.outputVtxos.map((b) => decodeVtxo(b));
+    if (!outs.length) throw new Error('participation has no outputs');
+    const want = new Set(outs.map((v) => v.policy.userPubkey));
+    let outKeyIndex = null;
+    // The index was minted by the lost action, so scan a window past the counter.
+    for (let i = 0; i < this.state.nextKeyIndex + 64 && outKeyIndex == null; i++) {
+      if (want.has(hex.encode(this._key(i).pubkey))) outKeyIndex = i;
+    }
+    if (outKeyIndex == null) throw new Error('no wallet key matches the participation outputs');
+    if (outKeyIndex >= this.state.nextKeyIndex) this.state.nextKeyIndex = outKeyIndex + 1;
+    const action = {
+      id: `refresh-rescue-${Date.now()}`, type: 'refresh', step: 'issued',
+      inputIds: [...inputVtxoIds], outKeyIndex,
+      outAmountSat: outs.reduce((n, v) => n + v.amountSat, 0), feeSat: 0,
+      unlockHash: unlockHashHex,
+      fundingTxHex: hex.encode(status.fundingTx),
+      outputVtxos: status.outputVtxos.map((b) => hex.encode(b)),
+    };
+    this.state.actions.push(action);
+    this._save();
+    await this._driveRefresh(action);
+    return this.state.actions.find((a) => a.id === action.id);
   }
 }

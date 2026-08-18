@@ -308,6 +308,16 @@ export function arkFeature(ctx) {
     initArk();
   }
 
+  // Operator console rescue for a round participation stranded server-side
+  // 'unclaimed' (its action lost client-side): arkRescue('<unlockHash>',
+  // ['<vtxoId>', ...]) from devtools, ids supplied from the server's DB.
+  if (typeof globalThis !== 'undefined') {
+    globalThis.arkRescue = async (unlockHash, inputIds) => {
+      const mgr = await connectArk();
+      return mgr.rescueParticipation(unlockHash, inputIds);
+    };
+  }
+
   function connectArk() {
     if (ark) return Promise.resolve(ark);
     if (arkConnectPromise) return arkConnectPromise;

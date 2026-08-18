@@ -32,6 +32,9 @@ export function nostrLoginFeature(ctx) {
   // the user's real npub as their payment address (and nominate the wallet
   // key as manager, so later updates work without the signer).
   let live = null;
+  // true while a sign-in is mid-flight: the signer is live but its link to
+  // the wallet hasn't been persisted yet, so init() must not sever it
+  let attaching = false;
   let resuming = null;
   let resumeFailedAt = 0;
 
@@ -72,7 +75,7 @@ export function nostrLoginFeature(ctx) {
   };
 
   const busy = (v) => { ui.nostrLoginBusy = v; render(); };
-  const fail = (e) => { ui.nostrLoginError = e.message || String(e); busy(false); };
+  const fail = (e) => { attaching = false; ui.nostrLoginError = e.message || String(e); busy(false); };
 
   // Open the wallet a signer identifies. New accounts confirm first, because
   // publishing an encrypted seed to relays deserves an explicit yes.
@@ -93,9 +96,11 @@ export function nostrLoginFeature(ctx) {
       // so an extension login later finds this wallet instead of making a new
       // one. Costs nothing — anyone with the key could derive it anyway.
       if (res.publish) await publishWalletBackup(signer, { mnemonic: res.mnemonic }).catch(() => {});
+      attaching = true;
       live = selfHealing(signer);
       await ctx.openMnemonic(res.mnemonic, res.passphrase || '', { nostrPubkey: signer.pubkey });
       save({ ...load(), pubkey: signer.pubkey, linked: Date.now(), ...sessionOf(signer) });
+      attaching = false;
       // claim the real npub as the payment address while this signer is live
       ctx.hook('namesAdoptIdentity', signer, npubOf(signer.pubkey))?.catch?.(() => {});
       ctx.onbNostrLogin(res.mode === 'restored');
@@ -116,9 +121,11 @@ export function nostrLoginFeature(ctx) {
       const mnemonic = existing ? existing.mnemonic : newMnemonic();
       if (!existing) await publishWalletBackup(st.signer, { mnemonic });
       ui.nostrLoginNew = null;
+      attaching = true;
       live = selfHealing(st.signer);
       await ctx.openMnemonic(mnemonic, (existing && existing.passphrase) || '', { nostrPubkey: st.signer.pubkey });
       save({ ...load(), pubkey: st.signer.pubkey, linked: Date.now(), ...sessionOf(st.signer) });
+      attaching = false;
       ctx.hook('namesAdoptIdentity', st.signer, npubOf(st.signer.pubkey))?.catch?.(() => {});
       ctx.onbNostrLogin(!!existing);
       toast(existing ? t('nlOpenedRestored') : t('nlCreated'));
@@ -385,6 +392,14 @@ export function nostrLoginFeature(ctx) {
   return {
     id: 'nostrlogin',
     stop() { stopNostrConnect(); },
+    init() {
+      // A live signer is bound to the wallet that linked it. Switching to an
+      // account that never did must not inherit the login identity — it used
+      // to, and the fresh wallet then claimed names under the login npub,
+      // showed its profile, and even wore its hats. (Mid-sign-in the link
+      // isn't saved yet; `attaching` keeps this from severing it.)
+      if (live && !attaching && load().pubkey !== live.pubkey) live = null;
+    },
     // The nostr identity this session is logged in as, for features that
     // should speak as the user (the payment address defaults to this npub).
     nostrLoginIdentity() {

@@ -229,7 +229,10 @@ function footer() {
       h('a', { href: 'https://adamsoltys.com', target: '_blank', rel: 'noopener' }, 'Adam Soltys'),
       h('span', { class: 'faint' }, ' · '),
       t('footerSourceOn') + ' ',
-      h('a', { href: 'https://github.com/coinos/coinosv3', target: '_blank', rel: 'noopener' }, 'GitHub')
+      h('a', { href: 'https://github.com/coinos/coinosv3', target: '_blank', rel: 'noopener' }, 'GitHub'),
+      // The build stamp settles every "is my PWA fresh?" question at a glance
+      // ({{VERSION}} is filled at build time, like the service worker's).
+      h('span', { class: 'faint' }, ' · {{VERSION}}')
     ),
     h(
       'div',

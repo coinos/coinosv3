@@ -329,6 +329,13 @@ export function arkFeature(ctx) {
       arkUrl: cfg.ark,
       esploraUrl: cfg.esplora,
       network: getNetwork(),
+      // the wallet's own tx table as a second witness for confirmations —
+      // its data source is user-configurable and often healthier than the
+      // ark preset's esplora from this device
+      statusHint: (txid2) => {
+        const tx = (wallet.txs || []).find((t2) => t2.txid === txid2);
+        return tx && tx.confirmed ? { confirmed: true, block_height: tx.blockHeight || NaN } : null;
+      },
       onUpdate: () => render(),
     });
     ui.arkError = '';

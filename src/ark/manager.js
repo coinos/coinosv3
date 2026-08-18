@@ -63,11 +63,14 @@ const EMPTY_STATE = () => ({
 });
 
 export class ArkManager {
-  constructor({ account, storage, arkUrl, esploraUrl, network = 'regtest', onUpdate, lnQuoteUrl }) {
+  constructor({ account, storage, arkUrl, esploraUrl, network = 'regtest', onUpdate, lnQuoteUrl, statusHint }) {
     this.account = account;       // HDKey node; ark keys derived beneath it
     this.storage = storage;       // { load(): obj|null, save(obj): void }
     this.arkUrl = arkUrl;
     this.esploraUrl = esploraUrl;
+    // Optional second witness for tx confirmations (the wallet's own chain
+    // view) — consulted when the esplora above can't answer.
+    this.statusHint = statusHint || null;
     this.network = network;
     // where to ask what a lightning payment's route will cost (names /lnquote)
     this.lnQuoteUrl = lnQuoteUrl !== undefined ? lnQuoteUrl
@@ -188,7 +191,12 @@ export class ArkManager {
     const base = this.esploraUrl;
     return {
       tipHeight: async () => Number(await fetch(`${base}/blocks/tip/height`).then((r) => r.text())),
-      getTxStatus: async (txid) => fetch(`${base}/tx/${txid}/status`).then((r) => r.ok ? r.json() : null),
+      getTxStatus: async (txid) => {
+        const r = await fetch(`${base}/tx/${txid}/status`);
+        if (r.ok) return r.json();
+        if (r.status === 404) return null; // unknown tx is an answer
+        throw new Error(`chain status ${r.status}`); // rate limits etc must SURFACE
+      },
       getTxHex: async (txid) => fetch(`${base}/tx/${txid}/hex`).then((r) => r.ok ? r.text() : null),
       broadcastTx: async (txHex) => {
         const r = await fetch(`${base}/tx`, { method: 'POST', body: txHex });
@@ -1345,7 +1353,15 @@ export class ArkManager {
     const keys = this._key(action.keyIndex);
     if (action.step === 'funded') {
       const need = this.info.requiredBoardConfirmations;
-      const status = await this.chain.getTxStatus(action.fundingTxid);
+      let status = null, statusErr = null;
+      try { status = await this.chain.getTxStatus(action.fundingTxid); } catch (e) { statusErr = e; }
+      // The wallet's own chain view can vouch when the ark esplora can't
+      // (rate limits, bot walls) — both watch the same network.
+      if (!status?.confirmed && this.statusHint) {
+        const hint = this.statusHint(action.fundingTxid);
+        if (hint?.confirmed) { status = hint; statusErr = null; }
+      }
+      if (!status && statusErr) throw statusErr; // recorded as lastError → visible notice
       // record progress so the UI can say WHERE the wait is (n/need confs).
       // A confirmed status proves at least ONE confirmation on its own — the
       // tip fetch only refines the count, so its failure (rate limits) must
@@ -1353,7 +1369,8 @@ export class ArkManager {
       let confs = 0;
       if (status?.confirmed) {
         const tip = await this.chain.tipHeight().catch(() => null);
-        confs = tip != null && Number.isFinite(tip) ? tip - status.block_height + 1 : 1;
+        const delta = tip != null ? tip - status.block_height + 1 : NaN;
+        confs = Number.isFinite(delta) && delta > 0 ? delta : 1;
       }
       if (confs !== action.confs || need !== action.needConfs) { action.confs = confs; action.needConfs = need; this._save(); }
       if (!(confs >= need)) return; // retried on sync

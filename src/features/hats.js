@@ -295,9 +295,9 @@ export function hatsFeature(ctx) {
       demo(hat),
       h('div', { class: 'col grow', style: 'min-width:0;gap:1px' },
         h('div', { class: 'chat-name' }, t(hat.nameKey)),
-        hat.id === 'crown'
-          ? h('div', { class: 'muted small' }, t('hatCrownWho'))
-          : ownedHere ? h('div', { class: 'muted small' }, t('hatOwned')) : null),
+        ownedHere
+          ? h('div', { class: 'muted small' }, t('hatOwned'))
+          : hat.id === 'crown' ? h('div', { class: 'muted small' }, t('hatCrownWho')) : null),
       action);
   }
 
@@ -312,8 +312,10 @@ export function hatsFeature(ctx) {
         d === null
           ? h('div', { style: 'text-align:center;padding:16px' }, h('span', { class: 'spinner' }))
           : h('div', { class: 'col', style: 'gap:2px' },
-              // the crown is not merchandise — it never appears in the store
-              ...HATS.filter((hat) => hat.id !== 'crown').map((hat) => shopRow(hat, d, me))),
+              // the crown is not merchandise — it appears only in the
+              // collection of the head that owns it, never as a listing
+              ...HATS.filter((hat) => hat.id !== 'crown' || (d.owned || []).includes('crown'))
+                .map((hat) => shopRow(hat, d, me))),
         d && d.offline ? h('div', { class: 'small faint', style: 'text-align:center' }, t('hatShopOffline')) : null),
       h('button', { class: 'btn-ghost btn-block', onClick: closeShop }, t('back')));
   }

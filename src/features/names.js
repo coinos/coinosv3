@@ -593,10 +593,24 @@ export function namesFeature(ctx) {
     // instead of leaving a picked name looking ignored.
     sendFormNote(a) {
       const nr = ui.nameResolve;
-      if (!nr || nr.text !== a) return null;
-      return h('div', { class: 'row gap6', style: 'align-items:center;justify-content:center' },
-        h('span', { class: 'spinner sm' }),
-        h('span', { class: 'small muted' }, t('namesResolving', { name: String(a || '').trim() })));
+      if (nr && nr.text === a) {
+        return h('div', { class: 'row gap6', style: 'align-items:center;justify-content:center' },
+          h('span', { class: 'spinner sm' }),
+          h('span', { class: 'small muted' }, t('namesResolving', { name: String(a || '').trim() })));
+      }
+      // A TYPED name on one of our domains: offer the native send (BIP-353 →
+      // instant ark) as a button, mirroring the zap affordance — typed input
+      // never auto-advances, since a half-typed domain parses as a name too.
+      // This note outranks the zaps one (feature order), so our names get the
+      // free instant rail instead of an LNURL round-trip.
+      const parsed = parsePaymentName(a);
+      if (parsed && OUR_DOMAINS.includes(parsed.domain) && hook('arkReady')) {
+        return h('button', {
+          type: 'button', class: 'btn-primary btn-block',
+          onClick: () => beginResolve(a),
+        }, t('namesSendTo', { name: `${parsed.name}@${parsed.domain}` }));
+      }
+      return null;
     },
     settingsCards() { return [namesCard()]; },
   };

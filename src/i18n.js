@@ -656,6 +656,7 @@ const STR = {
     namesDesc: 'Claim your payment address — like you@coinos.io. People can pay you just by typing it, no codes to copy or QR to scan.',
     namesPlaceholder: 'username',
     namesResolving: 'Looking up {name}…',
+    namesSendTo: 'Send to {name}',
     namesClaim: 'Claim',
     namesClaimed: 'You are now {name}',
     namesCopy: 'Copy address',

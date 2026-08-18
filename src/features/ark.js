@@ -2133,6 +2133,24 @@ export function arkFeature(ctx) {
     canLnPay() { return arkAvailable() && !wallet.watchOnly && !!(ark && ark.info); },
     lnSpendableSat() { const b = arkBalance(); return b ? b.spendableSat : 0; },
     settingsCards() { return [autoWithdrawCard()]; },
+    // A payment wants more Spending than exists: open the board panel with a
+    // prefill that nets out to the need (gross of the board fee, with a bit
+    // of routing headroom) — editable, so boarding extra is one keystroke.
+    arkOfferBoard(needSat) {
+      if (!arkAvailable() || wallet.watchOnly) return false;
+      const b = arkBalance();
+      const have = b ? b.spendableSat : 0;
+      const short = Math.max(0, Math.ceil(needSat * 1.01) + 2 - have);
+      let gross = short;
+      try { for (let i = 0; i < 4; i++) gross = short + boardFee(gross, ark.info.boardFees); } catch {}
+      const minBoard = (ark && ark.info && ark.info.minBoardAmountSat) || 0;
+      ctx.goHome();
+      ui.arkMoveOpen = true;
+      ui.arkMoveDir = 'toSpending';
+      ui.arkBoardAmt = String(Math.max(gross, minBoard));
+      render();
+      return true;
+    },
     startLnPay(invoice, meta) { return startArkLnPay(invoice, meta); },
     // ---- headless seam for the NWC wallet service ----
     arkPayInvoice(invoice, opts) { return payInvoiceHeadless(invoice, opts); },

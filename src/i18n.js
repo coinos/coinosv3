@@ -195,6 +195,7 @@ const STR = {
     msgNpubPlaceholder: 'npub…',
     msgSearchPlaceholder: 'Name or npub…',
     zapNoBalance: "There's not enough in Spending to send a zap — move some money into Spending first.",
+    zapBoardBtn: 'Move sats into Spending',
     msgPushOffer: 'Get notified when you receive payments and messages, even with coinos closed.',
     msgPushEnable: 'Enable notifications',
     msgPushOn: 'Notifications on',

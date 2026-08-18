@@ -158,22 +158,24 @@ export function zapsFeature(ctx) {
     const max = Math.min(Math.floor(p.maxSendable / 1000), ours != null ? ours : Infinity);
     const broke = ours != null && (ours <= 0 || max < min);
     const commentOk = p.allowsNostr || p.commentAllowed > 0;
-    if (broke) {
-      return h('div', { class: 'card col', style: 'gap:12px' },
-        h('h3', {}, '⚡ ' + t('zapTitle')),
-        (z.target && z.target.pk && hook('profileChip', z.target.pk, 'lg')) || h('div', { class: 'small muted', style: 'word-break:break-all' }, z.name || z.address || ''),
-        h('div', { class: 'notice info' }, t('zapNoBalance')),
-        h('button', { class: 'btn-ghost btn-block', onClick: back }, t('back')));
-    }
+    // An amount Spending can't cover isn't a dead end when Savings can: the
+    // primary button turns into the door to the board panel, prefilled with
+    // what this payment needs (extra is one edit away).
+    const typedSats = parseAmount(z.amount, getUnit()) || 0;
+    const theirMaxSat = Math.floor(p.maxSendable / 1000);
+    const boardable = !!hook('arkReady') && ours != null;
+    const needsBoard = boardable && (broke || (typedSats > 0 && typedSats > ours && typedSats <= theirMaxSat));
     return h('div', { class: 'card col', style: 'gap:12px' },
       h('h3', {}, '⚡ ' + t('zapTitle')),
       (z.target && z.target.pk && hook('profileChip', z.target.pk, 'lg')) || h('div', { class: 'small muted', style: 'word-break:break-all' }, z.name || z.address || ''),
       h('div', { class: 'col gap6' },
         h('div', { class: 'input-group' },
           h('input', { type: 'number', min: '0', inputmode: 'decimal', placeholder: t('lnPayAmount'), value: z.amount,
-            onInput: (e) => { z.amount = e.target.value; } }),
+            onInput: (e) => { z.amount = e.target.value; render(); } }),
           h('div', { style: 'display:flex;align-items:center' }, unitTag())),
-        h('div', { class: 'small faint' }, `Min ${min.toLocaleString()} · max ${max.toLocaleString()} sats`),
+        broke
+          ? h('div', { class: 'notice info' }, t('zapNoBalance'))
+          : h('div', { class: 'small faint' }, `Min ${min.toLocaleString()} · max ${max.toLocaleString()} sats`),
         commentOk
           ? h('input', { type: 'text', class: 'mono-input', placeholder: t('arkZapCommentPh'), value: z.comment,
               maxlength: p.allowsNostr ? '280' : String(p.commentAllowed || 280),
@@ -183,7 +185,9 @@ export function zapsFeature(ctx) {
       z.error ? h('div', { class: 'notice err' }, z.error) : null,
       h('div', { class: 'row gap6' },
         h('button', { class: 'btn-ghost', onClick: back }, t('back')),
-        h('button', { class: 'btn-primary grow', onClick: confirm }, t('arkZapBtn'))));
+        needsBoard
+          ? h('button', { class: 'btn-primary grow', onClick: () => hook('arkOfferBoard', typedSats || min) }, t('zapBoardBtn'))
+          : h('button', { class: 'btn-primary grow', onClick: confirm, disabled: broke }, t('arkZapBtn'))));
   }
 
   return {

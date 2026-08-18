@@ -389,9 +389,51 @@ export function nostrLoginFeature(ctx) {
       linkSection());
   }
 
+  // The reconnect takeover: opened by any feature whose action just found
+  // the signer missing (a reload dropped it; Amethyst and friends can't
+  // reattach silently). Same guarded buttons as the settings card — an
+  // extension, the signer-app deeplink/QR, or a pasted key — and the run
+  // refuses a different account.
+  function reconnectScreen() {
+    const st = load();
+    const run = (makeSigner) => reconnectSigner(makeSigner).then(() => {
+      if (live) { ui.nostrReconnect = null; render(); }
+    });
+    return h('div', { class: 'col', style: 'gap:16px' },
+      ctx.brandHeader(false),
+      h('div', { class: 'card col', style: 'gap:12px' },
+        h('h3', { style: 'margin:0' }, t('nlReconnectTitle')),
+        h('p', { class: 'small muted', style: 'margin:0' }, t('nlReconnectBody', { npub: (npubOf(st.pubkey) || '').slice(0, 12) })),
+        signerButtons(run),
+        ui.nostrLoginError ? h('div', { class: 'notice err' }, ui.nostrLoginError) : null),
+      h('button', { class: 'btn-ghost btn-block', onClick: () => {
+        stopNostrConnect();
+        ui.nostrReconnect = null; ui.nostrConnectOpen = false; ui.nostrLoginError = '';
+        render();
+      } }, t('back')));
+  }
+
   return {
     id: 'nostrlogin',
     stop() { stopNostrConnect(); },
+    screenView() {
+      if (ui.screen !== 'wallet' || !ui.nostrReconnect) return null;
+      return reconnectScreen();
+    },
+    // An action needed the login signer and it isn't there: open the
+    // reconnect screen (and try the silent extension reattach in the
+    // background — it closes the screen by itself when it lands).
+    nostrReconnectPrompt() {
+      const st = load();
+      if (!st.pubkey || live) return false;
+      ui.nostrReconnect = true;
+      ui.nostrLoginError = '';
+      this.nostrLoginResume().then((sg) => {
+        if (sg && ui.nostrReconnect) { ui.nostrReconnect = null; render(); }
+      }).catch(() => {});
+      render();
+      return true;
+    },
     init() {
       // A live signer is bound to the wallet that linked it. Switching to an
       // account that never did must not inherit the login identity — it used

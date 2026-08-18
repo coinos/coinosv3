@@ -230,7 +230,11 @@ export function hatsFeature(ctx) {
     render();
     try {
       const id = await identity();
-      if (!id) throw new Error(t('msgNoIdentity'));
+      if (!id) {
+        if (!hook('nostrReconnectPrompt')) toast(t('msgNoIdentity'));
+        ui.hatBuying = null; ui.hatConfirm = null; render();
+        return;
+      }
       const inv = await post('/hats/invoice', { hat: hat.id, net: hatNet() }, id.signer);
       await hook('arkPayInvoice', inv.invoice, { maxAmountSat: inv.sat });
       const rec = await post('/hats/claim', { paymentHash: inv.paymentHash, hat: hat.id, net: hatNet() }, id.signer);
@@ -252,7 +256,11 @@ export function hatsFeature(ctx) {
     render();
     try {
       const id = await identity();
-      if (!id) throw new Error(t('msgNoIdentity'));
+      if (!id) {
+        if (!hook('nostrReconnectPrompt')) toast(t('msgNoIdentity'));
+        ui.hatBuying = null; render();
+        return;
+      }
       const rec = await post('/hats/equip', { hat: hatId, net: hatNet() }, id.signer);
       ui.hatShopData = { ...ui.hatShopData, owned: rec.owned, equipped: rec.equipped };
       worn.set(hatNet() + ':' + id.pubkey, { hat: rec.equipped, t: Date.now() });

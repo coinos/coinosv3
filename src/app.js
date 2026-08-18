@@ -2268,6 +2268,7 @@ function goHome() {
     ui.arkExitPage = null;
     ui.settingsPage = null;
     ui.logoutConfirm = null;
+    ui.nostrReconnect = null;
     ui.addrScan = false;
     ui.arkMoveOpen = false;
     ui.nameEditOpen = null;

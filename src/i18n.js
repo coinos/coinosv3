@@ -649,6 +649,8 @@ const STR = {
     nlConnected: 'connected',
     nlDisconnected: 'not connected',
     nlReconnectDesc: "Your signer isn't connected, so this app can't sign as you. Reconnect it to post and update your profile — your wallet and balance aren't affected.",
+    nlReconnectTitle: 'Reconnect your signer',
+    nlReconnectBody: 'Your Nostr signer isn’t connected on this device. Reconnect to keep acting as {npub}…',
     nlWrongAccount: 'That signer is a different Nostr account. Reconnect with {npub}.',
     nlLinked: 'Wallet linked to your Nostr account',
     nlNeedSeed: 'This wallet has no recovery phrase loaded.',

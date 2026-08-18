@@ -155,7 +155,12 @@ export function messagesFeature(ctx) {
   const isMe = (pk) => myPubkeys().includes(pk);
   // "No identity" while soft-locked means the keys left with the lock — say
   // that, not "signer disconnected" (which reads as a nostr-login problem).
-  const noIdToast = () => toast(t(wallet.watchOnly ? 'msgLockedChat' : 'msgNoIdentity'));
+  const noIdToast = () => {
+    // A missing signer gets the reconnect screen, not a dead-end toast —
+    // logging out and back in was the workaround nobody should need.
+    if (!wallet.watchOnly && hook('nostrReconnectPrompt')) return;
+    toast(t(wallet.watchOnly ? 'msgLockedChat' : 'msgNoIdentity'));
+  };
 
   // ---- shared runtime -----------------------------------------------------
 

@@ -3145,8 +3145,11 @@ function balanceCard() {
     // pointless (and confusing) while there's only one.
     ...(hasSpending ? featureAll('balanceActions') : []).map((a2) =>
       h('button', { class: 'btn-sm', style: 'margin-top:10px', onClick: a2.onClick }, a2.label)),
-    (ui.account === 'spending' || (kindLocked && acc0.kind === 'spending')) && !hasSpending
-      && featureHook('arkReady') && !wallet.watchOnly
+    // A seed with only a Savings side is one tap from growing a Spending one:
+    // the offer sits right on the balance card, not hidden behind Add wallet.
+    // (Single-purpose Savings wallets keep their purpose — Add wallet covers
+    // them; watch-only can't spend at all.)
+    !hasSpending && !kindLocked && featureHook('arkReady') && !wallet.watchOnly && acc0 && acc0.type === 'full'
       ? h('button', { class: 'btn-sm', style: 'margin-top:10px', onClick: () => { ui.onbError = ''; ui.onb = { step: 'spend' }; render(); } }, t('spendSetup'))
       : null,
     // A feature can unfold UI right on the card (ark's inline move panel).

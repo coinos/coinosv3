@@ -612,7 +612,7 @@ const STR = {
     onbDoneTitle: "You're all set!",
     onbDoneBody: 'Your spending account is set up — your address is live and the coinos community chat is waiting for you.',
     onbEnter: 'Enter coinos',
-    spendSetup: 'Set up Spending',
+    spendSetup: 'Set up a spending account',
     nlConnectApp: '📱 Connect a signer app',
     nlOpenSigner: 'Open signer app',
     nlWaitingSigner: 'Waiting for your signer to connect…',

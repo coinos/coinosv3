@@ -409,6 +409,32 @@ function animatedAmount(key, sat) {
 }
 
 function render() {
+  // A render that throws must never brick the page silently: stale DOM keeps
+  // its handlers, every one of them calls render again, and every tap turns
+  // into a no-op. Show the error and offer the way out instead.
+  try { renderInner(); } catch (err) { renderCrash(err); }
+}
+function renderCrash(err) {
+  console.error('render failed:', err);
+  try {
+    const div = document.createElement('div');
+    div.className = 'card col';
+    div.style.cssText = 'margin:20px;gap:10px';
+    const h3 = document.createElement('h3');
+    h3.textContent = 'Something broke';
+    const pre = document.createElement('div');
+    pre.className = 'small muted';
+    pre.style.cssText = 'word-break:break-word;white-space:pre-wrap';
+    pre.textContent = String((err && (err.stack || err.message)) || err).slice(0, 600);
+    const btn = document.createElement('button');
+    btn.className = 'btn-primary btn-block';
+    btn.textContent = 'Reload';
+    btn.onclick = () => location.reload();
+    div.append(h3, pre, btn);
+    root.replaceChildren(div);
+  } catch {}
+}
+function renderInner() {
   // A direct render subsumes any coalesced one queued by a background emit, so
   // drop the pending one (a user action must not trigger a second rebuild).
   if (_renderRaf) { clearTimeout(_renderRaf); _renderRaf = 0; }

@@ -262,7 +262,31 @@ export function namesFeature(ctx) {
 
   // ---- UI ---------------------------------------------------------------
 
+  // Suggest the identity's own nostr username as the claim default — nobody
+  // should have to retype who they already are — but only when that name is
+  // actually free on the registrar (or already theirs to retake).
+  let suggestedFor = null;
+  function suggestName() {
+    const me = (hook('nostrLoginIdentity') || {}).pubkey || (wallet.nostrPubkey && wallet.nostrPubkey());
+    if (!me || suggestedFor === me || ui.nameClaim) return;
+    suggestedFor = me;
+    (async () => {
+      try {
+        const prof = hook('cachedProfile', me);
+        const cand = String((prof && prof.name) || '').toLowerCase().replace(/[^a-z0-9._-]/g, '').slice(0, 30);
+        if (!cand || /^npub1/.test(cand)) return;
+        const r = await withTimeout(
+          fetch(`${REGISTRAR}/name/${encodeURIComponent(cand)}?domain=${encodeURIComponent(DOMAIN())}`).then((x) => x.json()),
+          8000, 'registrar');
+        const free = r && r.taken === false;
+        const mine = r && r.taken && r.pubkey === me;
+        if ((free || mine) && !ui.nameClaim) { ui.nameClaim = cand; render(); }
+      } catch {}
+    })();
+  }
+
   function claimForm(big) {
+    suggestName();
     return h('div', { class: 'col', style: 'gap:8px;width:100%' },
       ui.nameClaimError ? h('div', { class: 'notice err' }, ui.nameClaimError) : null,
       h('div', { class: 'row gap6' },

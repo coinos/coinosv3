@@ -429,11 +429,21 @@ export function arkFeature(ctx) {
       row(t('arkPayTo'), shortAddr(a.address, 14)),
       row(t('networkFee'), t('arkNoFee')),
       ui.sendError ? h('div', { class: 'notice err' }, ui.sendError) : null,
+      // An amount Spending can't cover isn't a dead end while Savings can:
+      // the Send button becomes the door to the board panel, prefilled with
+      // what this payment needs — instead of letting the send run into an
+      // "insufficient ark balance" wall.
       h('div', { class: 'row gap6' },
         h('button', { class: 'btn-ghost', onClick: () => { ui.arkSend = null; ui.sendError = ''; render(); } }, t('back')),
         ui.busy
           ? h('button', { class: 'btn-primary grow', disabled: true }, h('span', { class: 'spinner' }))
-          : h('button', { class: 'btn-primary grow', onClick: doArkSend }, t('arkSendBtn'))
+          : a.amountSat > (arkBalance()?.spendableSat || 0) && wallet.spendable > 0 && !wallet.watchOnly
+            ? h('button', { class: 'btn-primary grow', onClick: () => {
+                const need = a.amountSat;
+                ui.arkSend = null; ui.sendError = '';
+                ctx.hook('arkOfferBoard', need);
+              } }, t('zapBoardBtn'))
+            : h('button', { class: 'btn-primary grow', onClick: doArkSend }, t('arkSendBtn'))
       )
     );
   }

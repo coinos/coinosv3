@@ -55,8 +55,25 @@ export function namesFeature(ctx) {
     return j;
   }
 
-  const load = () => wallet.loadFeatureState('names', {});
-  const save = (st) => wallet.saveFeatureState('names', st);
+  // One name PER DOMAIN: mainnet and staging claims live side by side in the
+  // wallet's state instead of overwriting each other on a network switch.
+  // Legacy flat state ({name, domain, …}) reads/migrates into its domain slot.
+  const loadAll = () => wallet.loadFeatureState('names', {});
+  const load = () => {
+    const all = loadAll();
+    if (all.byDomain) return all.byDomain[DOMAIN()] || {};
+    if (all.name) return (all.domain || 'coinos.io') === DOMAIN() ? all : {};
+    return {};
+  };
+  const save = (st) => {
+    const all = loadAll();
+    const byDomain = all.byDomain || {};
+    if (!all.byDomain && all.name) {
+      byDomain[all.domain || 'coinos.io'] = { name: all.name, domain: all.domain || 'coinos.io', uri: all.uri, offerPk: all.offerPk, updated: all.updated };
+    }
+    byDomain[DOMAIN()] = st;
+    wallet.saveFeatureState('names', { byDomain });
+  };
 
   // Mainnet and mutinynet: staging's play network gets the full payment-
   // address experience (claims already registered fine — the record simply
@@ -113,7 +130,7 @@ export function namesFeature(ctx) {
       const pk = wallet.nostrPubkey && wallet.nostrPubkey();
       if (!pk) return;
       const r = await withTimeout(
-        fetch(`${REGISTRAR}/pubkey/${pk}`).then((x) => x.json()), 12000, 'registrar');
+        fetch(`${REGISTRAR}/pubkey/${pk}?domain=${encodeURIComponent(DOMAIN())}`).then((x) => x.json()), 12000, 'registrar');
       if (r && r.name) save({ ...load(), name: r.name, domain: r.domain || DOMAIN(), uri: r.uri });
     } catch (e) { console.warn('names: lookup failed —', e.message); }
   }
@@ -143,6 +160,23 @@ export function namesFeature(ctx) {
       }
       let st = load();
       if (!st.name) { await lookupMine(); st = load(); }
+      // A custom name claimed on ANOTHER DEVICE by the login identity beats a
+      // local npub placeholder: the username people know the user by should
+      // show everywhere they sign in, not only where they typed it.
+      if (!st.name || /^npub1/.test(st.name)) {
+        const login = hook('nostrLoginIdentity');
+        if (login && login.pubkey) {
+          try {
+            const r = await withTimeout(
+              fetch(`${REGISTRAR}/pubkey/${login.pubkey}?domain=${encodeURIComponent(DOMAIN())}`).then((x) => x.json()),
+              8000, 'registrar');
+            if (r && r.name && !/^npub1/.test(r.name)) {
+              save({ ...st, name: r.name, domain: r.domain || DOMAIN(), uri: r.uri });
+              st = load();
+            }
+          } catch {}
+        }
+      }
       if (!st.name) {
         // The address people see should be the identity they know the user
         // by: their real npub when a nostr account is linked, else the

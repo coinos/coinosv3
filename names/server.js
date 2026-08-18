@@ -665,8 +665,11 @@ Bun.serve({
     // username again without the user retyping it. Public data (DNS is public).
     const pm = url.pathname.match(/^\/pubkey\/([0-9a-f]{64})$/);
     if (pm && req.method === 'GET') {
+      // optional domain filter, so a staging claim can't shadow a mainnet
+      // name (or vice versa) when a wallet asks who it is
+      const domFilter = (url.searchParams.get('domain') || '').toLowerCase();
       const mine = Object.entries(state.names)
-        .filter(([, r]) => r.pubkey === pm[1])
+        .filter(([k, r]) => r.pubkey === pm[1] && (!domFilter || k.endsWith('@' + domFilter)))
         .sort((a, b) => (b[1].updated || 0) - (a[1].updated || 0));
       if (!mine.length) return json({});
       const [key, r] = mine[0];

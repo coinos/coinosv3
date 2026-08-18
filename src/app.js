@@ -2990,7 +2990,18 @@ const ACCOUNT_KEY = 'btc-wallet-account';
 function spendingActive() {
   if (!featureHook('arkReady')) return false;
   const acc = activeAccount();
-  if (acc?.spendingSetup) return true;
+  if (acc?.spendingSetup) {
+    // Self-heal a flag latched by the old cross-network name leak: off
+    // mainnet, a Spending side with zero balance AND no ark history was
+    // never really set up — drop it. A real receive re-latches instantly.
+    if (getNetwork() !== 'mainnet' && !(featureHook('spendingSat') || 0)
+        && !(featureHook('arkMovements') || []).length) {
+      delete acc.spendingSetup;
+      persistAccounts();
+    } else {
+      return true;
+    }
+  }
   // A claimed payment address proves spending on MAINNET only: names feature
   // state is stored per-wallet without a network, so a mainnet name would
   // otherwise conjure a Spending wallet on mutinynet nobody set up.

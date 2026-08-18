@@ -1105,6 +1105,7 @@ async function activateAccount(acc, opts = {}) {
   // so the celebration never fires for payments that were already there at
   // import (the index only looks "advanced" because the scan hadn't run yet).
   ui.receiveSeenIndex = null;
+  ui.arkRecvAddr = null; // the ark receive address belongs to one wallet+network
   ui.send = blankSend();
   ui.draft = null;
   ui.sendResult = null;
@@ -2867,10 +2868,16 @@ function onboardScreen() {
       // network without names, or skipping the spend step, must not conjure
       // a Spending wallet nobody asked for.
       const acc = activeAccount();
-      // same mainnet-only rule as spendingActive: a stored mainnet name must
-      // not vouch for spending on another network
-      const addr = getNetwork() === 'mainnet' ? featureHook('namesAddress') : null;
-      const spendReady = (!!addr && !/^npub1/.test(addr)) || (featureHook('spendingSat') || 0) > 0;
+      // A name claimed DURING this wizard run (it differs from the address
+      // recorded on entry) is explicit setup on any network — that's the user
+      // opting in, not stale evidence. Otherwise the mainnet-only rule from
+      // spendingActive applies: a stored mainnet name must not vouch for
+      // spending on another network.
+      const addr = featureHook('namesAddress');
+      const named = !!addr && !/^npub1/.test(addr);
+      const claimedNow = named && addr !== o.enterAddr;
+      const spendReady = claimedNow || (featureHook('spendingSat') || 0) > 0
+        || (getNetwork() === 'mainnet' && named);
       if (spendReady) {
         if (acc && !acc.spendingSetup) { acc.spendingSetup = true; persistAccounts(); }
         ui.account = 'spending';
@@ -2990,6 +2997,9 @@ const ACCOUNT_KEY = 'btc-wallet-account';
 function spendingActive() {
   if (!featureHook('arkReady')) return false;
   const acc = activeAccount();
+  // A single-purpose spending wallet IS the opt-in — the user created it by
+  // picking "Spending" in Add wallet; no further evidence required.
+  if (acc?.kind === 'spending') return true;
   if (acc?.spendingSetup) {
     // Self-heal a flag latched by the old cross-network name leak: off
     // mainnet, a Spending side with zero balance AND no ark history was
@@ -3258,6 +3268,23 @@ function receiveTab() {
         h('div', { class: 'notice info' }, t('receiveOfflineSpending')),
         h('button', { class: 'btn-primary btn-block', onClick: () => setAccountSel('savings') }, t('receiveUseSavings')));
     if (nameMode) return nameMode.render(null);
+    // No payment address off mainnet — show the reusable ark address rather
+    // than silently falling back to an on-chain one that isn't Spending.
+    if (featureHook('arkReady')) {
+      if (!ui.arkRecvAddr) {
+        Promise.resolve(featureHook('arkStaticAddress'))
+          .then((a2) => { if (a2 && ui.arkRecvAddr !== a2) { ui.arkRecvAddr = a2; render(); } })
+          .catch(() => {});
+        return h('div', { class: 'card col', style: 'align-items:center;padding:24px' }, h('span', { class: 'spinner' }));
+      }
+      return h(
+        'div',
+        { class: 'card col', style: 'align-items:center;gap:14px' },
+        h('div', { html: qrSvg(ui.arkRecvAddr) }),
+        h('div', { class: 'addr-box break', style: 'width:100%' }, ui.arkRecvAddr),
+        copyBtn(ui.arkRecvAddr, t('copyAddress'))
+      );
+    }
   }
   const addr = fresh.address;
   return h(

@@ -2699,15 +2699,21 @@ function onboardScreen() {
     if (addr && addr !== o.enterAddr && !/^npub1/.test(addr)) {
       // The avatar ask is for brand-new profiles. An identity that already
       // wears a face (a nostr login with a published picture) skips straight
-      // to done — the punk picker restyling a real profile helps nobody.
+      // past the punk picker — restyling a real profile helps nobody.
       const me = (featureHook('nostrLoginIdentity') || {}).pubkey || (wallet.nostrPubkey && wallet.nostrPubkey());
       const prof = me ? featureHook('cachedProfile', me) : null;
-      o.step = prof && prof.picture ? 'success' : 'avatar';
+      o.step = prof && prof.picture ? nextAfterAvatar() : 'avatar';
     }
   }
   try { localStorage.setItem(ONB_STEP_KEY, o.step); } catch {}
   const page = (kids) => h('div', { class: 'col onb', style: 'gap:20px' }, ...kids);
   const title = (txt) => h('h2', { class: 'onb-title' }, txt);
+  // After the identity niceties: offer a first top-up when Savings can fund
+  // one and Spending is empty-handed — a spending account with nothing in it
+  // is a demo, not a wallet.
+  const nextAfterAvatar = () =>
+    (featureHook('arkReady') && wallet.spendable > 1000 && (featureHook('spendingSat') || 0) < 1000)
+      ? 'board' : 'success';
 
   if (o.step === 'legacy') {
     // The migrate link carries this wallet's payment address, which the
@@ -2852,7 +2858,7 @@ function onboardScreen() {
             try { await featureHook('publishProfile', fields, { fillOnly: o.avatar ? ['name'] : ['name', 'picture'] }); }
             catch (e) { toast(t('onbProfileSkipped')); console.warn('onboarding: profile publish failed —', e.message); }
           }
-          o.step = 'success';
+          o.step = nextAfterAvatar();
         } catch (e) { ui.onbError = e.message; }
         ui.onbBusy = false; render();
       } }, ui.onbBusy ? h('span', { class: 'spinner sm' }) : (o.avatar ? t('onbContinue') : t('onbSkipAvatar'))),
@@ -2862,6 +2868,16 @@ function onboardScreen() {
         o.enterAddr = featureHook('namesAddress') || null;
         o.step = 'spend'; render();
       } }, t('back')),
+    ]);
+  }
+  if (o.step === 'board') {
+    return page([
+      title(t('onbBoardTitle')),
+      h('p', { class: 'muted', style: 'margin:0' }, t('onbBoardBody')),
+      featureHook('arkBoardForm')
+        || h('div', { class: 'row gap6', style: 'align-items:center;justify-content:center' },
+             h('span', { class: 'spinner sm' }), h('span', { class: 'small muted' }, t('arkConnecting'))),
+      h('button', { class: 'btn-primary btn-block', style: 'padding:14px', onClick: () => { o.step = 'success'; render(); } }, t('onbContinue')),
     ]);
   }
   // success
@@ -3162,6 +3178,12 @@ function balanceCard() {
     // of the niceties can't take it away — then walks the username + avatar
     // steps, since a spending account is best enjoyed with a payment address.
     // (Explicit latches carry a timestamp; self-heal only eats legacy booleans.)
+    // A Spending face running on fumes while Savings sits comfortable gets a
+    // one-tap top-up into the board panel.
+    hasSpending && isSpending && !ui.arkMoveOpen && spending < 1000 && wallet.spendable > 1000
+      && featureHook('arkReady') && !wallet.watchOnly
+      ? h('button', { class: 'btn-sm', style: 'margin-top:10px', onClick: () => { ui.arkMoveDir = 'toSpending'; ui.arkMoveOpen = true; render(); } }, t('topUpFromSavings'))
+      : null,
     !hasSpending && !kindLocked && featureHook('arkReady') && !wallet.watchOnly && acc0 && acc0.type === 'full'
       ? h('button', { class: 'btn-sm', style: 'margin-top:10px', onClick: () => {
           acc0.spendingSetup = Date.now();

@@ -2133,6 +2133,12 @@ export function arkFeature(ctx) {
     canLnPay() { return arkAvailable() && !wallet.watchOnly && !!(ark && ark.info); },
     lnSpendableSat() { const b = arkBalance(); return b ? b.spendableSat : 0; },
     settingsCards() { return [autoWithdrawCard()]; },
+    // The onboarding wizard's top-up step borrows the board form wholesale.
+    arkBoardForm() {
+      if (!arkAvailable() || wallet.watchOnly) return null;
+      if (!ark) { connectArk().catch(() => {}); return null; }
+      return boardForm();
+    },
     // A payment wants more Spending than exists: open the board panel with a
     // prefill that nets out to the need (gross of the board fee, with a bit
     // of routing headroom) — editable, so boarding extra is one keystroke.

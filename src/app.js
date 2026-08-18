@@ -231,9 +231,9 @@ function footer() {
       t('footerSourceOn') + ' ',
       h('a', { href: 'https://github.com/coinos/coinosv3', target: '_blank', rel: 'noopener' }, 'GitHub'),
       // The commit stamp settles "is my PWA fresh?" AND "what code is this?"
-      // in one glance — filled at build time, links to the commit on GitHub.
-      h('span', { class: 'faint' }, ' · '),
-      h('a', { class: 'faint', href: 'https://github.com/coinos/coinosv3/commit/{{COMMIT}}', target: '_blank', rel: 'noopener' }, 'commit {{COMMIT}}')
+      // in one glance — filled at build time; the hash links to GitHub.
+      h('span', { class: 'faint' }, ' · Running '),
+      h('a', { class: 'faint', href: 'https://github.com/coinos/coinosv3/commit/{{COMMIT}}', target: '_blank', rel: 'noopener' }, '{{COMMIT}}')
     ),
     h(
       'div',

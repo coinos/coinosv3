@@ -376,6 +376,16 @@ export function messagesFeature(ctx) {
     save(s);
   }
 
+  // The morph never rewrites a focused field's value (it would fight the user
+  // mid-keystroke), and the composer is focused at the moment you send — so
+  // clearing ui.msgDraft alone leaves the sent text sitting in the input.
+  // Clear the live element too.
+  function clearDraft() {
+    ui.msgDraft = '';
+    const inp = document.getElementById('msg-draft');
+    if (inp) inp.value = '';
+  }
+
   async function sendMessage(room, chId) {
     const text = (ui.msgDraft || '').trim();
     if (!text || ui.msgSending) return;
@@ -397,7 +407,7 @@ export function messagesFeature(ctx) {
         const msgs = room.byChannel.get(chId) || room.byChannel.set(chId, new Map()).get(chId);
         msgs.set(opened.rumor.id, opened);
       }
-      ui.msgDraft = '';
+      clearDraft();
       const ok = await publishOn(room.relays, wrap);
       if (!ok) toast(t('msgSendFailed'));
       ensureJoined(room, id).catch(() => {});
@@ -1003,7 +1013,7 @@ export function messagesFeature(ctx) {
     try {
       const { rumor, toPeer, toSelf } = await makeDM(id.signer, peer, text);
       noteDM(peer, rumor, true);
-      ui.msgDraft = '';
+      clearDraft();
       const inbox = (await fetchInboxRelays(peer)).slice(0, 4);
       const ok = await publishOn([...new Set([...inbox, ...DM_RELAYS])], toPeer);
       publishOn(DM_RELAYS, toSelf);

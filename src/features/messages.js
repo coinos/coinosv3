@@ -394,8 +394,9 @@ export function messagesFeature(ctx) {
     const id = await identity();
     if (!id) { noIdToast(); return; }
     // The rumor id is a plain hash, so the message can be on screen before
-    // any signing, encryption or network runs. The pending flag renders as a
-    // dimmed bubble; a relay accepting the wrap brings it to full strength.
+    // any signing, encryption or network runs. The pending flag never shows —
+    // it only keeps unconfirmed messages out of the cache and marks what to
+    // withdraw if signing fails.
     const { created_at, ms } = msTags(Date.now());
     const rumor = rumorWithId({
       kind: 9, pubkey: id.pubkey, content: text,
@@ -411,9 +412,8 @@ export function messagesFeature(ctx) {
       const wrap = await wrapRumor(rumor, id.signer, room.chStream(chId));
       seenWraps.add(wrap.id); // our own echo has nothing to add
       const ok = await publishOn(room.relays, wrap);
-      if (!ok) { toast(t('msgSendFailed')); return; } // stays dimmed
+      if (!ok) { toast(t('msgSendFailed')); return; }
       delete entry.pending;
-      render();
       ensureJoined(room, id).catch(() => {});
       persistCache(room);
     } catch (e) {
@@ -1012,9 +1012,8 @@ export function messagesFeature(ctx) {
     const id = await identity();
     if (!id) { noIdToast(); return; }
     if (!(id.signer instanceof Uint8Array) && !id.signer.encryptTo) { toast(t('msgSignerNoDm')); return; }
-    // Same optimistic shape as channel sends: the rumor is synchronous, the
-    // bubble shows dimmed at once, and undims when a relay takes the
-    // recipient's wrap. Wrapping the same rumor keeps the id, so the sent-copy
+    // Same optimistic shape as channel sends: the rumor is synchronous and on
+    // screen at once. Wrapping the same rumor keeps the id, so the sent-copy
     // echo folds into this entry instead of duplicating it.
     const rumor = makeDMRumor(id.pubkey, peer, text);
     const entry = { rumor, mine: true, pending: true };
@@ -1026,12 +1025,17 @@ export function messagesFeature(ctx) {
       // Sequential on purpose — a remote signer is happier signing one at a time.
       const toPeer = await wrapDM(id.signer, peer, rumor);
       const toSelf = await wrapDM(id.signer, id.pubkey, rumor);
-      const inbox = (await fetchInboxRelays(peer)).slice(0, 4);
-      const ok = await publishOn([...new Set([...inbox, ...DM_RELAYS])], toPeer);
+      // Our own relays take the wrap immediately; the peer's declared inbox
+      // (a lookup that can take seconds) is chased off the critical path.
+      // Publishing the same wrap twice is harmless — relays dedupe on id.
+      const ok = await publishOn(DM_RELAYS, toPeer);
       publishOn(DM_RELAYS, toSelf);
-      if (!ok) { toast(t('msgSendFailed')); return; } // stays dimmed
+      fetchInboxRelays(peer).then((inbox) => {
+        const extra = inbox.slice(0, 4).filter((r) => !DM_RELAYS.includes(r));
+        if (extra.length) publishOn(extra, toPeer);
+      }).catch(() => {});
+      if (!ok) { toast(t('msgSendFailed')); return; }
       delete entry.pending;
-      render();
       persistDms();
     } catch (e) {
       threadOf(peer).delete(rumor.id);
@@ -2077,7 +2081,7 @@ export function messagesFeature(ctx) {
       const counts = new Map();
       if (reacts) for (const emoji of reacts.values()) counts.set(emoji, (counts.get(emoji) || 0) + 1);
       return h(
-        'div', { class: 'chat-row' + (mine ? ' mine' : '') + (grouped ? ' grouped' : '') + (m.pending ? ' pending' : '') },
+        'div', { class: 'chat-row' + (mine ? ' mine' : '') + (grouped ? ' grouped' : '') },
         grouped ? h('div', { class: 'chat-avatar spacer' }) : avatar(m.author),
         h('div', { class: 'chat-body' },
           grouped ? null : h('div', { class: 'chat-meta' },
@@ -2273,7 +2277,7 @@ export function messagesFeature(ctx) {
       },
       ...(msgs.length
         ? msgs.map((m) =>
-            h('div', { class: 'chat-row dm' + (m.mine ? ' mine' : '') + (m.pending ? ' pending' : '') },
+            h('div', { class: 'chat-row dm' + (m.mine ? ' mine' : '') },
               h('div', { class: 'chat-body' },
                 h('div', { class: 'chat-bubble' + (m.mine ? ' me' : '') }, m.rumor.content),
                 h('div', { class: 'chat-time' }, timeLabel(m.rumor.created_at * 1000)))))

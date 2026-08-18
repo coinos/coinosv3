@@ -83,20 +83,27 @@ export async function queryOn(relays, filter, maxWait = 1500) {
 export async function publishOn(relays, evt) {
   try {
     const live = liveRelays(relays);
-    const results = await Promise.allSettled(pool.publish(live, evt));
     // A rejected publish is a relay refusing the event (policy, rate limit,
     // ban). Swallowing that silently once hid a relay-side rejection behind
     // what looked like a client bug — always say which relay refused and why.
-    results.forEach((r, i) => {
-      if (r.status === 'rejected') {
-        const msg = r.reason?.message || String(r.reason || '');
+    const pubs = pool.publish(live, evt).map((p, i) =>
+      Promise.resolve(p).then(() => true, (reason) => {
+        const msg = reason?.message || String(reason || '');
         // "relay connection errored/closed" means the socket never came up —
         // that's a sick relay, not a rejected event.
         if (/connect|closed|errored|timeout|network/i.test(msg)) markRelaySick(live[i], msg);
         else console.warn(`nostr: publish kind ${evt.kind} refused by ${live[i]}:`, msg);
-      }
+        return false;
+      }));
+    // The first acceptance IS delivery — one durable copy is enough, and
+    // waiting on allSettled meant every send moved at the pace of the
+    // slowest relay in the set. The stragglers keep settling in the
+    // background so the sick-list still learns from them.
+    return await new Promise((resolve) => {
+      let left = pubs.length;
+      if (!left) return resolve(false);
+      for (const p of pubs) p.then((ok) => { if (ok) resolve(true); else if (!--left) resolve(false); });
     });
-    return results.some((r) => r.status === 'fulfilled');
   } catch { return false; }
 }
 

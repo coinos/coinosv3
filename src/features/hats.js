@@ -28,7 +28,7 @@ const ADMIN_PK = '98ae4da926c471c23fd12d1ebdd5839ba82917baa618e184e0c9916d93dcf4
 const svg = (inner) => `<svg viewBox="0 0 64 44" xmlns="http://www.w3.org/2000/svg">${inner}</svg>`;
 const HATS = [
   {
-    id: 'beanie', nameKey: 'hatBeanie', sat: 21, w: 96, b: 68, r: -8,
+    id: 'beanie', nameKey: 'hatBeanie', sat: 21, w: 92, b: 78, r: -8,
     art: svg(`<circle cx="32" cy="9" r="5.5" fill="#f3e6c9"/>
       <path d="M11 34 Q11 12 32 12 Q53 12 53 34 Z" fill="#e0554a"/>
       <path d="M20 14.5 Q26 25 25 32 M32 12.5 Q32 23 32 32 M44 14.5 Q38 25 39 32" stroke="#c9443b" stroke-width="2" fill="none"/>

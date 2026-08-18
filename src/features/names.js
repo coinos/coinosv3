@@ -19,7 +19,11 @@ import { getNetwork } from '../api.js';
 import { t } from '../i18n.js';
 
 const REGISTRAR = 'https://names.coinos.io';
-const DOMAIN = 'coinos.io';
+// Claims are namespaced by network: staging's mutinynet wallets get
+// name@staging.coinos.io, so play names (and their testnet ark addresses)
+// never squat the real coinos.io namespace. Records saved under either
+// domain keep working — st.domain wins over the default everywhere.
+const DOMAIN = () => (getNetwork() === 'mutinynet' ? 'staging.coinos.io' : 'coinos.io');
 const AUTH_KIND = 21353;
 
 export function namesFeature(ctx) {
@@ -71,7 +75,7 @@ export function namesFeature(ctx) {
     const uri = await currentUri();
     if (!uri) throw new Error(t('namesNeedArk'));
     const j = await post('/register', 'POST', {
-      name, uri, domain: DOMAIN,
+      name, uri, domain: DOMAIN(),
       // lets the address take Lightning payments from LNURL-only wallets:
       // the registrar asks this key for an invoice before minting its own
       ...(hook('nwcOfferPubkey') ? { offerPk: hook('nwcOfferPubkey') } : {}),
@@ -80,16 +84,16 @@ export function namesFeature(ctx) {
       ...(manager ? { manager } : {}),
     }, signer);
     const prev = load().name;
-    save({ name, domain: DOMAIN, uri, offerPk: hook('nwcOfferPubkey') || null, updated: Date.now() });
+    save({ name, domain: DOMAIN(), uri, offerPk: hook('nwcOfferPubkey') || null, updated: Date.now() });
     if (prev && prev !== name) {
-      post('/register', 'DELETE', { name: prev, domain: DOMAIN }).catch(() => {});
+      post('/register', 'DELETE', { name: prev, domain: DOMAIN() }).catch(() => {});
       // the old address just died — a kind 0 still pointing at it would send
       // zaps into the void, so the profile's lud16/nip05 follow the rename
       // (messages only touches them if they pointed at the released name).
       // quietProfile: the profile editor claims mid-save and folds these
       // fields into its own publish — a second publish here would race it.
       if (!quietProfile)
-        Promise.resolve(hook('addressRenamed', `${prev}@${DOMAIN}`, `${name}@${DOMAIN}`)).catch(() => {});
+        Promise.resolve(hook('addressRenamed', `${prev}@${DOMAIN()}`, `${name}@${DOMAIN()}`)).catch(() => {});
     }
     return j;
   }
@@ -97,7 +101,7 @@ export function namesFeature(ctx) {
   async function release() {
     const st = load();
     if (!st.name) return;
-    await post('/register', 'DELETE', { name: st.name, domain: st.domain || DOMAIN }).catch(() => {});
+    await post('/register', 'DELETE', { name: st.name, domain: st.domain || DOMAIN() }).catch(() => {});
     save({});
   }
 
@@ -110,7 +114,7 @@ export function namesFeature(ctx) {
       if (!pk) return;
       const r = await withTimeout(
         fetch(`${REGISTRAR}/pubkey/${pk}`).then((x) => x.json()), 12000, 'registrar');
-      if (r && r.name) save({ ...load(), name: r.name, domain: r.domain || DOMAIN, uri: r.uri });
+      if (r && r.name) save({ ...load(), name: r.name, domain: r.domain || DOMAIN(), uri: r.uri });
     } catch (e) { console.warn('names: lookup failed —', e.message); }
   }
 
@@ -251,7 +255,7 @@ export function namesFeature(ctx) {
           value: ui.nameClaim || '',
           onInput: (e) => { ui.nameClaim = e.target.value.toLowerCase().trim(); },
         }),
-        h('span', { class: 'muted', style: 'align-self:center' }, '@' + DOMAIN)),
+        h('span', { class: 'muted', style: 'align-self:center' }, '@' + DOMAIN())),
       h('button', { class: 'btn-primary btn-block', disabled: ui.busy, onClick: async () => {
         const name = (ui.nameClaim || '').toLowerCase().trim();
         if (!name) return;
@@ -264,7 +268,7 @@ export function namesFeature(ctx) {
           await claim(name, signer ? { signer, manager: wallet.nostrPubkey() } : {});
           ui.nameClaim = '';
           ui.nameEditOpen = false;
-          toast(t('namesClaimed', { name: `${name}@${DOMAIN}` }));
+          toast(t('namesClaimed', { name: `${name}@${DOMAIN()}` }));
         } catch (e) { ui.nameClaimError = e.message; }
         ui.busy = false; render();
       } }, ui.busy ? h('span', { class: 'spinner' }) : t('namesClaim')));
@@ -274,12 +278,12 @@ export function namesFeature(ctx) {
     if (!available()) return null;
     const st = load();
     if (st.name) {
-      const addr = `${st.name}@${st.domain || DOMAIN}`;
+      const addr = `${st.name}@${st.domain || DOMAIN()}`;
       return h('div', { class: 'card col' },
         h('h3', {}, t('namesTitle')),
         h('div', { class: 'addr-box break', style: 'font-size:14px' }, addr),
         h('div', { class: 'row gap6' },
-          copyBtn(`${st.name}@${st.domain || DOMAIN}`, t('namesCopy')),
+          copyBtn(`${st.name}@${st.domain || DOMAIN()}`, t('namesCopy')),
           h('button', { class: 'btn-ghost btn-sm', onClick: async () => {
             await release(); toast(t('namesReleased')); render();
           } }, t('namesRelease'))),
@@ -299,7 +303,7 @@ export function namesFeature(ctx) {
           h('summary', {}, t('namesOwnDomain')),
           h('p', { style: 'margin:4px 0' }, t('namesOwnDomainHow')),
           h('div', { class: 'addr-box break', style: 'font-size:11px' },
-            `${st.name}.user._bitcoin-payment.yourdomain.com. CNAME ${st.name}.user._bitcoin-payment.${st.domain || DOMAIN}.`)));
+            `${st.name}.user._bitcoin-payment.yourdomain.com. CNAME ${st.name}.user._bitcoin-payment.${st.domain || DOMAIN()}.`)));
     }
     return h('div', { class: 'card col' },
       h('h3', {}, t('namesTitle')),
@@ -322,7 +326,7 @@ export function namesFeature(ctx) {
         h('p', { class: 'small muted', style: 'margin:0' }, t('namesDesc')),
         claimForm(false));
     }
-    const addr = `${st.name}@${st.domain || DOMAIN}`;
+    const addr = `${st.name}@${st.domain || DOMAIN()}`;
     // The more-options section takes over the card when open: two payment
     // codes on screen at once is a good way to have someone scan the wrong one.
     if (ui.namesMore) return h('div', { class: 'card col', style: 'align-items:center;gap:14px' }, seg, moreSection());
@@ -536,7 +540,7 @@ export function namesFeature(ctx) {
     screenView() {
       if (ui.screen !== 'wallet' || !ui.nameEditOpen) return null;
       const st = load();
-      const addr = st.name ? `${st.name}@${st.domain || DOMAIN}` : null;
+      const addr = st.name ? `${st.name}@${st.domain || DOMAIN()}` : null;
       return h('div', { class: 'col', style: 'gap:16px' },
         brandHeader(false),
         h('div', { class: 'card col' },
@@ -548,7 +552,7 @@ export function namesFeature(ctx) {
     },
     namesAdoptIdentity(signer, npub) { return adoptIdentity(signer, npub); },
     // the claimed payment address, for anyone prefilling a lightning address
-    namesAddress() { const st = load(); return st.name ? `${st.name}@${st.domain || DOMAIN}` : null; },
+    namesAddress() { const st = load(); return st.name ? `${st.name}@${st.domain || DOMAIN()}` : null; },
     // the onboarding wizard renders the same claim form on its username step
     namesClaimForm() { return claimForm(true); },
     // claim a specific name (the migration flow, after coinos.io released it)

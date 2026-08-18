@@ -2696,7 +2696,14 @@ function onboardScreen() {
     if (o.enterAddr === undefined) o.enterAddr = addr || null;
     // Only a real (custom) name advances by itself — the background
     // auto-claim of the npub-shaped default doesn't count as setting up.
-    if (addr && addr !== o.enterAddr && !/^npub1/.test(addr)) o.step = 'avatar';
+    if (addr && addr !== o.enterAddr && !/^npub1/.test(addr)) {
+      // The avatar ask is for brand-new profiles. An identity that already
+      // wears a face (a nostr login with a published picture) skips straight
+      // to done — the punk picker restyling a real profile helps nobody.
+      const me = (featureHook('nostrLoginIdentity') || {}).pubkey || (wallet.nostrPubkey && wallet.nostrPubkey());
+      const prof = me ? featureHook('cachedProfile', me) : null;
+      o.step = prof && prof.picture ? 'success' : 'avatar';
+    }
   }
   try { localStorage.setItem(ONB_STEP_KEY, o.step); } catch {}
   const page = (kids) => h('div', { class: 'col onb', style: 'gap:20px' }, ...kids);

@@ -2314,6 +2314,9 @@ export function messagesFeature(ctx) {
     // Anyone (ark's history, other features) can open a profile or render a
     // small clickable identity chip.
     showProfile(pk) { openProfile(pk); return true; },
+    // The light profile cache, read-only — lets the onboarding wizard skip
+    // asks (like the avatar picker) that a loaded identity already answered.
+    cachedProfile(pk) { return profileOf(pk); },
     // Publish (merge) kind-0 fields for the current identity — the onboarding
     // wizard sets name + picture through this.
     publishProfile(fields, opts = {}) { return publishProfileFields(fields, opts); },

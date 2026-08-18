@@ -1100,8 +1100,15 @@ export function messagesFeature(ctx) {
       try { m = newest ? JSON.parse(newest.content) : {}; } catch {}
       fullProfiles.set(pk, m);
       persistPage('full', pk, m);
-      profiles.set(pk, { name: m.display_name || m.name || null, picture: m.picture || null });
+      // A full fetch is the freshest word on this profile — stamp it into the
+      // light cache (and persist) so a picture changed elsewhere replaces the
+      // stale one everywhere within a session, not after the 24h TTL. The
+      // repaint covers the header/chat avatars, not just an open profile page.
+      const entry = { name: m.display_name || m.name || null, picture: m.picture || null, t: Date.now() };
+      profiles.set(pk, entry);
+      persistProfile(pk, entry);
       if (ui.profilePk === pk) render();
+      else scheduleRepaint();
     }).catch(() => { if (!fullProfiles.has(pk)) fullProfiles.set(pk, {}); });
   }
 

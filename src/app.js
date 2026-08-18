@@ -2712,7 +2712,8 @@ function onboardScreen() {
   // one and Spending is empty-handed — a spending account with nothing in it
   // is a demo, not a wallet.
   const nextAfterAvatar = () =>
-    (featureHook('arkReady') && wallet.spendable > 1000 && (featureHook('spendingSat') || 0) < 1000)
+    (featureHook('arkReady') && wallet.spendable > 1000
+      && (featureHook('spendingSat') || 0) + (featureHook('spendingBoardingSat') || 0) < 1000)
       ? 'board' : 'success';
 
   if (o.step === 'legacy') {
@@ -3180,7 +3181,8 @@ function balanceCard() {
     // (Explicit latches carry a timestamp; self-heal only eats legacy booleans.)
     // A Spending face running on fumes while Savings sits comfortable gets a
     // one-tap top-up into the board panel.
-    hasSpending && isSpending && !ui.arkMoveOpen && spending < 1000 && wallet.spendable > 1000
+    hasSpending && isSpending && !ui.arkMoveOpen && wallet.spendable > 1000
+      && spending + (featureHook('spendingBoardingSat') || 0) < 1000
       && featureHook('arkReady') && !wallet.watchOnly
       ? h('button', { class: 'btn-sm', style: 'margin-top:10px', onClick: () => { ui.arkMoveDir = 'toSpending'; ui.arkMoveOpen = true; render(); } }, t('topUpFromSavings'))
       : null,

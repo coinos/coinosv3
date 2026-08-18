@@ -2269,6 +2269,13 @@ export function arkFeature(ctx) {
       if (!ui.arkMoveOpen || wallet.watchOnly || !arkAvailable()) return null;
       return movePanel();
     },
+    // Sats mid-board (the on-chain tx awaiting its confirmation) — Spending
+    // doesn't count them yet, but a top-up PROMPT must: nagging someone to
+    // top up again while their top-up confirms is noise.
+    spendingBoardingSat() {
+      const b = arkBalance();
+      return b ? b.boardingSat || 0 : 0;
+    },
     spendingSat() {
       const b = arkBalance();
       return b ? b.spendableSat + b.pendingSat : 0;

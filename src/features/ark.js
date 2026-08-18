@@ -1747,7 +1747,19 @@ export function arkFeature(ctx) {
               const sats = parseInt(o.amount, 10) || spendable;
               if (!sats || sats <= 0 || sats > spendable) { ui.arkError = t('enterValidAmtForN', { n: 1 }); render(); return; }
               doArkOffboard(sats >= spendable ? 0 : sats, o.address);
-            } }, t('send'))));
+            } }, t('send'))),
+      // This send IS the cooperative exit. The trustless door stays visible —
+      // quiet while things work, promoted to a button the moment the server
+      // fails to cooperate (that being the whole point of a unilateral exit).
+      ui.arkError && ui.arkBusy !== 'offboard'
+        ? h('button', {
+            class: 'btn-block',
+            onClick: () => { ui.arkOffboardSend = null; ui.arkError = ''; ui.arkExitPage = true; render(); },
+          }, t('arkUniOffer'))
+        : h('button', {
+            class: 'linklike small', style: 'align-self:center',
+            onClick: () => { ui.arkOffboardSend = null; ui.arkError = ''; ui.arkExitPage = true; render(); },
+          }, t('arkUniOfferQuiet')));
   }
 
   async function doArkOffboard(amountSat, destAddress = null) {

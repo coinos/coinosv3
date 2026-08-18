@@ -199,6 +199,8 @@ const STR = {
     onbBoardTitle: 'Top up Spending',
     onbBoardBody: 'Move some sats from Savings into Spending — payments there are instant, with no mining fees.',
     topUpFromSavings: 'Top up from Savings',
+    arkUniOffer: 'Exit without the server instead',
+    arkUniOfferQuiet: 'Server not cooperating? Unilateral exit',
     msgPushOffer: 'Get notified when you receive payments and messages, even with coinos closed.',
     msgPushEnable: 'Enable notifications',
     msgPushOn: 'Notifications on',

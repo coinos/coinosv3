@@ -201,22 +201,37 @@ export function namesFeature(ctx) {
 
   // ---- sending to a name -------------------------------------------------
 
+  // Our own names when DNS is late (a fresh claim still inside the negative-
+  // cache window) or validation hiccups: the registrar IS the source DNS
+  // mirrors, so ask it directly instead of dead-ending in the Lightning
+  // fallback — which for staging names points at a webroot that serves HTML.
+  const OUR_DOMAINS = ['coinos.io', 'staging.coinos.io', 'halwallet.app'];
+  async function registrarUri(name, domain) {
+    try {
+      const r = await withTimeout(
+        fetch(`${REGISTRAR}/name/${encodeURIComponent(name)}?domain=${encodeURIComponent(domain)}`).then((x) => x.json()),
+        8000, 'registrar');
+      return r && r.taken && r.uri ? r.uri : null;
+    } catch { return null; }
+  }
+
   function beginResolve(text) {
     const parsed = parsePaymentName(text);
     if (!parsed) return false;
     ui.nameResolve = { text, status: 'resolving' };
     render();
     (async () => {
-      let uri = null;
-      try { uri = await resolveBip353(parsed.name, parsed.domain); } catch (e) {
-        if (ui.nameResolve?.text !== text) return;
-        ui.nameResolve = null;
-        ui.sendError = `${parsed.name}@${parsed.domain}: ${e.message}`;
+      let uri = null, resolveErr = null;
+      try { uri = await resolveBip353(parsed.name, parsed.domain); } catch (e) { resolveErr = e; }
+      if (ui.nameResolve?.text !== text) return;
+      if (!uri && OUR_DOMAINS.includes(parsed.domain)) uri = await registrarUri(parsed.name, parsed.domain);
+      if (ui.nameResolve?.text !== text) return;
+      ui.nameResolve = null;
+      if (!uri && resolveErr) {
+        ui.sendError = `${parsed.name}@${parsed.domain}: ${resolveErr.message}`;
         render();
         return;
       }
-      if (ui.nameResolve?.text !== text) return;
-      ui.nameResolve = null;
       if (uri) {
         const dec = parseBip21(uri);
         const ark = dec?.params?.ark;
@@ -234,8 +249,10 @@ export function namesFeature(ctx) {
         render();
         return;
       }
-      // no BIP-353 record: hand off to the Lightning-address flow
-      if (!hook('lnAddressFallback', text)) {
+      // no BIP-353 record: hand off to the Lightning-address flow — except
+      // staging names, which have no LNURL endpoint (the zap would fetch the
+      // web app's HTML and choke); an unknown staging name is simply unknown.
+      if (parsed.domain === 'staging.coinos.io' || !hook('lnAddressFallback', text)) {
         ui.sendError = t('namesNotFound', { name: `${parsed.name}@${parsed.domain}` });
       }
       render();

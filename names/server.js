@@ -816,6 +816,11 @@ Bun.serve({
         const pr = await requestInvoiceFromWallet(rec.offerPk, { amountSat: sat, description: comment, zap });
         if (pr) { log(`lnurl ${key}: recipient minted ${sat} sat`); return json({ pr, routes: [] }); }
       }
+      // Staging names are mutinynet wallets: only their own wallet can mint a
+      // right-network invoice. Minting on our mainnet node would take real
+      // sats for play money and strand them (the forwarder can't deliver to
+      // a testnet ark address).
+      if (domain === 'staging.coinos.io') return json({ status: 'ERROR', reason: 'recipient is offline' }, 503);
       // 2. our node, forwarded on settle
       if (!ln || !fwd) return json({ status: 'ERROR', reason: 'recipient is offline' }, 503);
       try {

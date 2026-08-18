@@ -2879,7 +2879,7 @@ function onboardScreen() {
       const spendReady = claimedNow || (featureHook('spendingSat') || 0) > 0
         || (getNetwork() === 'mainnet' && named);
       if (spendReady) {
-        if (acc && !acc.spendingSetup) { acc.spendingSetup = true; persistAccounts(); }
+        if (acc && !acc.spendingSetup) { acc.spendingSetup = Date.now(); persistAccounts(); }
         ui.account = 'spending';
         try { localStorage.setItem(ACCOUNT_KEY, 'spending'); } catch {}
       }
@@ -3002,9 +3002,10 @@ function spendingActive() {
   if (acc?.kind === 'spending') return true;
   if (acc?.spendingSetup) {
     // Self-heal a flag latched by the old cross-network name leak: off
-    // mainnet, a Spending side with zero balance AND no ark history was
-    // never really set up — drop it. A real receive re-latches instantly.
-    if (getNetwork() !== 'mainnet' && !(featureHook('spendingSat') || 0)
+    // mainnet, a LEGACY boolean flag (`true` — the buggy era's value; every
+    // deliberate latch since carries a timestamp) with zero balance and no
+    // ark history was never really set up — drop it.
+    if (acc.spendingSetup === true && getNetwork() !== 'mainnet' && !(featureHook('spendingSat') || 0)
         && !(featureHook('arkMovements') || []).length) {
       delete acc.spendingSetup;
       persistAccounts();
@@ -3019,7 +3020,7 @@ function spendingActive() {
   const evident = (featureHook('spendingSat') || 0) > 0 || (!!addr && !/^npub1/.test(addr));
   // Latch demonstrated use onto the record, so the Wallets list keeps showing
   // this seed's Spending side even while it's locked or not the active one.
-  if (evident && acc && !acc.spendingSetup) { acc.spendingSetup = true; persistAccounts(); }
+  if (evident && acc && !acc.spendingSetup) { acc.spendingSetup = Date.now(); persistAccounts(); }
   return evident;
 }
 // ---- the flat wallet model -------------------------------------------------
@@ -3146,11 +3147,15 @@ function balanceCard() {
     ...(hasSpending ? featureAll('balanceActions') : []).map((a2) =>
       h('button', { class: 'btn-sm', style: 'margin-top:10px', onClick: a2.onClick }, a2.label)),
     // A seed with only a Savings side is one tap from growing a Spending one:
-    // the offer sits right on the balance card, not hidden behind Add wallet.
-    // (Single-purpose Savings wallets keep their purpose — Add wallet covers
-    // them; watch-only can't spend at all.)
+    // the offer sits right on the balance card, and the tap simply DOES it —
+    // same seed, a "Spending" side appears, no wizard in the way. (Explicit
+    // latches carry a timestamp; the self-heal only eats the legacy booleans.)
     !hasSpending && !kindLocked && featureHook('arkReady') && !wallet.watchOnly && acc0 && acc0.type === 'full'
-      ? h('button', { class: 'btn-sm', style: 'margin-top:10px', onClick: () => { ui.onbError = ''; ui.onb = { step: 'spend' }; render(); } }, t('spendSetup'))
+      ? h('button', { class: 'btn-sm', style: 'margin-top:10px', onClick: () => {
+          acc0.spendingSetup = Date.now();
+          persistAccounts();
+          setAccountSel('spending', 'right');
+        } }, t('spendSetup'))
       : null,
     // A feature can unfold UI right on the card (ark's inline move panel).
     (() => {

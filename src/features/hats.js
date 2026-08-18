@@ -312,10 +312,8 @@ export function hatsFeature(ctx) {
         d === null
           ? h('div', { style: 'text-align:center;padding:16px' }, h('span', { class: 'spinner' }))
           : h('div', { class: 'col', style: 'gap:2px' },
-              // the crown stays off the menu — it appears only for the head
-              // that already wears it
-              ...HATS.filter((hat) => hat.id !== 'crown' || me === ADMIN_PK || (d.owned || []).includes('crown'))
-                .map((hat) => shopRow(hat, d, me))),
+              // the crown is not merchandise — it never appears in the store
+              ...HATS.filter((hat) => hat.id !== 'crown').map((hat) => shopRow(hat, d, me))),
         d && d.offline ? h('div', { class: 'small faint', style: 'text-align:center' }, t('hatShopOffline')) : null),
       h('button', { class: 'btn-ghost btn-block', onClick: closeShop }, t('back')));
   }

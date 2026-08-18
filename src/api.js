@@ -93,6 +93,9 @@ const DATA_SOURCES_BY_NET = {
     { id: 'custom', label: 'Custom', type: 'auto', url: '' },
   ],
   mutinynet: [
+    // coinos-hosted electrs against our own node: no CDN caching, no rate
+    // limits — mutinynet.com stays as a fallback pick
+    { id: 'coinos', label: 'coinos (staging esplora)', type: 'esplora', base: 'https://staging.coinos.io/esplora', web: 'https://mutinynet.com', kind: 'esplora' },
     { id: 'mutinynet', label: 'mutinynet.com', type: 'esplora', base: 'https://mutinynet.com/api', web: 'https://mutinynet.com', kind: 'esplora' },
     { id: 'custom', label: 'Custom', type: 'auto', url: '' },
   ],
@@ -102,7 +105,7 @@ const DATA_SOURCES_BY_NET = {
     { id: 'custom', label: 'Custom', type: 'auto', url: '' },
   ],
 };
-const DATA_SOURCE_DEFAULT = { mainnet: 'coinos', testnet: 'mempool', signet: 'mempool', mutinynet: 'mutinynet', regtest: 'local' };
+const DATA_SOURCE_DEFAULT = { mainnet: 'coinos', testnet: 'mempool', signet: 'mempool', mutinynet: 'coinos', regtest: 'local' };
 export function dataSources(net = getNetwork()) { return DATA_SOURCES_BY_NET[net] || DATA_SOURCES_BY_NET.mainnet; }
 const detectType = (url) => (/^wss?:\/\//i.test((url || '').trim()) ? 'electrum' : 'esplora');
 
@@ -112,7 +115,7 @@ const NET_DEFAULTS = {
   mainnet: { mode: 'electrum', electrum: 'coinos', explorer: 'mempool' },
   testnet: { mode: 'esplora', electrum: 'blockstreamel', explorer: 'mempool' },
   signet: { mode: 'esplora', electrum: 'custom', explorer: 'mempool' },
-  mutinynet: { mode: 'esplora', electrum: 'custom', explorer: 'mutinynet' },
+  mutinynet: { mode: 'esplora', electrum: 'custom', explorer: 'coinos' },
   regtest: { mode: 'electrum', electrum: 'local', explorer: 'localesplora' },
 };
 function netDefaults(net) { return NET_DEFAULTS[net] || NET_DEFAULTS.mainnet; }
@@ -241,7 +244,7 @@ const ARK_PRESETS_BY_NET = {
   ],
   mutinynet: [
     { id: 'off', label: 'Off', ark: '', esplora: '' },
-    { id: 'coinos', label: 'coinos (ark-staging.coinos.io)', ark: 'https://ark-staging.coinos.io', esplora: 'https://mutinynet.com/api' },
+    { id: 'coinos', label: 'coinos (ark-staging.coinos.io)', ark: 'https://ark-staging.coinos.io', esplora: 'https://staging.coinos.io/esplora' },
     { id: 'custom', label: 'Custom…', ark: '', esplora: '' },
   ],
   regtest: [

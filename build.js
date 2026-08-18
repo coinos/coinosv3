@@ -74,7 +74,13 @@ self.addEventListener('activate', (e) => {
 self.addEventListener('fetch', (e) => {
   const req = e.request;
   if (req.method !== 'GET') return;
-  if (new URL(req.url).origin !== self.location.origin) return; // explorer/ws → network
+  const u = new URL(req.url);
+  if (u.origin !== self.location.origin) return; // explorer/ws → network
+  // Live API paths served from OUR origin (esplora, sp indexer, lnurl,
+  // well-known) must never be cached: a chain answer frozen at first sight
+  // wedges every flow that polls it (a refresh once waited forever on a
+  // cached "unconfirmed"). Straight to network, always.
+  if (/^\\/(esplora|sp|lnurlp|electrum)\\//.test(u.pathname) || u.pathname.startsWith('/.well-known/')) return;
 
   if (req.mode === 'navigate') {
     e.respondWith(

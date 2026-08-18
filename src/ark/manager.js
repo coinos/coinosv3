@@ -190,7 +190,9 @@ export class ArkManager {
   get chain() {
     const base = this.esploraUrl;
     return {
-      tipHeight: async () => Number(await fetch(`${base}/blocks/tip/height`).then((r) => r.text())),
+      // no-store: a CDN-cached tip lags a 30s-block network by many blocks,
+      // and a stale tip under-shoots HTLC expiries the server then rejects
+      tipHeight: async () => Number(await fetch(`${base}/blocks/tip/height`, { cache: 'no-store' }).then((r) => r.text())),
       getTxStatus: async (txid) => {
         const r = await fetch(`${base}/tx/${txid}/status`);
         if (r.ok) return r.json();
@@ -835,6 +837,18 @@ export class ArkManager {
         resps = await requestLightningPayHtlcCosign(this.arkUrl,
           builds.map((b, i) => cosignPartBytes({ build: b, input: decoded[i], vtxoKeys: keysList[i], nonces: noncesList[i] })));
       } catch (e) {
+        // A stale local tip under-shoots the HTLC expiry, and the server's
+        // error helpfully names ITS tip — adopt it and let the next drive
+        // retry with a valid expiry instead of failing the whole payment.
+        const tipM = e instanceof GrpcError && e.message.match(/expiry is too low.*?our tip is (\d+)/i);
+        if (tipM) {
+          const serverTip = parseInt(tipM[1], 10);
+          action.htlcExpiry = serverTip + (this.info.htlcSendExpiryDelta || 258);
+          this._tipH = Math.max(this._tipH || 0, serverTip);
+          this._tipAt = Date.now();
+          this._save();
+          throw new Error('chain tip was stale — retrying with the corrected expiry');
+        }
         // INVALID_ARGUMENT (status 3): the server rejected the package outright
         // — nothing was spent, everything returns to spendable. "already
         // spent" names ONE stale input but not which: free them all and let

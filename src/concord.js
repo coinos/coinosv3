@@ -82,7 +82,7 @@ export const banlistEid = (cid) => bytesToHex(hkdf32(hexToBytes(cid), "concord/b
 // ---- CORD-01 envelope ----
 // wrap(1059, signed by stream key) > seal(20013 encrypted | 20014 plaintext, author-signed) > rumor
 
-const rumorWithId = (rumor) => ({ ...rumor, id: getEventHash({ ...rumor, tags: rumor.tags || [] }) });
+export const rumorWithId = (rumor) => ({ ...rumor, id: getEventHash({ ...rumor, tags: rumor.tags || [] }) });
 
 // Sign a seal around a rumor. `signer` is a raw secret key (Uint8Array) or a
 // { signEvent } adapter (nostr-login extension/bunker). Plaintext seals

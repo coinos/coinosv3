@@ -386,6 +386,9 @@ hr.divider { margin: 16px 0; }
   overflow-wrap: break-word; white-space: pre-wrap;
 }
 .chat-edited { font-size: 11px; color: var(--faint); }
+/* Optimistic sends: dimmed while in flight, a small tick once a relay has it. */
+.chat-row.pending .chat-bubble { opacity: 0.55; }
+.chat-tick { font-size: 10px; margin-left: 6px; opacity: 0.6; user-select: none; }
 .chat-del {
   position: absolute; top: -7px; right: -7px; width: 18px; height: 18px;
   display: none; align-items: center; justify-content: center;

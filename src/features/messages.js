@@ -18,11 +18,11 @@ import {
   PROFILE_RELAYS,
 } from '../nostr.js';
 import {
-  channelKey, controlKey, guestbookKey, openWrap, wrapRumor,
+  channelKey, controlKey, guestbookKey, openWrap, wrapRumor, rumorWithId,
   foldControl, foldGuestbook, observeAuthor, eventMs, msTags, makeEdition,
   communityId, parseInviteLink, makeInviteLink, makeInviteBundleEvent, openInviteBundle,
 } from '../concord.js';
-import { makeDM, unwrapDM, wrapDM } from '../dm.js';
+import { makeDMRumor, unwrapDM, wrapDM } from '../dm.js';
 import { saveInbox } from '../dm-inbox.js';
 import { makeSearcher, resultRows, fallbackAvatar } from '../recipient-search.js';
 import { hexToBytes, bytesToHex } from '@noble/hashes/utils';
@@ -355,8 +355,10 @@ export function messagesFeature(ctx) {
   function persistCache(room) {
     const s = st();
     for (const [chId, msgs] of room.byChannel) {
+      // Pending entries stay out of the cache: unconfirmed means the relay
+      // never took it, and a reload would resurrect it dimmed forever.
       s.cache[chId] = [...msgs.values()]
-        .filter((m) => !room.deletes.has(m.rumor.id))
+        .filter((m) => !room.deletes.has(m.rumor.id) && !m.pending)
         .sort((a, b) => eventMs(a.rumor) - eventMs(b.rumor))
         .slice(-CACHE_MAX);
     }
@@ -388,35 +390,37 @@ export function messagesFeature(ctx) {
 
   async function sendMessage(room, chId) {
     const text = (ui.msgDraft || '').trim();
-    if (!text || ui.msgSending) return;
+    if (!text) return;
     const id = await identity();
     if (!id) { noIdToast(); return; }
-    ui.msgSending = true;
+    // The rumor id is a plain hash, so the message can be on screen before
+    // any signing, encryption or network runs. The pending flag renders as a
+    // dimmed bubble; a relay accepting the wrap clears it and shows the tick.
+    const { created_at, ms } = msTags(Date.now());
+    const rumor = rumorWithId({
+      kind: 9, pubkey: id.pubkey, content: text,
+      tags: [['channel', chId], ['epoch', String(EPOCH)], ms], created_at,
+    });
+    const msgs = room.byChannel.get(chId) || room.byChannel.set(chId, new Map()).get(chId);
+    const entry = { rumor, author: id.pubkey, pending: true };
+    msgs.set(rumor.id, entry);
+    clearDraft();
+    ui.msgStick = true;
     render();
     try {
-      const { created_at, ms } = msTags(Date.now());
-      const rumor = {
-        kind: 9, pubkey: id.pubkey, content: text,
-        tags: [['channel', chId], ['epoch', String(EPOCH)], ms], created_at,
-      };
       const wrap = await wrapRumor(rumor, id.signer, room.chStream(chId));
-      // optimistic insert (the relay echo will dedupe on wrap id)
-      const opened = openWrap(wrap, room.chStream(chId));
-      if (opened) {
-        seenWraps.add(wrap.id);
-        const msgs = room.byChannel.get(chId) || room.byChannel.set(chId, new Map()).get(chId);
-        msgs.set(opened.rumor.id, opened);
-      }
-      clearDraft();
+      seenWraps.add(wrap.id); // our own echo has nothing to add
       const ok = await publishOn(room.relays, wrap);
-      if (!ok) toast(t('msgSendFailed'));
+      if (!ok) { toast(t('msgSendFailed')); return; } // stays dimmed, no tick
+      delete entry.pending;
+      render();
       ensureJoined(room, id).catch(() => {});
       persistCache(room);
     } catch (e) {
+      // Signing or wrapping failed — the message never existed on the wire,
+      // so it leaves the screen rather than sit there looking sent.
+      msgs.delete(rumor.id);
       toast(e.message || String(e));
-    } finally {
-      ui.msgSending = false;
-      ui.msgStick = true;
       render();
     }
   }
@@ -1004,26 +1008,34 @@ export function messagesFeature(ctx) {
 
   async function sendDM(peer) {
     const text = (ui.msgDraft || '').trim();
-    if (!text || ui.msgSending) return;
+    if (!text) return;
     const id = await identity();
     if (!id) { noIdToast(); return; }
     if (!(id.signer instanceof Uint8Array) && !id.signer.encryptTo) { toast(t('msgSignerNoDm')); return; }
-    ui.msgSending = true;
+    // Same optimistic shape as channel sends: the rumor is synchronous, the
+    // bubble shows dimmed at once, and the tick lands when a relay takes the
+    // recipient's wrap. Wrapping the same rumor keeps the id, so the sent-copy
+    // echo folds into this entry instead of duplicating it.
+    const rumor = makeDMRumor(id.pubkey, peer, text);
+    const entry = { rumor, mine: true, pending: true };
+    threadOf(peer).set(rumor.id, entry);
+    clearDraft();
+    ui.msgStick = true;
     render();
     try {
-      const { rumor, toPeer, toSelf } = await makeDM(id.signer, peer, text);
-      noteDM(peer, rumor, true);
-      clearDraft();
+      // Sequential on purpose — a remote signer is happier signing one at a time.
+      const toPeer = await wrapDM(id.signer, peer, rumor);
+      const toSelf = await wrapDM(id.signer, id.pubkey, rumor);
       const inbox = (await fetchInboxRelays(peer)).slice(0, 4);
       const ok = await publishOn([...new Set([...inbox, ...DM_RELAYS])], toPeer);
       publishOn(DM_RELAYS, toSelf);
-      if (!ok) toast(t('msgSendFailed'));
+      if (!ok) { toast(t('msgSendFailed')); return; } // stays dimmed, no tick
+      delete entry.pending;
+      render();
       persistDms();
     } catch (e) {
+      threadOf(peer).delete(rumor.id);
       toast(e.message || String(e));
-    } finally {
-      ui.msgSending = false;
-      ui.msgStick = true;
       render();
     }
   }
@@ -1036,7 +1048,8 @@ export function messagesFeature(ctx) {
       .slice(0, 30);
     s.dms = {};
     for (const [peer, list] of byRecent)
-      s.dms[peer] = list.slice(-CACHE_MAX).map((m) => ({ id: m.rumor.id, from: m.rumor.pubkey, text: m.rumor.content, t: m.rumor.created_at }));
+      s.dms[peer] = list.filter((m) => !m.pending).slice(-CACHE_MAX)
+        .map((m) => ({ id: m.rumor.id, from: m.rumor.pubkey, text: m.rumor.content, t: m.rumor.created_at }));
     save(s);
   }
 
@@ -1846,8 +1859,7 @@ export function messagesFeature(ctx) {
         // animation, so re-stick once now and once when it has settled.
         onFocus: () => { stickToBottom(); setTimeout(stickToBottom, 350); },
       }),
-      h('button', { class: 'btn-primary btn-sm', disabled: ui.msgSending, onClick: onSend },
-        ui.msgSending ? h('span', { class: 'spinner sm' }) : t('msgSend'))));
+      h('button', { class: 'btn-primary btn-sm', onClick: onSend }, t('msgSend'))));
 
   // ---- home ---------------------------------------------------------------
 
@@ -2065,7 +2077,7 @@ export function messagesFeature(ctx) {
       const counts = new Map();
       if (reacts) for (const emoji of reacts.values()) counts.set(emoji, (counts.get(emoji) || 0) + 1);
       return h(
-        'div', { class: 'chat-row' + (mine ? ' mine' : '') + (grouped ? ' grouped' : '') },
+        'div', { class: 'chat-row' + (mine ? ' mine' : '') + (grouped ? ' grouped' : '') + (m.pending ? ' pending' : '') },
         grouped ? h('div', { class: 'chat-avatar spacer' }) : avatar(m.author),
         h('div', { class: 'chat-body' },
           grouped ? null : h('div', { class: 'chat-meta' },
@@ -2079,6 +2091,7 @@ export function messagesFeature(ctx) {
           h('div', { class: 'chat-bubble' },
             text,
             edit ? h('span', { class: 'chat-edited' }, ' ', t('msgEdited')) : null,
+            mine && !m.pending ? h('span', { class: 'chat-tick' }, '✓') : null,
             mine
               ? h('button', { class: 'chat-del', title: t('msgDelete'), onClick: () => deleteMessage(room, chId, m) }, '×')
               : null),
@@ -2261,9 +2274,10 @@ export function messagesFeature(ctx) {
       },
       ...(msgs.length
         ? msgs.map((m) =>
-            h('div', { class: 'chat-row dm' + (m.mine ? ' mine' : '') },
+            h('div', { class: 'chat-row dm' + (m.mine ? ' mine' : '') + (m.pending ? ' pending' : '') },
               h('div', { class: 'chat-body' },
-                h('div', { class: 'chat-bubble' + (m.mine ? ' me' : '') }, m.rumor.content),
+                h('div', { class: 'chat-bubble' + (m.mine ? ' me' : '') }, m.rumor.content,
+                  m.mine && !m.pending ? h('span', { class: 'chat-tick' }, '✓') : null),
                 h('div', { class: 'chat-time' }, timeLabel(m.rumor.created_at * 1000)))))
         : [h('div', { class: 'muted small', style: 'text-align:center;padding:24px 0' }, t('msgNoDmsYet'))])),
       composer(t('msgDmPlaceholder'), () => sendDM(peer)));

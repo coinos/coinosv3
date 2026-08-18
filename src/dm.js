@@ -47,18 +47,26 @@ export async function wrapDM(skOrSigner, receiverPk, rumor, extraTags = []) {
   );
 }
 
-// A DM to a peer: the kind 14 rumor (unsigned, true timestamp) plus wraps for
-// the recipient and for the sender's own inbox (the sent-copy).
-export async function makeDM(skOrSigner, peerPk, text) {
-  const signer = asSigner(skOrSigner);
+// The kind 14 rumor alone, id included — synchronous, so a sender can put
+// the message on screen before any signing or encryption has run. Wrapping
+// the same rumor later yields the same id, so the sent-copy echo dedupes.
+export function makeDMRumor(senderPk, peerPk, text) {
   const rumor = {
     kind: 14,
-    pubkey: signer.pubkey,
+    pubkey: senderPk,
     content: text,
     tags: [['p', peerPk]],
     created_at: now(),
   };
   rumor.id = getEventHash(rumor);
+  return rumor;
+}
+
+// A DM to a peer: the kind 14 rumor (unsigned, true timestamp) plus wraps for
+// the recipient and for the sender's own inbox (the sent-copy).
+export async function makeDM(skOrSigner, peerPk, text) {
+  const signer = asSigner(skOrSigner);
+  const rumor = makeDMRumor(signer.pubkey, peerPk, text);
   return {
     rumor,
     toPeer: await wrapDM(signer, peerPk, rumor),

@@ -2830,8 +2830,11 @@ function onboardScreen() {
         try {
           const addr = featureHook('namesAddress');
           // keeping the default still publishes it — their punk should be
-          // their face on every nostr client, not just here
-          const picture = o.avatar || (me ? 'https://v3.coinos.io/' + punkUrl(me) : undefined);
+          // their face on every nostr client, not just here. A picked punk is
+          // a relative path; kind 0 needs the absolute URL (a relative one
+          // once replaced a real profile picture with a broken string).
+          const picked = o.avatar && !/^https?:/i.test(o.avatar) ? 'https://v3.coinos.io/' + o.avatar : o.avatar;
+          const picture = picked || (me ? 'https://v3.coinos.io/' + punkUrl(me) : undefined);
           const fields = { name: addr ? addr.split('@')[0] : undefined, picture };
           // Publishing the profile is a nicety — a signer that can't sign
           // right now (a sleeping phone bunker) must not trap the wizard.

@@ -343,7 +343,10 @@ export function arkFeature(ctx) {
       // them. Publishing on connect guarantees every device's ark balance
       // reaches the relay (and gets merged) without needing a transaction first.
       if (mgr.state && (mgr.state.vtxos || []).length) { try { wallet.saveCache(); } catch {} }
-      const tick = () => mgr.sync().catch(() => {})
+      // A failed mailbox read must not starve the action drives: boards and
+      // refreshes progress on chain state alone, so push them even when the
+      // sync itself errored.
+      const tick = () => mgr.sync().catch(() => mgr.resumePending().catch(() => {}))
         .then(() => driveExits(mgr)).catch(() => {})
         .then(() => { if (ark === mgr) return maybeAutoRefresh(mgr); }).catch(() => {})
         .then(() => { if (ark === mgr) return maybeAutoWithdraw(mgr); }).catch(() => {});

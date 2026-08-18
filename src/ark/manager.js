@@ -1346,11 +1346,16 @@ export class ArkManager {
     if (action.step === 'funded') {
       const need = this.info.requiredBoardConfirmations;
       const status = await this.chain.getTxStatus(action.fundingTxid);
-      // record progress so the UI can say WHERE the wait is (n/need confs)
-      const confs = status?.confirmed ? (await this.chain.tipHeight()) - status.block_height + 1 : 0;
+      // record progress so the UI can say WHERE the wait is (n/need confs).
+      // A confirmed status proves at least ONE confirmation on its own — the
+      // tip fetch only refines the count, so its failure (rate limits) must
+      // not strand a confirmed board at "0/need" forever.
+      let confs = 0;
+      if (status?.confirmed) {
+        const tip = await this.chain.tipHeight().catch(() => null);
+        confs = tip != null && Number.isFinite(tip) ? tip - status.block_height + 1 : 1;
+      }
       if (confs !== action.confs || need !== action.needConfs) { action.confs = confs; action.needConfs = need; this._save(); }
-      // NB not `confs < need`: a failed tip fetch makes confs NaN, which must
-      // wait for the next sync rather than slip past the comparison
       if (!(confs >= need)) return; // retried on sync
 
       const fundingOutpointRaw = new Uint8Array(36);

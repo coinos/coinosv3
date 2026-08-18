@@ -28,7 +28,7 @@ const ADMIN_PK = '98ae4da926c471c23fd12d1ebdd5839ba82917baa618e184e0c9916d93dcf4
 const svg = (inner) => `<svg viewBox="0 0 64 44" xmlns="http://www.w3.org/2000/svg">${inner}</svg>`;
 const HATS = [
   {
-    id: 'beanie', nameKey: 'hatBeanie', sat: 21, w: 96, b: 60, r: -8,
+    id: 'beanie', nameKey: 'hatBeanie', sat: 21, w: 96, b: 68, r: -8,
     art: svg(`<circle cx="32" cy="9" r="5.5" fill="#f3e6c9"/>
       <path d="M11 34 Q11 12 32 12 Q53 12 53 34 Z" fill="#e0554a"/>
       <path d="M20 14.5 Q26 25 25 32 M32 12.5 Q32 23 32 32 M44 14.5 Q38 25 39 32" stroke="#c9443b" stroke-width="2" fill="none"/>
@@ -36,14 +36,14 @@ const HATS = [
       <path d="M15 33 V39.5 M23 32.5 V40.5 M31 32.5 V40.5 M39 32.5 V40.5 M47 33 V39.5" stroke="#b23a32" stroke-width="2"/>`),
   },
   {
-    id: 'party', nameKey: 'hatParty', sat: 2100, w: 78, b: 70, r: -11,
+    id: 'party', nameKey: 'hatParty', sat: 2100, w: 78, b: 75, r: -11,
     art: svg(`<path d="M32 5 L46 39 Q32 44 18 39 Z" fill="#2fb3a5"/>
       <path d="M26.5 18.5 Q32 20.5 37.5 18.5 L40 24.5 Q32 27 24 24.5 Z" fill="#ff7bac"/>
       <path d="M21.5 30.5 Q32 34 42.5 30.5 L44.5 35.5 Q32 40 19.5 35.5 Z" fill="#ffd166"/>
       <circle cx="32" cy="5" r="4.2" fill="#ffd166"/>`),
   },
   {
-    id: 'trucker', nameKey: 'hatTrucker', sat: 2100, w: 106, b: 62, r: -6,
+    id: 'trucker', nameKey: 'hatTrucker', sat: 2100, w: 106, b: 68, r: -6,
     art: svg(`<path d="M9 33 Q9 10 29 10 Q49 10 49 33 Z" fill="#3579c2"/>
       <path d="M17 33 Q17 14 29 14 Q41 14 41 33 Z" fill="#f2f5f8"/>
       <text x="29" y="28" font-size="14" font-weight="700" text-anchor="middle" fill="#f7931a" font-family="system-ui,sans-serif">₿</text>
@@ -52,7 +52,7 @@ const HATS = [
       <rect x="9" y="32" width="39" height="5" rx="2.5" fill="#2a5f9c"/>`),
   },
   {
-    id: 'cowboy', nameKey: 'hatCowboy', sat: 21000, w: 122, b: 62, r: -7,
+    id: 'cowboy', nameKey: 'hatCowboy', sat: 21000, w: 122, b: 68, r: -7,
     art: svg(`<path d="M21 26 Q21 5 32 5 Q43 5 43 26 Z" fill="#a97844"/>
       <path d="M32 5.5 Q29.5 14 31 24" stroke="#8a5f33" stroke-width="1.8" fill="none"/>
       <rect x="20" y="20.5" width="24" height="5" rx="2" fill="#6f4a26"/>
@@ -60,27 +60,27 @@ const HATS = [
       <path d="M8 28 Q17 32.5 32 32.5 Q47 32.5 56 28" stroke="#8a5f33" stroke-width="1.5" fill="none"/>`),
   },
   {
-    id: 'fedora', nameKey: 'hatFedora', sat: 21000, w: 118, b: 64, r: -8,
+    id: 'fedora', nameKey: 'hatFedora', sat: 21000, w: 118, b: 70, r: -8,
     art: svg(`<path d="M18 29 L20 11 Q32 6 44 11 L46 29 Z" fill="#4c525b" stroke="rgba(255,255,255,.1)" stroke-width="0.8"/>
       <path d="M20 11 Q32 15.5 44 11" stroke="#3a3f47" stroke-width="2" fill="none"/>
       <path d="M17.4 23 L46.6 23 L47 29 L17 29 Z" fill="#23262c"/>
       <path d="M6 31 Q32 25 58 31 Q58 37 32 37.5 Q6 37 6 31 Z" fill="#3a3f47" stroke="rgba(255,255,255,.1)" stroke-width="0.8"/>`),
   },
   {
-    id: 'bowler', nameKey: 'hatBowler', sat: 210000, w: 104, b: 64, r: -7,
+    id: 'bowler', nameKey: 'hatBowler', sat: 210000, w: 104, b: 70, r: -7,
     art: svg(`<path d="M15 29 Q15 7 32 7 Q49 7 49 29 Z" fill="#2b2e35" stroke="rgba(255,255,255,.14)" stroke-width="0.8"/>
       <path d="M22 11 Q27 8.5 33 9.5" stroke="#464b55" stroke-width="2" fill="none" stroke-linecap="round"/>
       <path d="M14.6 24 L49.4 24 L49.6 29 L14.4 29 Z" fill="#17191d"/>
       <path d="M7 31 Q7 26.5 13 29 L51 29 Q57 26.5 57 31 Q57 36 32 36 Q7 36 7 31 Z" fill="#17191d" stroke="rgba(255,255,255,.14)" stroke-width="0.8"/>`),
   },
   {
-    id: 'top', nameKey: 'hatTop', sat: 210000, w: 96, b: 66, r: -7,
+    id: 'top', nameKey: 'hatTop', sat: 210000, w: 96, b: 72, r: -7,
     art: svg(`<path d="M17 5 Q32 1.5 47 5 L45.5 28 L18.5 28 Z" fill="#26282f" stroke="rgba(255,255,255,.14)" stroke-width="0.8"/>
       <path d="M18.7 22 L45.3 22 L45.6 28 L18.4 28 Z" fill="#b6382e"/>
       <path d="M7 30.5 Q7 26.5 14 29 L50 29 Q57 26.5 57 30.5 Q57 36 32 36 Q7 36 7 30.5 Z" fill="#17191d" stroke="rgba(255,255,255,.14)" stroke-width="0.8"/>`),
   },
   {
-    id: 'wizard', nameKey: 'hatWizard', sat: 2100000, w: 112, b: 66, r: -4, dx: -8,
+    id: 'wizard', nameKey: 'hatWizard', sat: 2100000, w: 112, b: 72, r: -4, dx: -8,
     art: svg(`<path d="M25 35 Q33 21 36.5 11 Q37.5 5.5 44 3 Q41 9 40 13 Q44 25 50 35 Z" fill="#6d4bb8"/>
       <circle cx="44.5" cy="3.5" r="2.6" fill="#ffd166"/>
       <ellipse cx="37" cy="36" rx="21" ry="5" fill="#59389f"/>
@@ -88,7 +88,7 @@ const HATS = [
       <path d="M41.5 26 l0.9 2 2 0.9 -2 0.9 -0.9 2 -0.9 -2 -2 -0.9 2 -0.9 Z" fill="#ffe08a"/>`),
   },
   {
-    id: 'crown', nameKey: 'hatCrown', sat: null, w: 86, b: 66, r: -7,
+    id: 'crown', nameKey: 'hatCrown', sat: null, w: 86, b: 72, r: -7,
     art: svg(`<path d="M10 38 L7 13 L20 25 L32 6 L44 25 L57 13 L54 38 Z" fill="#f2b32a"/>
       <circle cx="7" cy="12" r="3" fill="#ffd97a"/><circle cx="32" cy="6" r="3" fill="#ffd97a"/><circle cx="57" cy="12" r="3" fill="#ffd97a"/>
       <rect x="9" y="34" width="46" height="8" rx="2.5" fill="#d9930f"/>

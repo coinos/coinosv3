@@ -425,7 +425,10 @@ async function settleLoop() {
 // never sees). The refill that works is a circular route: out one channel to
 // a peer, straight back in on another, arriving as a real HTLC the ASP
 // intercepts. Costs the peer's forwarding fee (well under 1%).
-const TOPUP = { lowWaterSat: 100_000, targetSat: 500_000, ...(CFG.floatTopup || {}) };
+// chunkSat caps one attempt: an ASP receive is funded from the vtxo pool,
+// and asking for more than its fresh buckets hold fails whole ("vtxo pool is
+// empty") where two smaller asks would land. Ticks accumulate to the target.
+const TOPUP = { lowWaterSat: 100_000, targetSat: 500_000, chunkSat: 200_000, ...(CFG.floatTopup || {}) };
 let topupCoolUntil = 0;
 async function autoTopupFloat() {
   if (!fwd || !ln || Date.now() < topupCoolUntil) return;
@@ -448,7 +451,7 @@ async function autoTopupFloat() {
     }
   }
   if (!pick || pick.cap < 20_000) { log('float top-up: no circular route capacity'); return; }
-  const amountSat = Math.min(Math.max(TOPUP.targetSat, queuedSat + TOPUP.lowWaterSat) - floatSat, pick.cap);
+  const amountSat = Math.min(Math.max(TOPUP.targetSat, queuedSat + TOPUP.lowWaterSat) - floatSat, pick.cap, TOPUP.chunkSat);
   const a = await fwd.createLnInvoice(amountSat, 'float auto top-up');
   const dec = await ln.call('decode', { string: a.invoice });
   const gossip = await ln.call('listchannels', { short_channel_id: pick.back.short_channel_id });

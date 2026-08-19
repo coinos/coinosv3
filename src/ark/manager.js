@@ -1152,10 +1152,19 @@ export class ArkManager {
     }
     if (action.step === 'htlcsReady') {
       const keys = this._key(action.keyIndex);
-      // Server order, verbatim: ClaimLightningReceive matches cosign parts to
-      // its HTLC list positionally, so a re-sorted list is rejected as
-      // "cosign inputs do not match htlcs" (bites only multi-vtxo receives).
-      const decoded = action.htlcBytes.map((b) => decodeVtxo(hex.decode(b)));
+      // ClaimLightningReceive matches cosign parts to its HTLC list
+      // positionally, ordered by OUTPOINT IN INTERNAL BYTE ORDER (Rust's
+      // natural OutPoint sort). Sorting by display-hex id — reversed txid —
+      // ordered them differently and the claim bounced with "cosign inputs
+      // do not match htlcs" (bites only multi-vtxo receives; verified live
+      // against a 9-vtxo 215k receive).
+      const byOutpoint = (a, b) => {
+        for (let i = 0; i < 32; i++) {
+          if (a.point.raw[i] !== b.point.raw[i]) return a.point.raw[i] - b.point.raw[i];
+        }
+        return a.point.vout - b.point.vout;
+      };
+      const decoded = action.htlcBytes.map((b) => decodeVtxo(hex.decode(b))).sort(byOutpoint);
       // preimage not revealed yet + HTLCs near expiry: abandon rather than
       // commit (the inbound HTLC times out and the sender is refunded)
       if (!action.preimageRevealed) {

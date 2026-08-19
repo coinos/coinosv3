@@ -1152,13 +1152,16 @@ export class ArkManager {
     }
     if (action.step === 'htlcsReady') {
       const keys = this._key(action.keyIndex);
-      const decoded = action.htlcBytes.map((b) => decodeVtxo(hex.decode(b)))
-        .sort((a, b) => (a.id < b.id ? -1 : 1));
+      // Server order, verbatim: ClaimLightningReceive matches cosign parts to
+      // its HTLC list positionally, so a re-sorted list is rejected as
+      // "cosign inputs do not match htlcs" (bites only multi-vtxo receives).
+      const decoded = action.htlcBytes.map((b) => decodeVtxo(hex.decode(b)));
       // preimage not revealed yet + HTLCs near expiry: abandon rather than
       // commit (the inbound HTLC times out and the sender is refunded)
       if (!action.preimageRevealed) {
         const tip = await this.chain.tipHeight();
-        if (tip > decoded[0].policy.htlcExpiry - this._expiryMargin()) {
+        const minExpiry = Math.min(...decoded.map((v) => v.policy.htlcExpiry));
+        if (tip > minExpiry - this._expiryMargin()) {
           action.step = 'failed';
           action.error = 'HTLCs near expiry — abandoned before preimage reveal';
           this._movement({ type: 'ln-receive', amountSat: action.amountSat, status: 'failed', detail: action.error });

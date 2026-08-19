@@ -418,16 +418,81 @@ async function settleLoop() {
     }
   }
 }
+// -- float self-top-up -------------------------------------------------------
+// The float drains toward recipients while LN settlements pile up on the CLN
+// — money that can't reach the float by a normal payment, because the top-up
+// invoice lives on the very node holding it (a self-payment the hold plugin
+// never sees). The refill that works is a circular route: out one channel to
+// a peer, straight back in on another, arriving as a real HTLC the ASP
+// intercepts. Costs the peer's forwarding fee (well under 1%).
+const TOPUP = { lowWaterSat: 100_000, targetSat: 500_000, ...(CFG.floatTopup || {}) };
+let topupCoolUntil = 0;
+async function autoTopupFloat() {
+  if (!fwd || !ln || Date.now() < topupCoolUntil) return;
+  const floatSat = fwd.balance().spendableSat;
+  const queuedSat = (state.pending || []).reduce((n, p) => n + p.sat, 0);
+  if (floatSat >= TOPUP.lowWaterSat && floatSat >= queuedSat) return;
+  topupCoolUntil = Date.now() + 10 * 60_000; // one attempt, then cool off
+  const info = await ln.call('getinfo');
+  const chans = ((await ln.call('listpeerchannels')).channels || [])
+    .filter((c) => c.state === 'CHANNELD_NORMAL' && c.peer_connected);
+  // the widest same-peer pair: out on one channel, back on the other
+  let pick = null;
+  for (const out of chans) {
+    for (const back of chans) {
+      if (out === back || out.peer_id !== back.peer_id) continue;
+      const cap = Math.min(
+        Math.floor((out.spendable_msat ?? 0) / 1000) - 10_000,
+        Math.floor((back.receivable_msat ?? 0) / 1000) - 10_000);
+      if (!pick || cap > pick.cap) pick = { out, back, cap };
+    }
+  }
+  if (!pick || pick.cap < 20_000) { log('float top-up: no circular route capacity'); return; }
+  const amountSat = Math.min(Math.max(TOPUP.targetSat, queuedSat + TOPUP.lowWaterSat) - floatSat, pick.cap);
+  const a = await fwd.createLnInvoice(amountSat, 'float auto top-up');
+  const dec = await ln.call('decode', { string: a.invoice });
+  const gossip = await ln.call('listchannels', { short_channel_id: pick.back.short_channel_id });
+  const ret = (gossip.channels || []).find((c) => c.source === pick.back.peer_id);
+  if (!ret) throw new Error('no gossip for the return channel');
+  const amtMsat = amountSat * 1000;
+  const feeMsat = Number(ret.base_fee_millisatoshi) + Math.ceil((amtMsat * ret.fee_per_millionth) / 1e6);
+  const finalDelay = dec.min_final_cltv_expiry || 18;
+  await ln.call('sendpay', {
+    route: [
+      { id: pick.out.peer_id, channel: pick.out.short_channel_id, amount_msat: amtMsat + feeMsat, delay: finalDelay + ret.delay, style: 'tlv' },
+      { id: info.id, channel: pick.back.short_channel_id, amount_msat: amtMsat, delay: finalDelay, style: 'tlv' },
+    ],
+    payment_hash: a.paymentHash, bolt11: a.invoice, payment_secret: dec.payment_secret,
+  });
+  // the HTLC sits held until the float wallet claims — drive it through
+  for (let i = 0; i < 30; i++) {
+    await new Promise((r) => setTimeout(r, 2000));
+    await fwd.sync().catch(() => {});
+    if (fwd.balance().spendableSat > floatSat) break;
+  }
+  const after = fwd.balance().spendableSat;
+  if (after > floatSat) {
+    log(`float self-top-up: +${after - floatSat} sat via circular route (fee ${Math.ceil(feeMsat / 1000)} sat) — float now ${after}`);
+    for (const p of state.pending || []) p.next = 0; // the queue can go again now
+    persist();
+    topupCoolUntil = 0;
+  } else {
+    log('float self-top-up did not settle — cooling off');
+  }
+}
+
 // retry queued forwards (e.g. after the float is topped up). Each failure
 // backs off exponentially (1m → 1h cap): a stuck forward must not fire an
 // offer request — and push-wake the recipient's devices — every minute
 // forever.
 setInterval(async () => {
-  const q = state.pending || [];
-  if (!q.length || !fwd) return;
-  // a float top-up arrives as ark mail; without this the queue would keep
-  // failing on a balance that's already been refilled
+  if (!fwd) return;
+  // always sync: it reads ark mail AND drives pending actions (a board
+  // waiting out its confirmations, an ln-recv mid-claim, a queued top-up)
   await fwd.sync().catch(() => {});
+  await autoTopupFloat().catch((e) => log('float self-top-up failed: ' + e.message));
+  const q = state.pending || [];
+  if (!q.length) return;
   const still = [];
   for (const p of q) {
     if (p.next && Date.now() < p.next) { still.push(p); continue; }
@@ -870,6 +935,43 @@ Bun.serve({
         const a = await fwd.createLnInvoice(sat, 'names float top-up');
         log(`float top-up invoice for ${sat} sat`);
         return json({ invoice: a.invoice, paymentHash: a.paymentHash });
+      } catch (e) {
+        return json({ error: e.message }, 500);
+      }
+    }
+
+    // Board on-chain sats into the float: returns a P2TR funding address.
+    // The funding tx must pay EXACTLY the requested amount to it AT VOUT 0
+    // (the board outpoint is fixed to index 0), then /admin/board/complete
+    // with the txid; confirmations are waited out by the sync loop.
+    if (url.pathname === '/admin/board' && req.method === 'POST') {
+      if (!CFG.adminToken || req.headers.get('x-admin-token') !== CFG.adminToken) {
+        return json({ error: 'unauthorized' }, 401);
+      }
+      if (!fwd) return json({ error: 'no forwarder wallet' }, 503);
+      const body = await req.json().catch(() => ({}));
+      const sat = Math.floor(body.sat || 0);
+      if (!sat || sat < 10_000) return json({ error: 'amount too small' }, 400);
+      try {
+        const b = await fwd.startBoard(sat);
+        log(`float board started: ${sat} sat -> ${b.fundingAddress} (fee ${b.feeSat} sat)`);
+        return json(b);
+      } catch (e) {
+        return json({ error: e.message }, 500);
+      }
+    }
+    if (url.pathname === '/admin/board/complete' && req.method === 'POST') {
+      if (!CFG.adminToken || req.headers.get('x-admin-token') !== CFG.adminToken) {
+        return json({ error: 'unauthorized' }, 401);
+      }
+      if (!fwd) return json({ error: 'no forwarder wallet' }, 503);
+      const body = await req.json().catch(() => ({}));
+      if (!body.actionId || !/^[0-9a-f]{64}$/.test(body.txid || '')) {
+        return json({ error: 'actionId and txid required' }, 400);
+      }
+      try {
+        const a = await fwd.completeBoard(body.actionId, body.txid);
+        return json({ ok: true, step: a.step, confs: a.confs ?? 0, needConfs: a.needConfs ?? null });
       } catch (e) {
         return json({ error: e.message }, 500);
       }

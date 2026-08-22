@@ -365,6 +365,15 @@ export function nwcFeature(ctx) {
       const dec = maybeBolt11(invoice);
       if (!dec) return errRes('OTHER', 'not a bolt11 invoice');
       if (!dec.amountSat) return errRes('OTHER', 'zero-amount invoices are not supported');
+      // The invoice names its network. A wallet on another network (a
+      // mutinynet tab, say) must not race the user's real payer with an
+      // instant mismatch error — hold back long enough for the right device
+      // to answer; sendChecked then suppresses this if anyone did.
+      const netOf = (n) => (n === 'mutinynet' ? 'signet' : n);
+      if (dec.network && netOf(getNetwork()) !== dec.network) {
+        await new Promise((r) => setTimeout(r, 3000));
+        return errRes('INTERNAL', `invoice is for ${dec.network}, wallet is on ${netOf(getNetwork())}`);
+      }
       const { left } = spendRoom(c);
       if (dec.amountSat > c.maxSat) {
         return errRes('QUOTA_EXCEEDED', `over the ${c.maxSat} sat per-payment limit`);

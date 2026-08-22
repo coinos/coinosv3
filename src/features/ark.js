@@ -7,7 +7,7 @@ import { HDKey } from '@scure/bip32';
 import { hex, base32nopad, bech32 } from '@scure/base';
 import { sha256 } from '@noble/hashes/sha256';
 import { ArkManager } from '../ark/manager.js';
-import { loadBg, saveBg, buildBg } from '../nwc-bg.js';
+import { loadBg, saveBg, buildBg, disarmSiblingRecords } from '../nwc-bg.js';
 import { boardFee } from '../ark/board.js';
 import { maybeBolt11, lnSendFee } from '../ark/lightning.js';
 import { decodeVtxo, getVtxoStatus, VTXO_STATE_SPENT, concatBytes } from '../ark/proto.js';
@@ -533,6 +533,7 @@ export function arkFeature(ctx) {
     if (prev) rec.spends = prev.spends; // the worker's log survives rewrites
     if (prefs) rec.prefs = prefs; // notification choices the worker honours
     await saveBg(wallet._cacheKey(), rec);
+    await disarmSiblingRecords(wallet._cacheKey(), rec).catch(() => {});
   }
 
   // On connect, fold whatever the worker did while we were closed back into

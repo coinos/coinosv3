@@ -118,6 +118,31 @@ export const bgSpendableSat = (rec) =>
   ((rec && rec.mgr && rec.mgr.vtxos) || []).filter((v) => v.state === 'spendable')
     .reduce((n, v) => n + (v.amountSat || 0), 0);
 
+// After (re)writing a wallet's record: strip its connections/offer from any
+// OTHER record that still carries them — an old network's mirror, say — so
+// exactly one record ever answers for a connection. The sibling's coin state
+// stays put for a later merge; only its answering role is removed. A stale
+// copy that races the live one answers from the wrong wallet (and a wrong-
+// network mirror fails instantly, beating the real payer's reply).
+export async function disarmSiblingRecords(walletKey, rec, { loadAll = allBgs, save = saveBg } = {}) {
+  const pks = new Set((rec.connections || []).map((c) => c.servicePk));
+  if (rec.offer?.pk) pks.add(rec.offer.pk);
+  if (!pks.size) return 0;
+  let disarmed = 0;
+  for (const r of await loadAll()) {
+    if (r.walletKey === walletKey || !r.rec || r.rec.v < 3) continue;
+    const conns = r.rec.connections || [];
+    const keep = conns.filter((c) => !pks.has(c.servicePk));
+    const offerHit = !!(r.rec.offer?.pk && pks.has(r.rec.offer.pk));
+    if (keep.length === conns.length && !offerHit) continue;
+    r.rec.connections = keep;
+    if (offerHit) r.rec.offer = null;
+    await save(r.walletKey, r.rec);
+    disarmed++;
+  }
+  return disarmed;
+}
+
 // The worker records what it spent so the app can absorb it into budgets and
 // history on next open.
 export async function noteBgSpend(walletKey, spend) {

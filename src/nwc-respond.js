@@ -125,6 +125,7 @@ async function respondOffer(ev, rec, walletKey, { notifier, fetchFn, saveFn, log
 // left to another device); false means "wake the user instead".
 export async function respondFromBg(data, {
   notifier, fetchFn = fetch, recordsFn = allBgs, saveFn = saveBg, log = () => {},
+  errGraceMs = 3000,
 } = {}) {
   const ev = data && data.event;
   if (!ev || !ev.id || !ev.pubkey) return false;
@@ -133,23 +134,29 @@ export async function respondFromBg(data, {
   const target = (ev.tags?.find((t) => t[0] === 'p') || [])[1];
   if (!target) return false;
 
-  // CLINK offer requests route by the offer service pubkey.
+  // CLINK offer requests route by the offer service pubkey — freshest record
+  // wins if stale copies linger.
   if (ev.kind === 21001) {
-    for (const r of await recordsFn()) {
-      if (r.rec.v >= 3 && r.rec.offer?.pk === target) {
-        return respondOffer(ev, r.rec, r.walletKey, { notifier, fetchFn, saveFn, log });
-      }
-    }
-    return false;
+    const offers = (await recordsFn())
+      .filter((r) => r.rec.v >= 3 && r.rec.offer?.pk === target)
+      .sort((a, b) => (b.rec.updated || 0) - (a.rec.updated || 0));
+    if (!offers.length) return false;
+    return respondOffer(ev, offers[0].rec, offers[0].walletKey, { notifier, fetchFn, saveFn, log });
   }
 
   if (ev.kind !== 23194) return false;
-  let walletKey = null, rec = null, conn = null;
+  // The same connection can survive under several wallet records (an old
+  // network's mirror beside the live one — they share the service keys).
+  // Gather every copy, freshest first; pay_invoice narrows further to the
+  // record whose wallet is on the invoice's network.
+  const matches = [];
   for (const r of await recordsFn()) {
     const c = (r.rec.connections || []).find((x) => x.servicePk === target);
-    if (c && r.rec.v >= 3) { walletKey = r.walletKey; rec = r.rec; conn = c; break; }
+    if (c && r.rec.v >= 3) matches.push({ walletKey: r.walletKey, rec: r.rec, conn: c });
   }
-  if (!conn) return false;
+  matches.sort((a, b) => (b.rec.updated || 0) - (a.rec.updated || 0));
+  if (!matches.length) return false;
+  let { walletKey, rec, conn } = matches[0];
   if (ev.pubkey !== conn.clientPk) return false;
 
   const scheme = ev.tags?.find((x) => x[0] === 'encryption')?.[1] === 'nip44_v2' ? 'nip44_v2' : 'nip04';
@@ -216,6 +223,18 @@ export async function respondFromBg(data, {
   const dec = invoice && maybeBolt11(invoice);
   if (!dec) { await publish(errRes('pay_invoice', 'OTHER', 'not a bolt11 invoice')); return true; }
   if (!dec.amountSat) { await publish(errRes('pay_invoice', 'OTHER', 'zero-amount invoices are not supported')); return true; }
+  // The bolt11 names its network; only a record on that network can pay it.
+  // A mismatched copy fails in milliseconds with a nonsense error that beats
+  // a sibling device's real payment to the client — so stand down instead,
+  // and only wake the user if nobody else answered.
+  const netOf = (n) => (n === 'mutinynet' ? 'signet' : n);
+  const fit = matches.find((m) => netOf(m.rec.ark && m.rec.ark.network) === dec.network);
+  if (!fit) {
+    log(`no ${dec.network} record for this connection — standing down`);
+    await new Promise((r) => setTimeout(r, errGraceMs));
+    return answered();
+  }
+  ({ walletKey, rec, conn } = fit);
   if (dec.amountSat > conn.maxSat) {
     await publish(errRes('pay_invoice', 'QUOTA_EXCEEDED', `over the ${conn.maxSat} sat per-payment limit`));
     return true;
@@ -239,27 +258,43 @@ export async function respondFromBg(data, {
     mgr = await bgManager(rec, walletKey, saveFn);
   } catch (e) { log('ark init failed: ' + e.message); return false; }
 
-  let id;
-  try {
-    id = await mgr.payLnInvoice(invoice);
-  } catch (e) {
+  // A local failure carries no urgency — wait out the grace period and
+  // re-check before publishing, so a sibling device's slower SUCCESS reply
+  // wins the client's eyes instead of being shouted over.
+  const failQuietly = async (message) => {
+    await new Promise((r) => setTimeout(r, errGraceMs));
     if (!(await answered())) {
-      await publish(errRes('pay_invoice', 'INTERNAL', e.message)).catch(() => {});
+      await publish(errRes('pay_invoice', 'INTERNAL', message)).catch(() => {});
     }
     return true;
-  }
+  };
   const deadline = Date.now() + PAY_WAIT_MS;
-  let a = mgr.lnAction(id);
-  while (a && !['done', 'failed'].includes(a.step) && Date.now() < deadline) {
-    await new Promise((r) => setTimeout(r, 1500));
-    await mgr.driveLn(id).catch(() => {});
+  let a = null;
+  for (let attempt = 0; ; attempt++) {
+    let id;
+    try {
+      id = await mgr.payLnInvoice(invoice);
+    } catch (e) {
+      return failQuietly(e.message);
+    }
     a = mgr.lnAction(id);
+    while (a && !['done', 'failed'].includes(a.step) && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 1500));
+      await mgr.driveLn(id).catch(() => {});
+      a = mgr.lnAction(id);
+    }
+    // A ghost coin (spent elsewhere, this mirror never learned) dies on the
+    // launchpad in milliseconds. Reconcile against the server — flipping the
+    // ghost — and retry once from live coins; the budget has barely started.
+    if (attempt === 0 && a && a.step === 'failed' && /not spendable|already spent/i.test(a.error || '')) {
+      log('a mirrored coin was already spent — reconciling and retrying');
+      await mgr.reconcile().catch(() => {});
+      continue;
+    }
+    break;
   }
   if (!a || a.step === 'failed') {
-    if (!(await answered())) {
-      await publish(errRes('pay_invoice', 'INTERNAL', (a && a.error) || 'payment failed')).catch(() => {});
-    }
-    return true;
+    return failQuietly((a && a.error) || 'payment failed');
   }
   if (a.step !== 'done') {
     // still in flight as our budget runs out: the app resumes it from the

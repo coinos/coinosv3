@@ -44,21 +44,24 @@ function makeReq(method, params = {}, scheme = 'nip44_v2', ageSec = 0) {
   }, clientSk);
 }
 
-function harness({ rec = baseRec(), answered = false } = {}) {
+function harness({ rec = baseRec(), recs = null, answered = false } = {}) {
   const published = [];
   const fetchFn = async (url, opts) => {
     if (url.includes('/publish')) {
       published.push(JSON.parse(opts.body).event);
       return { ok: true, json: async () => ({ ok: true }) };
     }
-    if (url.includes('/answered')) return { ok: true, json: async () => ({ answered }) };
+    if (url.includes('/answered')) {
+      return { ok: true, json: async () => ({ answered: typeof answered === 'function' ? answered() : answered }) };
+    }
     throw new Error('unexpected fetch ' + url);
   };
   const deps = {
     notifier: 'http://notif.test',
     fetchFn,
-    recordsFn: async () => [{ walletKey: 'w1', rec }],
+    recordsFn: async () => recs || [{ walletKey: 'w1', rec }],
     saveFn: async () => {},
+    errGraceMs: 5,
   };
   const decryptReply = (ev) => {
     const scheme = ev.tags.find((t) => t[0] === 'encryption')?.[1];
@@ -140,6 +143,67 @@ const INV21 = 'lnbc210n1p4xuk2wpp506wkjr0xk3677nu7je9c55vq4lzlkyd0ztcq2mlvumap0z
   const { deps } = harness({ rec });
   const handled = await respondFromBg({ type: 'nwc', event: ev(makeReq('pay_invoice', { invoice: INV21 })) }, deps);
   check('exhausted key window → wake the user', handled === false);
+}
+
+console.log('\n[network fit]');
+{
+  // a mutinynet-era mirror must not answer a mainnet invoice with a nonsense
+  // error — it stands down (false → wake) and publishes nothing
+  const rec = baseRec();
+  rec.ark.network = 'mutinynet';
+  const { deps, published } = harness({ rec });
+  const handled = await respondFromBg({ type: 'nwc', event: ev(makeReq('pay_invoice', { invoice: INV21 })) }, deps);
+  check('wrong-network record stands down', handled === false && published.length === 0);
+}
+{
+  // ...and stays silent when a sibling device already answered
+  const rec = baseRec();
+  rec.ark.network = 'mutinynet';
+  const { deps, published } = harness({ rec, answered: true });
+  const handled = await respondFromBg({ type: 'nwc', event: ev(makeReq('pay_invoice', { invoice: INV21 })) }, deps);
+  check('wrong-network + answered elsewhere → silent true', handled === true && published.length === 0);
+}
+{
+  // two copies of the connection: the fresher mutinynet one must lose to the
+  // older mainnet one for a mainnet invoice. The mainnet copy has an empty
+  // mirror, so reaching it shows as a wake (false) with nothing published —
+  // the mutinynet copy would instead have published a network error.
+  const mut = baseRec(); mut.ark.network = 'mutinynet'; mut.updated = Date.now();
+  const main = baseRec(); main.updated = Date.now() - 60_000; main.mgr.vtxos = [];
+  const { deps, published } = harness({ recs: [{ walletKey: 'wMut', rec: mut }, { walletKey: 'wMain', rec: main }] });
+  const handled = await respondFromBg({ type: 'nwc', event: ev(makeReq('pay_invoice', { invoice: INV21 })) }, deps);
+  check('invoice network picks the fitting record', handled === false && published.length === 0);
+}
+{
+  // non-pay methods answer from the freshest copy
+  const stale = baseRec(); stale.updated = 1; stale.mgr.vtxos = [];
+  const fresh = baseRec(); fresh.updated = Date.now();
+  const { deps, published, decryptReply } = harness({ recs: [{ walletKey: 'wOld', rec: stale }, { walletKey: 'wNew', rec: fresh }] });
+  await respondFromBg({ type: 'nwc', event: ev(makeReq('get_balance')) }, deps);
+  check('freshest record answers get_balance', decryptReply(published[0]).result?.balance === 5000000);
+}
+
+console.log('\n[sibling record hygiene]');
+{
+  const { disarmSiblingRecords } = await import('../src/nwc-bg.js');
+  const live = baseRec();
+  const staleShared = baseRec(); // same connection servicePk — must be disarmed
+  const unrelated = baseRec();
+  unrelated.connections = [{ ...conn, id: 'c2', servicePk: 'f'.repeat(64) }];
+  const legacy = { v: 2, connections: [conn] }; // pre-v3 pouch: left for its sweep
+  const saved = {};
+  const n = await disarmSiblingRecords('wLive', live, {
+    loadAll: async () => [
+      { walletKey: 'wLive', rec: live },
+      { walletKey: 'wStale', rec: staleShared },
+      { walletKey: 'wOther', rec: unrelated },
+      { walletKey: 'wLegacy', rec: legacy },
+    ],
+    save: async (k, r) => { saved[k] = r; },
+  });
+  check('shared connection stripped from the stale record', n === 1 && saved.wStale && saved.wStale.connections.length === 0);
+  check('own, unrelated and legacy records untouched', !saved.wLive && !saved.wOther && !saved.wLegacy);
+  check('stale record keeps its coin state', saved.wStale.mgr.vtxos.length === 1);
 }
 
 console.log(fails ? `\n❌ ${fails} failure(s)` : '\n✅ background responder behaves');

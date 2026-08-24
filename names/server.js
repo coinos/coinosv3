@@ -484,6 +484,31 @@ async function autoTopupFloat() {
   }
 }
 
+// -- float coin upkeep -------------------------------------------------------
+// The float's coins arrive mostly from the ASP's vtxo pool, whose short
+// lifetimes (~3 days) expire long before the app's monthly renewal cadence —
+// and an expired coin forwarded onward strands money the recipient's wallet
+// refuses (a 100k forward died this way on 2026-08-24). Nothing here runs the
+// app's upkeep layer, so renew explicitly: refresh any coin inside a day of
+// its expiry into a fresh round output.
+let floatRefreshAt = 0;
+const REFRESH_MARGIN_BLOCKS = 144;
+async function floatUpkeep() {
+  if (!fwd || Date.now() - floatRefreshAt < 30 * 60_000) return;
+  const spendables = (fwd.state?.vtxos || []).filter((v) => v.state === 'spendable');
+  // never start a round while another action is still in flight
+  if (!spendables.length || (fwd.state.actions || []).some((a) => !['done', 'failed'].includes(a.step))) return;
+  const tip = await fwd.chain.tipHeight();
+  const expiring = spendables.filter((v) =>
+    v.expiryHeight && v.expiryHeight - tip < REFRESH_MARGIN_BLOCKS && v.amountSat >= 330);
+  if (!expiring.length) return;
+  floatRefreshAt = Date.now();
+  const sat = expiring.reduce((n, v) => n + v.amountSat, 0);
+  log(`float upkeep: refreshing ${expiring.length} coins (${sat} sat) nearing expiry`);
+  await fwd.refresh(expiring.map((v) => v.id));
+  log(`float upkeep: refresh round complete — float now ${fwd.balance().spendableSat} sat`);
+}
+
 // retry queued forwards (e.g. after the float is topped up). Each failure
 // backs off exponentially (1m → 1h cap): a stuck forward must not fire an
 // offer request — and push-wake the recipient's devices — every minute
@@ -494,6 +519,7 @@ setInterval(async () => {
   // waiting out its confirmations, an ln-recv mid-claim, a queued top-up)
   await fwd.sync().catch(() => {});
   await autoTopupFloat().catch((e) => log('float self-top-up failed: ' + e.message));
+  await floatUpkeep().catch((e) => log('float upkeep failed: ' + e.message));
   const q = state.pending || [];
   if (!q.length) return;
   const still = [];

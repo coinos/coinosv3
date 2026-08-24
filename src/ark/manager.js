@@ -222,15 +222,28 @@ export class ArkManager {
     });
   }
 
+  // A coin past its expiry is money only the server still honors: the
+  // recipient's validator refuses anything expired at pickup time, so sending
+  // one strands the amount in a vtxo no wallet will accept. Sub-dust coins are
+  // the exception — they have no unilateral exit to protect and the coinos ASP
+  // keeps honoring them off-chain (mirrors validateVtxo's carve-out).
+  _expired(v, tip) {
+    return !!tip && !!v.expiryHeight && v.amountSat >= 330 && v.expiryHeight <= tip;
+  }
+
   balance() {
-    const sum = (st) => this.state.vtxos.filter((v) => v.state === st).reduce((n, v) => n + v.amountSat, 0);
+    const tip = this._tipH || 0;
+    const sum = (st) => this.state.vtxos
+      .filter((v) => v.state === st && !this._expired(v, tip)).reduce((n, v) => n + v.amountSat, 0);
+    const expiredSat = this.state.vtxos
+      .filter((v) => v.state === 'spendable' && this._expired(v, tip)).reduce((n, v) => n + v.amountSat, 0);
     // Boards whose funding tx is broadcast but whose vtxo isn't registered yet:
     // the sats have left the on-chain balance, so surface them here instead of
     // letting them vanish until the board completes.
     const boardingSat = this.state.actions
       .filter((a) => a.type === 'board' && a.fundingTxid && !['done', 'failed'].includes(a.step))
       .reduce((n, a) => n + (a.amountSat - a.feeSat), 0);
-    return { spendableSat: sum('spendable'), pendingSat: sum('pending'), boardingSat };
+    return { spendableSat: sum('spendable'), pendingSat: sum('pending'), boardingSat, expiredSat };
   }
 
   // Receives newer than the last acknowledgement — the UI's "Payment
@@ -254,6 +267,9 @@ export class ArkManager {
   // in-flight actions forward.
   async sync() {
     const baselining = !!this.state.baselinePending;
+    // keep the cached tip fresh: balance() and input selection judge coin
+    // expiry against it synchronously, and a stale tip hides dead coins
+    await this._tipMemo();
     const mailbox = this._mailboxKey();
     const { messages } = await readMailbox(this.arkUrl, mailbox, this.state.mailboxCheckpoint);
     let changed = false;
@@ -559,8 +575,9 @@ export class ArkManager {
   // that covers it, else largest-first until the sum does. A balance scattered
   // by many small receives stays spendable — the package cosign spends all
   // the inputs atomically and the recipient just receives several vtxos.
-  _selectInputs(amountSat) {
-    const spendable = this.state.vtxos.filter((v) => v.state === 'spendable');
+  _selectInputs(amountSat, tip = this._tipH || 0) {
+    const spendable = this.state.vtxos
+      .filter((v) => v.state === 'spendable' && !this._expired(v, tip));
     const single = spendable
       .filter((v) => v.amountSat >= amountSat)
       .sort((a, b) => a.amountSat - b.amountSat)[0];
@@ -571,9 +588,18 @@ export class ArkManager {
       picked.push(v); sum += v.amountSat;
       if (sum >= amountSat) break;
     }
-    if (sum < amountSat) throw new Error('insufficient ark balance');
+    if (sum < amountSat) throw new Error(this._insufficientMsg(tip));
     if (picked.length > 24) throw new Error('balance is spread over too many coins for one send');
     return picked;
+  }
+
+  _insufficientMsg(tip) {
+    const expiredSat = this.state.vtxos
+      .filter((v) => v.state === 'spendable' && this._expired(v, tip))
+      .reduce((n, v) => n + v.amountSat, 0);
+    return expiredSat
+      ? `insufficient ark balance (${expiredSat} sat expired and unusable)`
+      : 'insufficient ark balance';
   }
 
   async send(addrString, amountSat) {
@@ -584,7 +610,7 @@ export class ArkManager {
     const mailboxDelivery = dest.delivery.find((d) => d.type === 1);
     if (!mailboxDelivery) throw new Error('address has no mailbox delivery mechanism');
 
-    const inputs = this._selectInputs(amountSat);
+    const inputs = this._selectInputs(amountSat, await this._tipMemo());
     // Each input funds its own arkoor: the first n-1 are consumed whole, the
     // last carries the remainder plus any change.
     let remaining = amountSat;
@@ -768,7 +794,8 @@ export class ArkManager {
     // smallest single vtxo that covers amount + routing + its expiry-dependent
     // fee — else gather largest-first: each input funds its own HTLC vtxo with
     // the same payment hash, and the server sums them into one payment.
-    const spendable = this.state.vtxos.filter((v) => v.state === 'spendable');
+    const spendable = this.state.vtxos
+      .filter((v) => v.state === 'spendable' && !this._expired(v, tip));
     let inputs = null, feeSat = 0;
     for (const v of [...spendable].sort((a, b) => a.amountSat - b.amountSat)) {
       const fee = lnSendFee(amountSat, this.info.lnSendFees, [v], tip) + routing;
@@ -782,7 +809,7 @@ export class ArkManager {
         feeSat = lnSendFee(amountSat, this.info.lnSendFees, picked, tip) + routing;
         if (sum >= amountSat + feeSat) { inputs = picked; break; }
       }
-      if (!inputs) throw new Error('insufficient ark balance');
+      if (!inputs) throw new Error(this._insufficientMsg(tip));
       if (inputs.length > 24) throw new Error('balance is spread over too many coins for one payment');
     }
     // per-input HTLC share: first n-1 consumed whole, the last carries change

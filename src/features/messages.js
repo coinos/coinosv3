@@ -1311,7 +1311,9 @@ export function messagesFeature(ctx) {
       // row tap even if propagation quirks let the click reach us
       onClick: open ? (e) => { if (e.target && e.target.closest && e.target.closest('button')) return; openNoteThread(ev); } : undefined,
     },
-      avatar(pk, 'chat-avatar', false),
+      // the avatar is its own tap-target (profile), even inside an openable
+      // row — its handler stops propagation, so the row still opens the thread
+      avatar(pk),
       h('div', { class: 'col grow', style: 'min-width:0;gap:3px' },
         h('div', { class: 'row between', style: 'align-items:center;gap:8px' },
           h('div', { class: 'row', style: 'gap:7px;align-items:baseline;min-width:0' },

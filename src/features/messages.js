@@ -613,15 +613,38 @@ export function messagesFeature(ctx) {
   // app — the server tries them first — and gift/invite links carry their own
   // multi-segment paths, which this single-segment shape can't match. The
   // path is consumed immediately so a reload lands on the wallet as usual.
-  // `let`, not const: consumed on first init. Features re-init without a page
-  // load (logout-and-forget → new wallet), and the link belongs to the visit
-  // that carried it, not to every wallet born in the same tab.
-  let urlProfile = (() => {
+  const urlProfile = (() => {
     if (typeof location === 'undefined' || urlInvite) return null;
     const m = location.pathname.match(/^\/([A-Za-z0-9._-]{1,64})\/?$/);
     return m ? m[1] : null;
   })();
   if (urlProfile) { try { history.replaceState(null, '', '/'); } catch {} }
+
+  // Resolve and open right away — not in init(), which only runs once a
+  // wallet opens (and would replay on every wallet born in this tab). For a
+  // visitor with no wallet the profile renders as a truly public page over
+  // the unlock screen (ui.pubProf gates that surface) — nostr profiles are
+  // public data, and Back lands on the app's own front door.
+  if (urlProfile) {
+    (async () => {
+      await new Promise((r) => setTimeout(r, 0)); // never render mid-boot
+      let pk = parseNostrPubkey(urlProfile);
+      if (!pk && /^[a-z0-9._-]{1,30}$/i.test(urlProfile)) {
+        // same registrar + domain rule the names feature uses
+        const domain = getNetwork() === 'mutinynet' ? 'staging.coinos.io' : 'coinos.io';
+        const name = urlProfile.toLowerCase();
+        try {
+          const j = await fetch(`https://names.coinos.io/.well-known/nostr.json?name=${encodeURIComponent(name)}&domain=${domain}`)
+            .then((r) => r.json());
+          pk = (j.names || {})[name] || null;
+        } catch {}
+      }
+      if (pk && /^[0-9a-f]{64}$/.test(pk)) {
+        if (ui.screen !== 'wallet') ui.pubProf = true;
+        openProfile(pk);
+      }
+    })();
+  }
 
   // ---- push notifications -------------------------------------------------
   // The nwcpush notifier watches relays for what it can see without keys:
@@ -1649,7 +1672,9 @@ export function messagesFeature(ctx) {
               logoutBtn())
           : mine
             ? logoutBtn() // the editor renders above once the kind 0 loads
-            : h('div', { class: 'row gap6 wrap' },
+            : ui.pubProf
+              ? null // no wallet open: messaging and paying both need one
+              : h('div', { class: 'row gap6 wrap' },
                 h('button', { class: 'btn-primary grow', onClick: () => {
                   const peer = pk;
                   ui.profilePk = null;
@@ -1684,7 +1709,7 @@ export function messagesFeature(ctx) {
               noteRow(pk, ev, name),
             ])));
       })(),
-      h('button', { class: 'btn-ghost btn-block', onClick: () => { ui.profilePk = null; ui.profEdit = null; ui.profEditFilled = false; render(); } }, t('back')),
+      h('button', { class: 'btn-ghost btn-block', onClick: () => { ui.profilePk = null; ui.pubProf = null; ui.profEdit = null; ui.profEditFilled = false; render(); } }, t('back')),
       mine ? logoutPop() : null);
   }
 
@@ -2342,7 +2367,16 @@ export function messagesFeature(ctx) {
     unreadMessages() { return unreadCount(); },
     notifySettingsCards() { return [notifyCard()]; },
     screenView() {
-      if (ui.screen !== 'wallet') return null;
+      if (ui.screen !== 'wallet') {
+        // The public (no-wallet) surface: a deep-linked profile, and the
+        // threads reachable from it, are public nostr content — shown
+        // without an account. Back falls through to the app's own screens.
+        if (ui.pubProf) {
+          if (ui.noteThread) return threadScreen();
+          if (ui.profilePk) return profileScreen();
+        }
+        return null;
+      }
       if (ui.zapSetup) return zapSetupScreen();
       if (ui.noteThread) return threadScreen();
       if (ui.profilePk) return profileScreen();
@@ -2396,24 +2430,7 @@ export function messagesFeature(ctx) {
         loadLinkInvite(urlInvite);
         setTimeout(() => { ui.chatOpen = true; ui.msgView = 'home'; render(); }, 0);
       }
-      if (urlProfile) {
-        const target = urlProfile;
-        urlProfile = null;
-        (async () => {
-          let pk = parseNostrPubkey(target);
-          if (!pk && /^[a-z0-9._-]{1,30}$/i.test(target)) {
-            // same registrar + domain rule the names feature uses
-            const domain = getNetwork() === 'mutinynet' ? 'staging.coinos.io' : 'coinos.io';
-            const name = target.toLowerCase();
-            try {
-              const j = await fetch(`https://names.coinos.io/.well-known/nostr.json?name=${encodeURIComponent(name)}&domain=${domain}`)
-                .then((r) => r.json());
-              pk = (j.names || {})[name] || null;
-            } catch {}
-          }
-          if (pk && /^[0-9a-f]{64}$/.test(pk)) openProfile(pk);
-        })();
-      }
+      ui.pubProf = null; // a wallet is open now — its chrome owns the profile
       window.addEventListener('resize', onViewportResize);
       window.visualViewport?.addEventListener('resize', onViewportResize);
       allUnsubs.push(() => {

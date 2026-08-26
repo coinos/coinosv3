@@ -9,7 +9,9 @@ import { hkdf } from "@noble/hashes/hkdf";
 import { schnorr, secp256k1 } from "@noble/curves/secp256k1";
 import { bytesToHex, hexToBytes } from "@noble/hashes/utils";
 import { finalizeEvent, generateSecretKey, getPublicKey, getEventHash, verifyEvent } from "nostr-tools/pure";
-import { nip44 } from "nostr-tools";
+// subpath, NOT the "nostr-tools" barrel — the barrel drags every NIP (and a
+// second copy of the noble crypto stack) into the bundle for one import
+import * as nip44 from "nostr-tools/nip44";
 import * as nip19 from "nostr-tools/nip19";
 import { base64urlnopad } from "@scure/base";
 

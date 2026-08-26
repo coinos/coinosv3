@@ -38,8 +38,24 @@ import { entropyToMnemonic } from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english';
 import { getPublicKey, finalizeEvent, nip44 } from './nostr.js';
 import { SimplePool } from 'nostr-tools/pool';
-import { BunkerSigner, parseBunkerInput, createNostrConnectURI } from 'nostr-tools/nip46';
 import { generateSecretKey } from 'nostr-tools/pure';
+
+// NIP-46 loads lazily from dist/nip46.js (same pattern as the QR decoder):
+// bunker logins are rare, and the module is heavy. Tests running outside a
+// browser preset globalThis.__nip46 with the real module instead.
+let _nip46 = null;
+function loadNip46() {
+  if (_nip46) return _nip46;
+  if (typeof globalThis !== 'undefined' && globalThis.__nip46) return (_nip46 = Promise.resolve(globalThis.__nip46));
+  _nip46 = new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = 'nip46.js';
+    s.onload = () => (window.__nip46 ? resolve(window.__nip46) : reject(new Error('signer module unavailable')));
+    s.onerror = () => { _nip46 = null; reject(new Error('could not load the remote-signer module')); };
+    document.head.appendChild(s);
+  });
+  return _nip46;
+}
 
 const SEED_DTAG = 'coinos:wallet:v1';
 const BACKUP_KIND = 30078;
@@ -91,6 +107,7 @@ export async function extensionSigner() {
 }
 
 export async function bunkerSigner(uri, { onAuth } = {}) {
+  const { BunkerSigner, parseBunkerInput } = await loadNip46();
   const bp = await parseBunkerInput(String(uri || '').trim());
   if (!bp) throw new Error('not a bunker:// address');
   if (!bp.relays || !bp.relays.length) throw new Error('that bunker address lists no relays');
@@ -111,6 +128,7 @@ export async function bunkerSigner(uri, { onAuth } = {}) {
 // prompting the user again.
 export async function resumeBunker(session, { onAuth, timeoutMs = 8000 } = {}) {
   if (!session || !session.local || !session.bp || !session.bp.pubkey) return null;
+  const { BunkerSigner } = await loadNip46();
   const local = hex.decode(session.local);
   const signer = BunkerSigner.fromBunker(local, session.bp, {
     onauth: (url) => { if (onAuth) onAuth(url); },
@@ -147,7 +165,8 @@ function bunkerAdapter(signer, pubkey, local) {
 // relay — no bunker URL to copy. Returns the URI (render it as a deep link
 // and a QR), a promise that resolves to a signer adapter when the app
 // answers, and a cancel.
-export function nostrConnect({ relays = ['wss://relay.coinos.io', 'wss://nos.lol'], timeoutMs = 180_000 } = {}) {
+export async function nostrConnect({ relays = ['wss://relay.coinos.io', 'wss://nos.lol'], timeoutMs = 180_000 } = {}) {
+  const { BunkerSigner, createNostrConnectURI } = await loadNip46();
   const local = generateSecretKey();
   const secret = hex.encode(crypto.getRandomValues(new Uint8Array(16)));
   const uri = createNostrConnectURI({

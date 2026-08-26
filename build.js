@@ -38,9 +38,11 @@ const MANIFEST = {
 // cross-origin explorer/Nostr requests. CACHE carries a build token so each
 // deploy supersedes the previous cache. {{VERSION}} is filled in at build time.
 const SW = `const CACHE = 'cold-{{VERSION}}';
-// jsqr.js is precached so the lazy QR decoder is available offline too (for
-// installed PWAs on browsers without a native BarcodeDetector).
-const SHELL = ['./', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'jsqr.js'];
+// jsqr.js / nip46.js are precached so the lazy QR decoder and remote-signer
+// module are available offline too. app-{{VERSION}}.js is the main bundle —
+// content-addressed, so a new deploy precaches a new name and the old cache
+// is dropped wholesale.
+const SHELL = ['./', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'jsqr.js', 'nip46.js', 'app-{{VERSION}}.js'];
 
 self.addEventListener('install', (e) => {
   self.skipWaiting();
@@ -158,6 +160,21 @@ export async function buildJsQr({ minify = true } = {}) {
   return result.outputs[0].text();
 }
 
+// Standalone bundle for the NIP-46 remote-signer client — loaded on demand by
+// nostr-login.js the first time a bunker/nostrconnect login happens.
+export async function buildNip46({ minify = true } = {}) {
+  const result = await Bun.build({
+    entrypoints: ['./src/nip46-global.js'],
+    target: 'browser',
+    minify,
+  });
+  if (!result.success) {
+    for (const log of result.logs) console.error(log);
+    throw new Error('nip46 bundle failed');
+  }
+  return result.outputs[0].text();
+}
+
 // The notify-only push handler for builds without the ark+nwc features (the
 // full builds get the bundled auto-answering handler from src/sw-nwc.js).
 const SW_WAKE_ONLY = `self.addEventListener('push', (e) => {
@@ -257,7 +274,7 @@ function gitCommit() {
   return 'dev';
 }
 
-export async function buildHtml({ minify = true, pwa = minify, features = process.env.HAL_FEATURES, staging = isStaging() } = {}) {
+async function bundleAppJs({ minify, features, staging }) {
   const result = await Bun.build({
     entrypoints: ['./src/app.js'],
     target: 'browser',
@@ -268,11 +285,28 @@ export async function buildHtml({ minify = true, pwa = minify, features = proces
     for (const log of result.logs) console.error(log);
     throw new Error('bundle failed');
   }
-  let js = await result.outputs[0].text();
-  // Guard against a literal </script> inside the bundle closing our tag early.
-  js = js.replaceAll('</script', '<\\/script');
-  const css = await Bun.file('./src/style.css').text();
+  return result.outputs[0].text();
+}
 
+// The brand mark for the static boot shell, lifted from brandHeader in
+// src/app.js at build time so the two can never drift apart. Missing match
+// degrades to an empty (invisible) logo, never a broken build.
+async function brandSvg() {
+  const src = await Bun.file('./src/app.js').text();
+  const m = src.match(/'(<svg viewBox="0 0 224 72"[\s\S]*?<\/svg>)'/);
+  return m ? m[1] : '';
+}
+
+// A static boot shell inside #app: painted the instant HTML+CSS arrive,
+// before any JS parses — no blank page, no flash. It mirrors the DOM the
+// app's own first render produces (brand row; plus the profile shell when
+// the path deep-links a profile), so the morph replaces it invisibly.
+function bootShell(logo) {
+  return `<div class="col" style="gap:16px"><div class="row between"><div class="brand"><div class="logo-full" aria-label="coinos" role="img">${logo}</div></div></div><div class="card col" id="boot-shell" style="gap:12px;display:none"><div class="row gap6" style="align-items:center"><div class="chat-avatar profile-avatar fallback loading"></div><div class="chat-title" id="boot-shell-name"></div></div></div></div>`;
+}
+const BOOT_SHELL_SCRIPT = `<script>try{var m=location.pathname.match(/^\\/([A-Za-z0-9._-]{1,64})\\/?$/);if(m){document.getElementById('boot-shell').style.display='';document.getElementById('boot-shell-name').textContent=decodeURIComponent(m[1]);}}catch(e){}</script>`;
+
+async function pageHtml({ css, staging, pwa, scriptHtml }) {
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -285,25 +319,56 @@ export async function buildHtml({ minify = true, pwa = minify, features = proces
 ${pwa ? PWA_HEAD : ''}<style>${css}</style>
 </head>
 <body>
-<div id="app"></div>
-<script>${js}</script>
+<div id="app">${bootShell(await brandSvg())}</div>
+${BOOT_SHELL_SCRIPT}
+${scriptHtml}
 ${pwa ? SW_REGISTER + '\n' : ''}</body>
-</html>`.replaceAll('{{COMMIT}}', gitCommit());
+</html>`;
+}
+
+// Self-contained single file (dev server, test tools, save-and-open-offline).
+export async function buildHtml({ minify = true, pwa = minify, features = process.env.HAL_FEATURES, staging = isStaging() } = {}) {
+  let js = await bundleAppJs({ minify, features, staging });
+  // Guard against a literal </script> inside the bundle closing our tag early.
+  js = js.replaceAll('</script', '<\\/script');
+  const css = await Bun.file('./src/style.css').text();
+  const html = await pageHtml({ css, staging, pwa, scriptHtml: `<script>${js}</script>` });
+  return html.replaceAll('{{COMMIT}}', gitCommit());
+}
+
+// The hosted split build: a small no-cache index.html (CSS + boot shell) that
+// loads the bundle from a content-addressed app-<version>.js. The page stays
+// tiny on every load while the heavy bundle is cached by name — a repeat
+// visit re-downloads kilobytes, not the whole app.
+export async function buildSplit({ minify = true, features = process.env.HAL_FEATURES, staging = isStaging() } = {}) {
+  const js = (await bundleAppJs({ minify, features, staging })).replaceAll('{{COMMIT}}', gitCommit());
+  const css = await Bun.file('./src/style.css').text();
+  const html = (await pageHtml({ css, staging, pwa: true, scriptHtml: '<script src="app-{{VERSION}}.js" defer></script>' }))
+    .replaceAll('{{COMMIT}}', gitCommit());
+  return { html, js };
 }
 
 if (import.meta.main) {
   await mkdir('dist', { recursive: true });
-  // Hashed with {{VERSION}} still a placeholder, so the page and the worker
-  // can both be stamped with the same token — the page cannot contain a hash
-  // of itself.
-  const rawHtml = await buildHtml({ minify: true });
-  const version = Bun.hash(rawHtml).toString(36);
+  // Hashed with {{VERSION}} still a placeholder, so the page, the bundle
+  // filename and the worker are all stamped with the same token — the page
+  // cannot contain a hash of itself.
+  const { html: rawHtml, js: rawJs } = await buildSplit({ minify: true });
+  const version = Bun.hash(rawHtml + rawJs).toString(36);
   const html = rawHtml.replaceAll('{{VERSION}}', version);
   await Bun.write('dist/index.html', html);
+  await Bun.write(`dist/app-${version}.js`, rawJs.replaceAll('{{VERSION}}', version));
+  // Drop stale content-addressed bundles from earlier local builds so dist/
+  // mirrors a deploy (the deploy hook rsyncs dist/ wholesale).
+  for (const f of await readdir('dist')) {
+    if (/^app-[a-z0-9]+\.js$/.test(f) && f !== `app-${version}.js`) await Bun.file('dist/' + f).delete();
+  }
 
   // Lazy-loaded QR decoder — kept out of index.html, fetched only when a
   // browser without BarcodeDetector opens the scanner.
   await Bun.write('dist/jsqr.js', await buildJsQr());
+  // Lazy-loaded NIP-46 remote-signer client — fetched on first bunker login.
+  await Bun.write('dist/nip46.js', await buildNip46());
 
   // Per-language strings — fetched on demand so visitors only download theirs.
   await mkdir('dist/locales', { recursive: true });
@@ -330,6 +395,7 @@ if (import.meta.main) {
   for (const f of readdirSync('static/punks')) await Bun.write('dist/punks/' + f, Bun.file('static/punks/' + f));
 
   const kb = (Buffer.byteLength(html) / 1024).toFixed(0);
-  console.log(`✓ dist/index.html written (${kb} KB) — open it offline, no server needed`);
-  console.log(`✓ PWA: manifest.webmanifest, sw.js (cold-${version}), ${STATIC.length} icons, jsqr.js, ${locales.length} locales`);
+  const jkb = (Buffer.byteLength(rawJs) / 1024).toFixed(0);
+  console.log(`✓ dist/index.html written (${kb} KB) + app-${version}.js (${jkb} KB) — offline: keep the two side by side (or install the PWA)`);
+  console.log(`✓ PWA: manifest.webmanifest, sw.js (cold-${version}), ${STATIC.length} icons, jsqr.js, nip46.js, ${locales.length} locales`);
 }

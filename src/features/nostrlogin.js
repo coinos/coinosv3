@@ -162,11 +162,19 @@ export function nostrLoginFeature(ctx) {
   // from another device); when the app connects, login continues by itself.
   let nc = null;
   let ncRun = null;
-  function startNostrConnect(run) {
+  let ncToken = null; // guards the async gap while the nip46 module loads
+  async function startNostrConnect(run) {
     if (nc) nc.cancel();
     ncRun = run;
-    nc = nostrConnect();
-    const mine = nc;
+    const token = (ncToken = {});
+    let mine;
+    try { mine = await nostrConnect(); } catch {
+      if (token === ncToken && ui.nostrConnectOpen) { ui.nostrConnectOpen = false; render(); }
+      return;
+    }
+    if (token !== ncToken || !ncRun) { mine.cancel(); return; }
+    nc = mine;
+    render();
     mine.ready.then((signer) => {
       if (nc !== mine || !ncRun) return;
       ui.nostrConnectOpen = false;
@@ -179,6 +187,7 @@ export function nostrLoginFeature(ctx) {
   function stopNostrConnect() {
     if (nc) { nc.cancel(); nc = null; }
     ncRun = null;
+    ncToken = null;
   }
 
   function nostrConnectSection(run) {
@@ -188,7 +197,9 @@ export function nostrLoginFeature(ctx) {
         onClick: () => { ui.nostrConnectOpen = true; startNostrConnect(run); render(); },
       }, t('nlConnectApp'));
     }
-    if (!nc) return null;
+    // the nip46 module is still fetching — hold the spot with a spinner
+    if (!nc) return h('div', { class: 'row gap6', style: 'align-items:center;justify-content:center;padding:8px' },
+      h('span', { class: 'spinner sm' }));
     return h('div', { class: 'col', style: 'gap:10px;align-items:center' },
       h('a', {
         class: 'btn btn-block btn-primary', href: nc.uri,

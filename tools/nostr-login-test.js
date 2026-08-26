@@ -77,6 +77,9 @@ console.log('\n[bunker (NIP-46) wiring]');
 {
   const { bunkerSigner } = await import('../src/nostr-login.js');
   const { parseBunkerInput } = await import('nostr-tools/nip46');
+  // outside a browser the lazy dist/nip46.js can't be script-injected —
+  // preset the module the way the loader's test seam expects
+  globalThis.__nip46 = await import('nostr-tools/nip46');
   // a real Amethyst-issued address shape
   const uri = 'bunker://81029479a85c3f2f0c8d7ca9fbd92923942e2254e873d93c1c7095f068c83a85'
     + '?relay=wss%3A%2F%2Frelay.damus.io%2F&relay=wss%3A%2F%2Fnos.lol%2F&secret=4wdWEsG7RDzCaBt6p9ovvk0uMX6ENh2J';

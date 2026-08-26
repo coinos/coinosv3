@@ -474,7 +474,11 @@ function renderInner() {
   const navKey = [ui.screen, ui.tab === 'settings', ui.chatOpen, ui.msgView, ui.msgPeer, ui.msgCommunity,
     ui.profilePk, ui.settingsPage, ui.addrScan, ui.arkExitPage, ui.txDetail, ui.giftMode, ui.claimStep, ui.nameEditOpen,
     ui.noteThread && ui.noteThread.focusId, !!ui.userSearch, !!ui.zapSetup, !!ui.hatShop].join('|');
-  if (uiChanged('nav', navKey)) _navAt = performance.now();
+  // A deep-linked profile landing is ONE page settling, not a chain of
+  // navigations: boot screens shuffle beneath the shell (unlock → restored
+  // wallet), then the resolved profile replaces the shell in place. The key
+  // still updates, but nothing slides or re-animates until the landing ends.
+  if (uiChanged('nav', navKey) && !(ui.pubProfPending || ui.pubProfHold)) _navAt = performance.now();
   applyAnim(screen, 'anim-page', (performance.now() - _navAt) < 340 ? performance.now() - _navAt : -1);
   morphChildren(root, [screen, footer()]);
   if (fpath) {

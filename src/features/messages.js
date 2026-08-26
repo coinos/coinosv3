@@ -652,11 +652,16 @@ export function messagesFeature(ctx) {
           if (!profiles.has(pk)) profiles.set(pk, { name, t: 0 });
         }
       }
-      ui.pubProfPending = null;
       if (pk && /^[0-9a-f]{64}$/.test(pk)) {
+        // hold the pinned nav key across this render: the profile replaces
+        // the shell in place, with no page-slide re-animation
+        ui.pubProfHold = true;
+        ui.pubProfPending = null;
         if (ui.screen === 'wallet') ui.pubProf = null; // wallet chrome owns it
         openProfile(pk);
+        ui.pubProfHold = null;
       } else {
+        ui.pubProfPending = null;
         ui.pubProf = null; // unknown name: fall through to the front door
         render();
       }
@@ -2384,6 +2389,16 @@ export function messagesFeature(ctx) {
     unreadMessages() { return unreadCount(); },
     notifySettingsCards() { return [notifyCard()]; },
     screenView() {
+      // A profile deep link mid-resolution holds the frame over EVERY screen
+      // — an auto-restored wallet would otherwise flash its home page for the
+      // beat the registrar lookup takes. The shell shows the name straight
+      // off the URL; no spinner, the empty beat reads calmer.
+      if (ui.pubProfPending) return h('div', { class: 'col', style: 'gap:16px' },
+        ctx.brandHeader(false),
+        h('div', { class: 'card col', style: 'gap:12px' },
+          h('div', { class: 'row gap6', style: 'align-items:center' },
+            h('div', { class: 'chat-avatar profile-avatar fallback loading' }),
+            h('div', { class: 'chat-title' }, ui.pubProfPending))));
       if (ui.screen !== 'wallet') {
         // The public (no-wallet) surface: a deep-linked profile, and the
         // threads reachable from it, are public nostr content — shown
@@ -2391,14 +2406,6 @@ export function messagesFeature(ctx) {
         if (ui.pubProf) {
           if (ui.noteThread) return threadScreen();
           if (ui.profilePk) return profileScreen();
-          // resolution in flight: the shell holds the layout with the name
-          // straight off the URL — no spinner, the empty beat reads calmer
-          if (ui.pubProfPending) return h('div', { class: 'col', style: 'gap:16px' },
-            ctx.brandHeader(false),
-            h('div', { class: 'card col', style: 'gap:12px' },
-              h('div', { class: 'row gap6', style: 'align-items:center' },
-                h('div', { class: 'chat-avatar profile-avatar fallback loading' }),
-                h('div', { class: 'chat-title' }, ui.pubProfPending))));
         }
         return null;
       }

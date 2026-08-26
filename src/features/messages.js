@@ -613,7 +613,10 @@ export function messagesFeature(ctx) {
   // app — the server tries them first — and gift/invite links carry their own
   // multi-segment paths, which this single-segment shape can't match. The
   // path is consumed immediately so a reload lands on the wallet as usual.
-  const urlProfile = (() => {
+  // `let`, not const: consumed on first init. Features re-init without a page
+  // load (logout-and-forget → new wallet), and the link belongs to the visit
+  // that carried it, not to every wallet born in the same tab.
+  let urlProfile = (() => {
     if (typeof location === 'undefined' || urlInvite) return null;
     const m = location.pathname.match(/^\/([A-Za-z0-9._-]{1,64})\/?$/);
     return m ? m[1] : null;
@@ -2394,12 +2397,14 @@ export function messagesFeature(ctx) {
         setTimeout(() => { ui.chatOpen = true; ui.msgView = 'home'; render(); }, 0);
       }
       if (urlProfile) {
+        const target = urlProfile;
+        urlProfile = null;
         (async () => {
-          let pk = parseNostrPubkey(urlProfile);
-          if (!pk && /^[a-z0-9._-]{1,30}$/i.test(urlProfile)) {
+          let pk = parseNostrPubkey(target);
+          if (!pk && /^[a-z0-9._-]{1,30}$/i.test(target)) {
             // same registrar + domain rule the names feature uses
             const domain = getNetwork() === 'mutinynet' ? 'staging.coinos.io' : 'coinos.io';
-            const name = urlProfile.toLowerCase();
+            const name = target.toLowerCase();
             try {
               const j = await fetch(`https://names.coinos.io/.well-known/nostr.json?name=${encodeURIComponent(name)}&domain=${domain}`)
                 .then((r) => r.json());

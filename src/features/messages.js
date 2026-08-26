@@ -25,6 +25,7 @@ import {
 import { makeDMRumor, unwrapDM, wrapDM } from '../dm.js';
 import { saveInbox } from '../dm-inbox.js';
 import { makeSearcher, resultRows, fallbackAvatar } from '../recipient-search.js';
+import { getNetwork } from '../api.js';
 import { hexToBytes, bytesToHex } from '@noble/hashes/utils';
 import { t } from '../i18n.js';
 
@@ -606,6 +607,18 @@ export function messagesFeature(ctx) {
   // An invite link opened in the browser lands here before the wallet exists.
   const urlInvite = typeof location !== 'undefined' ? parseInviteLink(location.href) : null;
   if (urlInvite) { try { history.replaceState(null, '', '/'); } catch {} }
+
+  // coinos.io/<username> parity: a claimed name (or a raw npub / hex key) as
+  // the whole URL path deep-links to that profile. Real files never reach the
+  // app — the server tries them first — and gift/invite links carry their own
+  // multi-segment paths, which this single-segment shape can't match. The
+  // path is consumed immediately so a reload lands on the wallet as usual.
+  const urlProfile = (() => {
+    if (typeof location === 'undefined' || urlInvite) return null;
+    const m = location.pathname.match(/^\/([A-Za-z0-9._-]{1,64})\/?$/);
+    return m ? m[1] : null;
+  })();
+  if (urlProfile) { try { history.replaceState(null, '', '/'); } catch {} }
 
   // ---- push notifications -------------------------------------------------
   // The nwcpush notifier watches relays for what it can see without keys:
@@ -2379,6 +2392,22 @@ export function messagesFeature(ctx) {
       if (urlInvite && !pendingLink) {
         loadLinkInvite(urlInvite);
         setTimeout(() => { ui.chatOpen = true; ui.msgView = 'home'; render(); }, 0);
+      }
+      if (urlProfile) {
+        (async () => {
+          let pk = parseNostrPubkey(urlProfile);
+          if (!pk && /^[a-z0-9._-]{1,30}$/i.test(urlProfile)) {
+            // same registrar + domain rule the names feature uses
+            const domain = getNetwork() === 'mutinynet' ? 'staging.coinos.io' : 'coinos.io';
+            const name = urlProfile.toLowerCase();
+            try {
+              const j = await fetch(`https://names.coinos.io/.well-known/nostr.json?name=${encodeURIComponent(name)}&domain=${domain}`)
+                .then((r) => r.json());
+              pk = (j.names || {})[name] || null;
+            } catch {}
+          }
+          if (pk && /^[0-9a-f]{64}$/.test(pk)) openProfile(pk);
+        })();
       }
       window.addEventListener('resize', onViewportResize);
       window.visualViewport?.addEventListener('resize', onViewportResize);

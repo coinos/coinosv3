@@ -626,6 +626,11 @@ export function messagesFeature(ctx) {
   // the unlock screen (ui.pubProf gates that surface) — nostr profiles are
   // public data, and Back lands on the app's own front door.
   if (urlProfile) {
+    // Claim the first paint synchronously: these are set before the boot
+    // render, so the visitor sees a profile shell from the first frame —
+    // never a flash of the front door while the registrar lookup runs.
+    ui.pubProf = true;
+    ui.pubProfPending = urlProfile;
     (async () => {
       await new Promise((r) => setTimeout(r, 0)); // never render mid-boot
       let pk = parseNostrPubkey(urlProfile);
@@ -638,10 +643,22 @@ export function messagesFeature(ctx) {
             .then((r) => r.json());
           pk = (j.names || {})[name] || null;
         } catch {}
+        // The username is real display material: seed the light cache (stale,
+        // t:0, so the kind 0 still gets fetched) and the page paints the name
+        // and fallback avatar art immediately instead of an npub prefix and
+        // an empty circle while the relays answer.
+        if (pk && /^[0-9a-f]{64}$/.test(pk)) {
+          warmProfiles();
+          if (!profiles.has(pk)) profiles.set(pk, { name, t: 0 });
+        }
       }
+      ui.pubProfPending = null;
       if (pk && /^[0-9a-f]{64}$/.test(pk)) {
-        if (ui.screen !== 'wallet') ui.pubProf = true;
+        if (ui.screen === 'wallet') ui.pubProf = null; // wallet chrome owns it
         openProfile(pk);
+      } else {
+        ui.pubProf = null; // unknown name: fall through to the front door
+        render();
       }
     })();
   }
@@ -2374,6 +2391,14 @@ export function messagesFeature(ctx) {
         if (ui.pubProf) {
           if (ui.noteThread) return threadScreen();
           if (ui.profilePk) return profileScreen();
+          // resolution in flight: the shell holds the layout with the name
+          // straight off the URL — no spinner, the empty beat reads calmer
+          if (ui.pubProfPending) return h('div', { class: 'col', style: 'gap:16px' },
+            ctx.brandHeader(false),
+            h('div', { class: 'card col', style: 'gap:12px' },
+              h('div', { class: 'row gap6', style: 'align-items:center' },
+                h('div', { class: 'chat-avatar profile-avatar fallback loading' }),
+                h('div', { class: 'chat-title' }, ui.pubProfPending))));
         }
         return null;
       }

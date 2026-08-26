@@ -270,11 +270,3 @@ export async function walletForSigner(signer) {
 // request with a nostr key. `u` and `method` bind the signature to this exact
 // request and `payload` to its body, so a captured header can't be replayed
 // against a different endpoint or a tampered body.
-export async function nip98Header(signer, url, method, bodyText) {
-  const tags = [['u', url], ['method', method.toUpperCase()]];
-  if (bodyText) tags.push(['payload', hex.encode(sha256(new TextEncoder().encode(bodyText)))]);
-  const evt = await signer.signEvent({
-    kind: 27235, created_at: Math.floor(Date.now() / 1000), tags, content: '',
-  });
-  return 'Nostr ' + btoa(JSON.stringify(evt));
-}

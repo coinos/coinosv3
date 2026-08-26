@@ -58,7 +58,7 @@ check('another account cannot decrypt it', denied);
 
 console.log('\n[NIP-98 auth]');
 {
-  const { nip98Header } = await import('../src/nostr-login.js');
+  const { nip98Header } = await import('../src/nip98.js');
   const { verifyEvent } = await import('nostr-tools/pure');
   const { sha256: sha } = await import('@noble/hashes/sha256');
   const body = JSON.stringify({ name: 'x' });

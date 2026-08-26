@@ -13,7 +13,7 @@
 
 import { t } from '../i18n.js';
 import { fmtSats } from '../format.js';
-import { nip98Header } from '../nostr-login.js';
+import { nip98Header } from '../nip98.js';
 import { getNetwork } from '../api.js';
 
 const REGISTRAR = 'https://names.coinos.io';

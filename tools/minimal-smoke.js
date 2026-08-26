@@ -29,7 +29,10 @@ check('no ark protocol code', !html.includes('Ark VTXO mailbox authorization'));
 check('no swap protocol code', !html.includes('swap/reverse'));
 check('no musig code', !html.includes('MuSig/noncecoef'));
 check('no silent-payment engine', !html.includes('BIP0352') && !html.includes('__SP_WORKER__'));
-check('no nostr sync code', !html.includes('30078') && !html.includes('relay.coinos.io'));
+// The sync EVENT KIND must be gone; the coinos relay hostname alone is not a
+// sync marker anymore — recipient search (send-to-npub, core UX) carries
+// PROFILE_RELAYS for profile lookups even in the minimal build.
+check('no nostr sync code', !html.includes('30078'));
 
 const server = Bun.serve({ port: 5198, fetch: () => new Response(html, { headers: { 'content-type': 'text/html' } }) });
 
@@ -62,6 +65,8 @@ try {
   await sleep(400);
 
   console.log('\n[1] import + core wallet');
+  await clickText('button', 'Get started'); // the front door gained a step
+  await sleep(300);
   await clickText('button', 'Import existing');
   await sleep(200);
   await page.type('textarea', generateMnemonic(wordlist));

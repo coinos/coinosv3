@@ -12,7 +12,7 @@
 // record falls back to the Lightning-address flow (zaps feature).
 
 import { resolveBip353, parsePaymentName, parseBip21 } from '../bip353.js';
-import { nip98Header } from '../nostr-login.js';
+import { nip98Header } from '../nip98.js';
 import { qrSvg } from '../qr.js';
 import { isArkAddress } from './ark.js';
 import { getNetwork } from '../api.js';

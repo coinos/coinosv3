@@ -42,7 +42,7 @@ const SW = `const CACHE = 'cold-{{VERSION}}';
 // module are available offline too. app-{{VERSION}}.js is the main bundle —
 // content-addressed, so a new deploy precaches a new name and the old cache
 // is dropped wholesale.
-const SHELL = ['./', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'jsqr.js', 'nip46.js', 'app-{{VERSION}}.js'];
+const SHELL = ['./', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'jsqr.js', 'nip46.js', 'app-{{VERSION}}.js'{{EXTRA_SHELL}}];
 
 self.addEventListener('install', (e) => {
   self.skipWaiting();
@@ -146,6 +146,12 @@ const SW_REGISTER =
   `navigator.serviceWorker.addEventListener('controllerchange',function(){_ask(navigator.serviceWorker.controller)});` +
   `addEventListener('load',function(){navigator.serviceWorker.register('sw.js',{updateViaCache:'none'}).catch(function(){})})}</script>`;
 
+// Lazy bundles load as classic scripts into the page's global scope, where
+// the main bundle's minified top-level names already live — two Bun outputs
+// can mint the same identifier and die with "already been declared". An IIFE
+// wrapper gives each its own scope; they publish through window.* on purpose.
+const iife = (js) => `(function(){${js}\n})();`;
+
 // Bundle the standalone jsQR decoder (sets window.jsQR) for lazy loading.
 export async function buildJsQr({ minify = true } = {}) {
   const result = await Bun.build({
@@ -157,7 +163,7 @@ export async function buildJsQr({ minify = true } = {}) {
     for (const log of result.logs) console.error(log);
     throw new Error('jsqr bundle failed');
   }
-  return result.outputs[0].text();
+  return iife(await result.outputs[0].text());
 }
 
 // Standalone bundle for the NIP-46 remote-signer client — loaded on demand by
@@ -172,7 +178,7 @@ export async function buildNip46({ minify = true } = {}) {
     for (const log of result.logs) console.error(log);
     throw new Error('nip46 bundle failed');
   }
-  return result.outputs[0].text();
+  return iife(await result.outputs[0].text());
 }
 
 // The notify-only push handler for builds without the ark+nwc features (the
@@ -228,14 +234,36 @@ export async function buildSwNwc({ minify = true } = {}) {
 // because it drives ark's headless pay/balance seam.
 const ALL_FEATURES = { gifts: 'giftsFeature', ark: 'arkFeature', nostrlogin: 'nostrLoginFeature', names: 'namesFeature', zaps: 'zapsFeature', nwc: 'nwcFeature', hats: 'hatsFeature', sync: 'syncFeature', messages: 'messagesFeature' };
 
+// Features with no first-frame surface load as separate chunks right after
+// boot (dynamic import; real files in the split build, inlined in the
+// single-file build). Hook precedence is POSITION in the features array, so
+// each deferred feature holds its slot with an empty placeholder object —
+// every `f[hook]` probe skips it — and is filled in place when it arrives.
+// NOT deferrable: ark (balance on the home screen), messages (deep-linked
+// profiles + the boot shell), gifts is deferrable because app.js awaits the
+// deferred load before the bootUrl check when the path looks like a gift.
+const DEFERRED_FEATURES = ['gifts', 'nwc', 'hats'];
+
 export function enabledFeatures(spec = process.env.HAL_FEATURES) {
   if (spec == null) return Object.keys(ALL_FEATURES);
   return spec.split(',').map((x) => x.trim().toLowerCase()).filter((x) => x in ALL_FEATURES);
 }
 
-function featureIndexSource(enabled) {
-  return enabled.map((f) => `import { ${ALL_FEATURES[f]} } from './${f}.js';`).join('\n')
-    + `\nexport function buildFeatures(ctx) { return [${enabled.map((f) => `${ALL_FEATURES[f]}(ctx)`).join(', ')}]; }\n`;
+export function featureIndexSource(enabled) {
+  const lazy = enabled.filter((f) => DEFERRED_FEATURES.includes(f));
+  const eager = enabled.filter((f) => !lazy.includes(f));
+  return eager.map((f) => `import { ${ALL_FEATURES[f]} } from './${f}.js';`).join('\n') + `
+export function buildFeatures(ctx) {
+  return [${enabled.map((f) => (lazy.includes(f) ? '{}' : `${ALL_FEATURES[f]}(ctx)`)).join(', ')}];
+}
+export async function loadDeferredFeatures(ctx, features) {
+  const late = [];
+  await Promise.all([${lazy.map((f) => `
+    import('./${f}.js').then((m) => { late.push(features[${enabled.indexOf(f)}] = m.${ALL_FEATURES[f]}(ctx)); })`).join(',')}
+  ]);
+  return late;
+}
+`;
 }
 
 const featurePlugin = (enabled) => ({
@@ -274,18 +302,21 @@ function gitCommit() {
   return 'dev';
 }
 
-async function bundleAppJs({ minify, features, staging }) {
+async function bundleApp({ minify, features, staging, splitting = false }) {
   const result = await Bun.build({
     entrypoints: ['./src/app.js'],
     target: 'browser',
     minify,
+    // The split build emits real ESM chunks (deferred features arrive as their
+    // own files); the single-file build inlines the dynamic imports instead.
+    ...(splitting ? { splitting: true, format: 'esm', naming: { chunk: 'chunk-[hash].[ext]' } } : {}),
     plugins: [featurePlugin(enabledFeatures(features)), flagsPlugin(staging)],
   });
   if (!result.success) {
     for (const log of result.logs) console.error(log);
     throw new Error('bundle failed');
   }
-  return result.outputs[0].text();
+  return result.outputs;
 }
 
 // The brand mark for the static boot shell, lifted from brandHeader in
@@ -328,7 +359,8 @@ ${pwa ? SW_REGISTER + '\n' : ''}</body>
 
 // Self-contained single file (dev server, test tools, save-and-open-offline).
 export async function buildHtml({ minify = true, pwa = minify, features = process.env.HAL_FEATURES, staging = isStaging() } = {}) {
-  let js = await bundleAppJs({ minify, features, staging });
+  const outputs = await bundleApp({ minify, features, staging });
+  let js = await outputs[0].text();
   // Guard against a literal </script> inside the bundle closing our tag early.
   js = js.replaceAll('</script', '<\\/script');
   const css = await Bun.file('./src/style.css').text();
@@ -337,15 +369,23 @@ export async function buildHtml({ minify = true, pwa = minify, features = proces
 }
 
 // The hosted split build: a small no-cache index.html (CSS + boot shell) that
-// loads the bundle from a content-addressed app-<version>.js. The page stays
-// tiny on every load while the heavy bundle is cached by name — a repeat
-// visit re-downloads kilobytes, not the whole app.
+// loads the app as a content-addressed ESM entry plus chunks — the deferred
+// features ride in their own files, fetched right after boot. The page stays
+// tiny on every load while the heavy bundles are cached by name — a repeat
+// visit re-downloads kilobytes, not the app.
 export async function buildSplit({ minify = true, features = process.env.HAL_FEATURES, staging = isStaging() } = {}) {
-  const js = (await bundleAppJs({ minify, features, staging })).replaceAll('{{COMMIT}}', gitCommit());
+  const outputs = await bundleApp({ minify, features, staging, splitting: true });
+  const entry = outputs.find((o) => o.kind === 'entry-point') || outputs[0];
+  const js = (await entry.text()).replaceAll('{{COMMIT}}', gitCommit());
+  const chunks = await Promise.all(outputs.filter((o) => o !== entry).map(async (o) => ({
+    name: o.path.split('/').pop(),
+    text: (await o.text()).replaceAll('{{COMMIT}}', gitCommit()),
+  })));
   const css = await Bun.file('./src/style.css').text();
-  const html = (await pageHtml({ css, staging, pwa: true, scriptHtml: '<script src="app-{{VERSION}}.js" defer></script>' }))
+  // module scripts defer by default; the boot shell paints while this loads
+  const html = (await pageHtml({ css, staging, pwa: true, scriptHtml: '<script type="module" src="app-{{VERSION}}.js"></script>' }))
     .replaceAll('{{COMMIT}}', gitCommit());
-  return { html, js };
+  return { html, js, chunks };
 }
 
 if (import.meta.main) {
@@ -353,15 +393,17 @@ if (import.meta.main) {
   // Hashed with {{VERSION}} still a placeholder, so the page, the bundle
   // filename and the worker are all stamped with the same token — the page
   // cannot contain a hash of itself.
-  const { html: rawHtml, js: rawJs } = await buildSplit({ minify: true });
-  const version = Bun.hash(rawHtml + rawJs).toString(36);
+  const { html: rawHtml, js: rawJs, chunks } = await buildSplit({ minify: true });
+  const version = Bun.hash(rawHtml + rawJs + chunks.map((c) => c.text).join('')).toString(36);
   const html = rawHtml.replaceAll('{{VERSION}}', version);
   await Bun.write('dist/index.html', html);
   await Bun.write(`dist/app-${version}.js`, rawJs.replaceAll('{{VERSION}}', version));
+  for (const c of chunks) await Bun.write('dist/' + c.name, c.text);
   // Drop stale content-addressed bundles from earlier local builds so dist/
   // mirrors a deploy (the deploy hook rsyncs dist/ wholesale).
+  const keep = new Set([`app-${version}.js`, ...chunks.map((c) => c.name)]);
   for (const f of await readdir('dist')) {
-    if (/^app-[a-z0-9]+\.js$/.test(f) && f !== `app-${version}.js`) await Bun.file('dist/' + f).delete();
+    if (/^(app|chunk)-[A-Za-z0-9]+\.js$/.test(f) && !keep.has(f)) await Bun.file('dist/' + f).delete();
   }
 
   // Lazy-loaded QR decoder — kept out of index.html, fetched only when a
@@ -387,6 +429,7 @@ if (import.meta.main) {
   const nwcSw = feats.includes('nwc') && feats.includes('ark');
   const swBody = SW
     .replaceAll('{{VERSION}}', version)
+    .replaceAll('{{EXTRA_SHELL}}', chunks.map((c) => `, '${c.name}'`).join(''))
     .replaceAll('{{NWC_WAKE_FALLBACK}}', nwcSw ? '' : SW_WAKE_ONLY);
   await Bun.write('dist/sw.js', nwcSw ? swBody + '\n' + await buildSwNwc() : swBody);
   for (const f of STATIC) await Bun.write('dist/' + f, Bun.file('static/' + f));
@@ -396,6 +439,7 @@ if (import.meta.main) {
 
   const kb = (Buffer.byteLength(html) / 1024).toFixed(0);
   const jkb = (Buffer.byteLength(rawJs) / 1024).toFixed(0);
-  console.log(`✓ dist/index.html written (${kb} KB) + app-${version}.js (${jkb} KB) — offline: keep the two side by side (or install the PWA)`);
+  const ckb = (chunks.reduce((n, c) => n + Buffer.byteLength(c.text), 0) / 1024).toFixed(0);
+  console.log(`✓ dist/index.html (${kb} KB) + app-${version}.js (${jkb} KB) + ${chunks.length} deferred chunk(s) (${ckb} KB) — offline use: install the PWA`);
   console.log(`✓ PWA: manifest.webmanifest, sw.js (cold-${version}), ${STATIC.length} icons, jsqr.js, nip46.js, ${locales.length} locales`);
 }

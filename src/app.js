@@ -8,12 +8,12 @@ import { Wallet, newMnemonic, isValidMnemonic, accountXpubFor, cacheKeyFor, utxo
 import { qrSvg } from './qr.js';
 import { makeSearcher, resultRows, searchable, punkUrl } from './recipient-search.js';
 import { npubOf } from './nostr.js';
-import { nip98Header } from './nostr-login.js';
+import { nip98Header } from './nip98.js';
 import { NOSTR_MARK } from './features/nostrlogin.js';
 import { scanQr } from './scan.js';
 import { dataSources, getSource, setSource, getNetwork, setNetwork, NETWORKS } from './api.js';
 import { STAGING } from './build-flags.js';
-import { buildFeatures } from './features/index.js';
+import { buildFeatures, loadDeferredFeatures } from './features/index.js';
 import { t, LANGS, getLang, setLang, isRTL, loadLocale } from './i18n.js';
 import {
   fmtBtc,
@@ -1093,6 +1093,7 @@ async function activateAccount(acc, opts = {}) {
   // threads, decrypted DMs) belong to the old keys, and surviving into this
   // account they'd both leak the old account's messages on screen and block
   // the new account's own subscriptions from ever starting.
+  _featuresInited = false;
   for (const f of FEATURES) { try { f.stop && f.stop(); } catch {} }
   activeId = acc.id;
   // A gift link generates this wallet only to claim into. Keep it provisional
@@ -1119,6 +1120,7 @@ async function activateAccount(acc, opts = {}) {
   persistAccounts();
   autoSave(acc);
   for (const f of FEATURES) { try { f.init && f.init(); } catch {} } // per-feature wallet lifecycle
+  _featuresInited = true; // a deferred feature landing after this point gets its init() on arrival
   // A freshly generated identity provably has no profile yet — let features
   // skip the "is there a kind-0?" wait (avatar would sit blank meanwhile).
   if (opts.generated) featureHook('identityGenerated');
@@ -1783,6 +1785,7 @@ function lock({ offerPassword = false } = {}) {
   wallet.stopRealtime();
   // A locked session must not keep listening as the account that just left —
   // and whatever logs in next must not inherit its threads or subscriptions.
+  _featuresInited = false;
   for (const f of FEATURES) { try { f.stop && f.stop(); } catch {} }
   clearAccounts();
   vaultPassword = null;
@@ -1909,6 +1912,7 @@ function softLock() {
     }
   }
   const keepId = activeId;
+  _featuresInited = false;
   for (const f of FEATURES) { try { f.stop && f.stop(); } catch {} }
   vaultPassword = null;
   accounts = watch.slice();
@@ -4398,6 +4402,18 @@ const ctx = {
   },
 };
 const FEATURES = buildFeatures(ctx);
+// Deferred features (gifts, NWC, hats) hold placeholder slots in FEATURES —
+// hook precedence is position — and arrive as separate chunks right after
+// boot, filled in place. If a wallet opened before they landed, each newcomer
+// gets the init() it missed; if the wallet locked again, it doesn't.
+let _featuresInited = false;
+const _deferredReady = (async () => {
+  try {
+    const late = await loadDeferredFeatures(ctx, FEATURES);
+    if (_featuresInited) for (const f of late) { try { f.init && f.init(); } catch {} }
+    if (late.length) render();
+  } catch (e) { console.error('deferred features failed to load', e); }
+})();
 
 // apply text direction, then restore a wallet left open in this tab — otherwise
 // show the unlock screen.
@@ -4467,8 +4483,11 @@ document.addEventListener('visibilitychange', () => {
   else onAppVisible();
 });
 window.addEventListener('load', () => setTimeout(() => { if (activeAccount()) claimMigratedName(); }, 1500));
-loadLocale(getLang()).finally(() => {
+loadLocale(getLang()).finally(async () => {
   applyBootAutoLogout(); // clear an overdue session before we read it for claim targets
+  // A gift link's feature is deferred — wait for it before asking who owns
+  // the URL, or the claim would fall through to a normal boot and be lost.
+  if (/^\/(g|ag|lg)\//.test(location.pathname)) await _deferredReady;
   if (featureHook('bootUrl')) return; // a feature consumed the URL (e.g. a gift claim)
   if (!restoreAccountsState()) render();
 });

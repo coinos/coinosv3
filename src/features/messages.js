@@ -645,11 +645,13 @@ export function messagesFeature(ctx) {
         } catch {}
         // The username is real display material: seed the light cache (stale,
         // t:0, so the kind 0 still gets fetched) and the page paints the name
-        // and fallback avatar art immediately instead of an npub prefix and
-        // an empty circle while the relays answer.
+        // immediately instead of an npub prefix. `loading` keeps the avatar a
+        // quiet circle meanwhile — punk art must mean "has no picture", never
+        // "picture not here yet", or the wrong face flashes before the real
+        // one loads.
         if (pk && /^[0-9a-f]{64}$/.test(pk)) {
           warmProfiles();
-          if (!profiles.has(pk)) profiles.set(pk, { name, t: 0 });
+          if (!profiles.has(pk)) profiles.set(pk, { name, t: 0, loading: true });
         }
       }
       if (pk && /^[0-9a-f]{64}$/.test(pk)) {
@@ -1132,8 +1134,9 @@ export function messagesFeature(ctx) {
   const avatar = (pk, cls = 'chat-avatar', clickable = true) => {
     const p = profileOf(pk);
     // While the profile is in flight, a quiet empty circle — the punk is a
-    // statement about having no picture, not a loading state.
-    const node = p === null
+    // statement about having no picture, not a loading state. (`loading` on
+    // an entry marks a provisional seed: name known, picture still unknown.)
+    const node = p === null || (p && p.loading && !p.picture)
       ? h('div', { class: cls + ' fallback loading' })
       : p.picture
         // A background paints synchronously from cache; a fresh <img> decodes

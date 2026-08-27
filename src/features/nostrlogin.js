@@ -87,9 +87,12 @@ export function nostrLoginFeature(ctx) {
       signer = await makeSigner();
       const res = await walletForSigner(signer);
       if (res.mode === 'new') {
-        // no wallet on this identity yet — ask before publishing one
-        ui.nostrLoginNew = { signer, npub: npubOf(signer.pubkey) };
-        busy(false);
+        // No wallet on this identity yet — make one and walk straight in.
+        // The interstitial that used to ask first read as an error screen to
+        // Google/passkey users (a fresh identity is the NORMAL first run for
+        // them); anyone signing in wants a wallet, and the backup mechanics
+        // stay spelled out in the nostr settings card.
+        await createForSigner({ signer });
         return;
       }
       // Same wallet however you log in: a key-derived seed is published too,
@@ -109,8 +112,7 @@ export function nostrLoginFeature(ctx) {
     } catch (e) { fail(e); }
   }
 
-  async function createForSigner() {
-    const st = ui.nostrLoginNew;
+  async function createForSigner(st) {
     if (!st) return;
     busy(true);
     try {
@@ -120,7 +122,6 @@ export function nostrLoginFeature(ctx) {
       const existing = await fetchWalletBackup(st.signer).catch(() => null);
       const mnemonic = existing ? existing.mnemonic : newMnemonic();
       if (!existing) await publishWalletBackup(st.signer, { mnemonic });
-      ui.nostrLoginNew = null;
       attaching = true;
       live = selfHealing(st.signer);
       await ctx.openMnemonic(mnemonic, (existing && existing.passphrase) || '', { nostrPubkey: st.signer.pubkey });
@@ -335,21 +336,6 @@ export function nostrLoginFeature(ctx) {
 
   // Shown under the create/import tabs on the unlock screen.
   function unlockExtra() {
-    if (ui.nostrLoginNew) {
-      return h('div', { class: 'card col', style: 'gap:10px' },
-        h('h3', { style: 'margin:0' }, t('nlNewTitle')),
-        h('div', { class: 'small muted' }, ui.nostrLoginNew.npub || ''),
-        h('p', { class: 'small muted', style: 'margin:0' }, t('nlNewDesc')),
-        h('div', { class: 'notice info small' }, t('nlBackupWarning')),
-        ui.nostrLoginError ? h('div', { class: 'notice err' }, ui.nostrLoginError) : null,
-        h('div', { class: 'row gap6' },
-          h('button', { class: 'btn-ghost', onClick: () => {
-            if (ui.nostrLoginNew.signer.close) ui.nostrLoginNew.signer.close();
-            ui.nostrLoginNew = null; render();
-          } }, t('cancel')),
-          h('button', { class: 'btn-primary grow', disabled: ui.nostrLoginBusy, onClick: createForSigner },
-            ui.nostrLoginBusy ? h('span', { class: 'spinner' }) : t('nlCreateBtn'))));
-    }
     // Collapsed by default: Google, passkey, and Nostr right on the front
     // door; the Nostr button expands into the full signer list.
     if (!ui.nostrLoginOpen) {
@@ -589,11 +575,6 @@ export function nostrLoginFeature(ctx) {
     // The welcome screen's sign-in block: Google and passkey act right there;
     // the Nostr button steps into the wizard's signer list.
     frontDoorSignin() {
-      // A mid-flight login state — the "create a wallet for this identity?"
-      // confirmation — must surface here too: it used to render only on the
-      // unlock screen's card, which left a first Google sign-in silently
-      // waiting on a confirm button that was never on screen.
-      if (ui.nostrLoginNew) return unlockExtra();
       return h('div', { class: 'col', style: 'gap:8px' },
         ...externalButtons(loginWith, true),
         h('button', { class: 'btn-block', style: 'padding:14px', onClick: () => {

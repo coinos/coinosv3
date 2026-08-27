@@ -287,11 +287,15 @@ export function nostrLoginFeature(ctx) {
     ];
   }
 
-  // The ways in, as buttons. `run` receives a signer factory.
-  function signerButtons(run) {
+  // The ways in, as buttons. `run` receives a signer factory. The expanded
+  // "Log in with Nostr" card passes nostrOnly — Google and passkey already
+  // stand on the front door, and repeating them under a Nostr heading reads
+  // as noise — while link/reconnect keep them: an account born from a Google
+  // or passkey sign-in needs the same door to get back in.
+  function signerButtons(run, { nostrOnly = false } = {}) {
     const hasExt = typeof window !== 'undefined' && !!window.nostr;
     return h('div', { class: 'col', style: 'gap:8px' },
-      ...externalButtons(run),
+      ...(nostrOnly ? [] : externalButtons(run)),
       hasExt
         ? h('button', { class: 'btn-block', disabled: ui.nostrLoginBusy,
             onClick: () => run(() => extensionSigner()) }, t('nlExtension'))
@@ -346,7 +350,7 @@ export function nostrLoginFeature(ctx) {
         h('h3', { style: 'margin:0' }, t('nlTitle')),
         h('span', { class: 'linklike small', onClick: () => { ui.nostrLoginOpen = false; render(); } }, t('cancel'))),
       h('p', { class: 'small muted', style: 'margin:0' }, t('nlDesc')),
-      signerButtons(loginWith));
+      signerButtons(loginWith, { nostrOnly: true }));
   }
 
   // Re-attach a signer for the account already linked here. Deliberately not

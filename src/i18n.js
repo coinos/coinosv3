@@ -629,7 +629,7 @@ const STR = {
     nlWaitingSigner: 'Waiting for your signer to connect…',
     nlTitle: 'Log in with Nostr',
     nlSignInNostr: 'Sign in with Nostr',
-    nlDesc: 'Open the same wallet on any device — with Google, a passkey, or your Nostr account.',
+    nlDesc: 'Use your Nostr account to open your wallet — on any device, with the same account.',
     nlExtension: 'Use browser extension',
     nlGoogle: 'Sign in with Google',
     nlPasskey: 'Sign in with a passkey',

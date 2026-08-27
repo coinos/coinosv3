@@ -263,11 +263,11 @@ export function nostrLoginFeature(ctx) {
     }
   }
 
-  // The ways in, as buttons. `run` receives a signer factory.
-  function signerButtons(run) {
-    const hasExt = typeof window !== 'undefined' && !!window.nostr;
+  // Google + passkey, with their transient status rows — shared between the
+  // collapsed front-door card and the expanded signer list.
+  function externalButtons(run) {
     const hasPasskey = typeof window !== 'undefined' && !!window.PublicKeyCredential && !!navigator.credentials;
-    return h('div', { class: 'col', style: 'gap:8px' },
+    return [
       h('button', { class: 'btn-block', disabled: ui.nostrLoginBusy,
         onClick: () => googleLogin(run) }, t('nlGoogle')),
       ui.nostrLoginStatus ? h('div', { class: 'row gap6', style: 'align-items:center;justify-content:center' },
@@ -282,6 +282,14 @@ export function nostrLoginFeature(ctx) {
             h('button', { class: 'btn-sm', disabled: ui.nostrLoginBusy, onClick: () => passkeyCreateLogin(run) }, t('nlPasskeyCreate')),
             h('button', { class: 'btn-sm btn-ghost', onClick: () => { ui.passkeyOffer = null; render(); } }, t('cancel')))
         : null,
+    ];
+  }
+
+  // The ways in, as buttons. `run` receives a signer factory.
+  function signerButtons(run) {
+    const hasExt = typeof window !== 'undefined' && !!window.nostr;
+    return h('div', { class: 'col', style: 'gap:8px' },
+      ...externalButtons(run),
       hasExt
         ? h('button', { class: 'btn-block', disabled: ui.nostrLoginBusy,
             onClick: () => run(() => extensionSigner()) }, t('nlExtension'))
@@ -331,16 +339,20 @@ export function nostrLoginFeature(ctx) {
           h('button', { class: 'btn-primary grow', disabled: ui.nostrLoginBusy, onClick: createForSigner },
             ui.nostrLoginBusy ? h('span', { class: 'spinner' }) : t('nlCreateBtn'))));
     }
-    // Collapsed by default: one button, expanded only when asked for.
+    // Collapsed by default: Google, passkey, and Nostr right on the front
+    // door; the Nostr button expands into the full signer list.
     if (!ui.nostrLoginOpen) {
-      // NB .btn-block forces display:block, so the flex centering lives on an
-      // inner wrapper rather than the button itself.
-      return h('button', {
-        class: 'btn-block',
-        onClick: () => { ui.nostrLoginOpen = true; ui.nostrLoginError = ''; render(); },
-      }, h('span', { style: 'display:flex;align-items:center;justify-content:center;gap:8px' },
-        h('span', { style: 'display:flex;flex-shrink:0', html: OSTRICH }),
-        t('nlSignIn')));
+      return h('div', { class: 'col', style: 'gap:8px' },
+        ...externalButtons(loginWith),
+        // NB .btn-block forces display:block, so the flex centering lives on
+        // an inner wrapper rather than the button itself.
+        h('button', {
+          class: 'btn-block',
+          onClick: () => { ui.nostrLoginOpen = true; ui.nostrLoginError = ''; render(); },
+        }, h('span', { style: 'display:flex;align-items:center;justify-content:center;gap:8px' },
+          h('span', { style: 'display:flex;flex-shrink:0', html: OSTRICH }),
+          t('nlSignInNostr'))),
+        ui.nostrLoginError ? h('div', { class: 'notice err' }, ui.nostrLoginError) : null);
     }
     return h('div', { class: 'card col', style: 'gap:10px' },
       h('div', { class: 'row between' },
@@ -563,6 +575,21 @@ export function nostrLoginFeature(ctx) {
       } finally { resuming = null; }
     },
     unlockExtra() { return unlockExtra(); },
+    // The welcome screen's sign-in block: Google and passkey act right there;
+    // the Nostr button steps into the wizard's signer list.
+    frontDoorSignin() {
+      return h('div', { class: 'col', style: 'gap:8px' },
+        ...externalButtons(loginWith),
+        h('button', { class: 'btn-block', style: 'padding:14px', onClick: () => {
+          if (ui.onb) ui.onb.step = 'signin';
+          ui.nostrLoginOpen = true;
+          ui.nostrLoginError = '';
+          render();
+        } }, h('span', { style: 'display:flex;align-items:center;justify-content:center;gap:8px' },
+          h('span', { style: 'display:flex;flex-shrink:0', html: OSTRICH }),
+          t('nlSignInNostr'))),
+        ui.nostrLoginError ? h('div', { class: 'notice err' }, ui.nostrLoginError) : null);
+    },
     nostrSettingsCards() { return [settingsCard()]; },
   };
 }

@@ -1855,7 +1855,12 @@ export function arkFeature(ctx) {
       const tip = await mgr.chain.tipHeight();
       const RENEW_BLOCKS = getNetwork() === 'regtest' ? 24 : 1008; // ~1 week of margin on mainnet
       const expiring = spendables.some((v) => v.expiryHeight && v.expiryHeight - tip < RENEW_BLOCKS);
-      const fragmented = spendables.length >= 6;
+      // Fragmentation alone is no longer worth paying for: multi-input sends
+      // handle up to 24 coins, and consolidating FRESH coins bills the round
+      // fee's top ppm bracket (a burst of refund coins after failed payments
+      // once cost a user ~1% overnight). Consolidate only when the coin count
+      // itself approaches the 24-input send ceiling.
+      const fragmented = spendables.length >= 20;
       const totalSat = spendables.reduce((n, v) => n + v.amountSat, 0);
       const renewable = totalSat - mgr.refreshFee(spendables, tip) >= 330;
       if (expiring && !renewable) {

@@ -239,8 +239,9 @@ export function nostrLoginFeature(ctx) {
   }
 
   // Passkey sign-in: try an existing credential first; when the device has
-  // none (or the user dismisses the picker), offer to create one instead of
-  // showing a bare error.
+  // none (or the picker is dismissed), roll straight into creating one — the
+  // browser's own passkey dialog IS the confirmation, so an interstitial of
+  // ours would just be a second question.
   async function passkeyLogin(run) {
     ui.nostrLoginError = '';
     const pass = await import('../passkey.js');
@@ -249,20 +250,14 @@ export function nostrLoginFeature(ctx) {
       await run(() => keySigner(sk));
     } catch (e) {
       if (/derive a wallet key/.test(e.message)) { ui.nostrLoginError = e.message; render(); return; }
-      ui.passkeyOffer = true; // no credential picked — offer creation
-      render();
-    }
-  }
-  async function passkeyCreateLogin(run) {
-    ui.nostrLoginError = '';
-    ui.passkeyOffer = null;
-    try {
-      const pass = await import('../passkey.js');
-      const sk = await pass.passkeyCreate();
-      await run(() => keySigner(sk));
-    } catch (e) {
-      ui.nostrLoginError = e.message;
-      render();
+      try {
+        const sk = await pass.passkeyCreate();
+        await run(() => keySigner(sk));
+      } catch (e2) {
+        // dismissing the create dialog is a plain cancel, not an error
+        if (!/NotAllowed|abort/i.test(String(e2.name || '') + e2.message)) ui.nostrLoginError = e2.message;
+        render();
+      }
     }
   }
 
@@ -288,12 +283,6 @@ export function nostrLoginFeature(ctx) {
       hasPasskey
         ? h('button', { class: 'btn-block', style: pad, disabled: ui.nostrLoginBusy,
             onClick: () => passkeyLogin(run) }, markedLabel(PASSKEY_MARK, t('nlPasskey')))
-        : null,
-      ui.passkeyOffer
-        ? h('div', { class: 'row gap6', style: 'align-items:center' },
-            h('span', { class: 'small muted grow' }, t('nlPasskeyNone')),
-            h('button', { class: 'btn-sm', disabled: ui.nostrLoginBusy, onClick: () => passkeyCreateLogin(run) }, t('nlPasskeyCreate')),
-            h('button', { class: 'btn-sm btn-ghost', onClick: () => { ui.passkeyOffer = null; render(); } }, t('cancel')))
         : null,
     ];
   }

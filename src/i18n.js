@@ -633,8 +633,6 @@ const STR = {
     nlExtension: 'Use browser extension',
     nlGoogle: 'Sign in with Google',
     nlPasskey: 'Sign in with a passkey',
-    nlPasskeyNone: 'No passkey was used. Create one for this wallet?',
-    nlPasskeyCreate: 'Create passkey',
     nlKeyOrBunker: 'nsec, private key, or bunker://…',
     nlGo: 'Log in',
     nlHint: 'Works with Amber, Amethyst and other remote signers (paste their bunker:// address), or a browser extension. A pasted key is used once and never stored.',

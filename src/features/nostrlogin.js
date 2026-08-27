@@ -589,6 +589,11 @@ export function nostrLoginFeature(ctx) {
     // The welcome screen's sign-in block: Google and passkey act right there;
     // the Nostr button steps into the wizard's signer list.
     frontDoorSignin() {
+      // A mid-flight login state — the "create a wallet for this identity?"
+      // confirmation — must surface here too: it used to render only on the
+      // unlock screen's card, which left a first Google sign-in silently
+      // waiting on a confirm button that was never on screen.
+      if (ui.nostrLoginNew) return unlockExtra();
       return h('div', { class: 'col', style: 'gap:8px' },
         ...externalButtons(loginWith, true),
         h('button', { class: 'btn-block', style: 'padding:14px', onClick: () => {

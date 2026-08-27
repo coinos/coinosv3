@@ -10,6 +10,7 @@
     "build:minimal": "HAL_FEATURES=none bun run build.js"
   },
   "dependencies": {
+    "@jsr/fiatjaf__promenade-trusted-dealer": "^0.4.3",
     "@noble/ciphers": "^2.1.1",
     "@scure/base": "^1.2.6",
     "@scure/bip32": "^1.7.0",

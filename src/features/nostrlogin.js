@@ -214,10 +214,74 @@ export function nostrLoginFeature(ctx) {
         h('button', { class: 'btn-sm', onClick: () => { stopNostrConnect(); ui.nostrConnectOpen = false; render(); } }, t('cancel'))));
   }
 
-  // The three ways in, as buttons. `run` receives a signer factory.
+  // "Sign in with Google" — pomegranate: the code (and its FROST dealer)
+  // rides in a lazy chunk, so the popup must open HERE, inside the click's
+  // user activation, and the module navigates it once loaded.
+  async function googleLogin(run) {
+    const popup = window.open('about:blank', 'OAuth', 'width=600,height=600');
+    ui.nostrLoginError = '';
+    try {
+      const pome = await import('../pomegranate.js');
+      const { uri } = await pome.loginWithGoogle(popup, {
+        onStatus: (s) => { ui.nostrLoginStatus = t('nlGoogleStatus_' + s); render(); },
+      });
+      ui.nostrLoginStatus = '';
+      await run(() => bunkerSigner(uri, { onAuth: (url) => { ui.nostrLoginAuthUrl = url; render(); } }));
+    } catch (e) {
+      try { popup && popup.close(); } catch {}
+      ui.nostrLoginStatus = '';
+      ui.nostrLoginError = e.message;
+      render();
+    }
+  }
+
+  // Passkey sign-in: try an existing credential first; when the device has
+  // none (or the user dismisses the picker), offer to create one instead of
+  // showing a bare error.
+  async function passkeyLogin(run) {
+    ui.nostrLoginError = '';
+    const pass = await import('../passkey.js');
+    try {
+      const sk = await pass.passkeySignIn();
+      await run(() => keySigner(sk));
+    } catch (e) {
+      if (/derive a wallet key/.test(e.message)) { ui.nostrLoginError = e.message; render(); return; }
+      ui.passkeyOffer = true; // no credential picked — offer creation
+      render();
+    }
+  }
+  async function passkeyCreateLogin(run) {
+    ui.nostrLoginError = '';
+    ui.passkeyOffer = null;
+    try {
+      const pass = await import('../passkey.js');
+      const sk = await pass.passkeyCreate();
+      await run(() => keySigner(sk));
+    } catch (e) {
+      ui.nostrLoginError = e.message;
+      render();
+    }
+  }
+
+  // The ways in, as buttons. `run` receives a signer factory.
   function signerButtons(run) {
     const hasExt = typeof window !== 'undefined' && !!window.nostr;
+    const hasPasskey = typeof window !== 'undefined' && !!window.PublicKeyCredential && !!navigator.credentials;
     return h('div', { class: 'col', style: 'gap:8px' },
+      h('button', { class: 'btn-block', disabled: ui.nostrLoginBusy,
+        onClick: () => googleLogin(run) }, t('nlGoogle')),
+      ui.nostrLoginStatus ? h('div', { class: 'row gap6', style: 'align-items:center;justify-content:center' },
+        h('span', { class: 'spinner sm' }), h('span', { class: 'small muted' }, ui.nostrLoginStatus)) : null,
+      hasPasskey
+        ? h('button', { class: 'btn-block', disabled: ui.nostrLoginBusy,
+            onClick: () => passkeyLogin(run) }, t('nlPasskey'))
+        : null,
+      ui.passkeyOffer
+        ? h('div', { class: 'row gap6', style: 'align-items:center' },
+            h('span', { class: 'small muted grow' }, t('nlPasskeyNone')),
+            h('button', { class: 'btn-sm', disabled: ui.nostrLoginBusy, onClick: () => passkeyCreateLogin(run) }, t('nlPasskeyCreate')),
+            h('button', { class: 'btn-sm btn-ghost', onClick: () => { ui.passkeyOffer = null; render(); } }, t('cancel')))
+        : null,
       hasExt
         ? h('button', { class: 'btn-block', disabled: ui.nostrLoginBusy,
             onClick: () => run(() => extensionSigner()) }, t('nlExtension'))

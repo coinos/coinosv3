@@ -340,7 +340,9 @@ export function hatsFeature(ctx) {
     },
     // Own-profile editor entry: the door to the shop.
     hatShopEntry() {
-      return h('button', { class: 'btn-block', onClick: openShop }, '🎩 ' + t('hats'));
+      return h('button', {
+        class: 'linklike small', style: 'padding:0;text-align:left', onClick: openShop,
+      }, '🎩 ' + t('hatShopSupport'));
     },
     screenView() {
       if (ui.screen !== 'wallet' || !ui.hatShop) return null;

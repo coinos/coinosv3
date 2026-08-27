@@ -1663,7 +1663,9 @@ export function messagesFeature(ctx) {
           h('div', { class: 'col grow', style: 'min-width:0;gap:2px' },
             h('div', { class: 'chat-title' }, name),
             nip05 ? h('div', { class: 'muted small break' }, nip05) : null,
-            showLud ? h('div', { class: 'muted small break' }, '⚡ ' + lud16) : null)),
+            showLud ? h('div', { class: 'muted small break' }, '⚡ ' + lud16) : null,
+            // the hat pitch lives beside the avatar it decorates
+            mine ? hook('hatShopEntry') : null)),
         // no spinner while the kind 0 loads — prefetch keeps this rare, and
         // an empty beat reads calmer than a spinner
         showAbout && !ui.profEdit ? h('p', { class: 'small', style: 'margin:0;white-space:pre-wrap' }, about.slice(0, 1000)) : null,
@@ -1693,7 +1695,6 @@ export function messagesFeature(ctx) {
               field(t('profPicture'), 'picture', 'https://…'),
               h('button', { class: 'btn-primary btn-block', disabled: ui.profSaving, onClick: saveProfile },
                 ui.profSaving ? h('span', { class: 'spinner sm' }) : t('save')),
-              hook('hatShopEntry'),
               logoutBtn())
           : mine
             ? logoutBtn() // the editor renders above once the kind 0 loads

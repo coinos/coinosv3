@@ -1838,6 +1838,11 @@ export function arkFeature(ctx) {
   // exposing a refresh button, consolidate-and-renew automatically when a
   // vtxo is inside the renewal window or fragmentation builds up. The round
   // fee this spends is the cost of keeping the money spendable at all.
+  // The ASP's refresh fee brackets reward renewing LATE — under 96 blocks of
+  // remaining life a renewal is free, and this ASP keeps honoring (and freely
+  // rescuing) a coin even past its expiry, so aiming inside the free window
+  // risks nothing. ~16 hours of margin on mainnet.
+  const renewWindow = () => (getNetwork() === 'regtest' ? 24 : 96);
   let arkAutoRefreshAt = 0;
   // Set when the balance is too small to renew itself (total minus round fee
   // under the server's 330-sat output minimum) AND a vtxo is inside the
@@ -1853,8 +1858,9 @@ export function arkFeature(ctx) {
     arkAutoRefreshAt = Date.now();
     try {
       const tip = await mgr.chain.tipHeight();
-      const RENEW_BLOCKS = getNetwork() === 'regtest' ? 24 : 1008; // ~1 week of margin on mainnet
-      const expiring = spendables.some((v) => v.expiryHeight && v.expiryHeight - tip < RENEW_BLOCKS);
+      const RENEW_BLOCKS = renewWindow();
+      const expiringCoins = spendables.filter((v) => v.expiryHeight && v.expiryHeight - tip < RENEW_BLOCKS);
+      const expiring = expiringCoins.length > 0;
       // Fragmentation alone is no longer worth paying for: multi-input sends
       // handle up to 24 coins, and consolidating FRESH coins bills the round
       // fee's top ppm bracket (a burst of refund coins after failed payments
@@ -1875,7 +1881,10 @@ export function arkFeature(ctx) {
       }
       arkRenewWarn = null;
       if (!expiring && !fragmented) return;
-      await mgr.refresh();
+      // Renew ONLY the coins that need it: dragging far-from-expiry coins
+      // into the round would bill their (higher) fee bracket for nothing.
+      // The rare fragmentation consolidation still sweeps everything.
+      await mgr.refresh(fragmented ? undefined : expiringCoins.map((v) => v.id));
       render();
     } catch {} // transient — the next throttled attempt retries
   }
@@ -2335,6 +2344,30 @@ export function arkFeature(ctx) {
           amount: fmtAmount(arkRenewWarn.sat) + ' ' + unitLabel(),
           date: new Date(arkRenewWarn.deadlineMs).toLocaleDateString(),
         })));
+      // The next automatic renewal — date and price — stated before it
+      // happens. Ark is new to nearly everyone, and a fee nobody announced
+      // reads as money gone missing (it did, once). Usually it says "free".
+      if (ark && ark.state && ark._tipH && !wallet.watchOnly) {
+        const spend = (ark.state.vtxos || []).filter((v) => v.state === 'spendable' && v.expiryHeight);
+        if (spend.length) {
+          const tip = ark._tipH;
+          const RENEW = renewWindow();
+          const minExpiry = Math.min(...spend.map((v) => v.expiryHeight));
+          const blocksUntil = Math.max(0, minExpiry - RENEW - tip);
+          // price it at the moment it will actually run: only the coins then
+          // inside the window ride along, billed at that moment's bracket
+          const simTip = minExpiry - RENEW + 1;
+          const batch = spend.filter((v) => v.expiryHeight - simTip < RENEW);
+          let feeSat = 0;
+          try { feeSat = ark.refreshFee(batch, simTip); } catch {}
+          const days = Math.max(1, Math.round(blocksUntil / 144));
+          out.push(h('div', { class: 'small faint', style: 'margin:10px 0 0;text-align:center' },
+            t('arkRenewForecast', {
+              when: blocksUntil <= 0 ? t('arkRenewNow') : t('arkRenewInDays', { n: days }),
+              fee: feeSat > 0 ? fmtAmount(feeSat) + ' ' + unitLabel() : t('feeFree'),
+            })));
+        }
+      }
       return out;
     },
     decorateTxRow(tx) {

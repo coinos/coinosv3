@@ -195,7 +195,7 @@ export function messagesFeature(ctx) {
   }
   function persistProfile(pk, p) {
     const s = wallet.loadFeatureState('profiles', {});
-    s[pk] = { name: p.name || null, picture: p.picture || null, t: Date.now() };
+    s[pk] = { name: p.name || null, picture: p.picture || null, nip05: p.nip05 || null, lud16: p.lud16 || null, t: Date.now() };
     const keys = Object.keys(s);
     if (keys.length > 150) {
       for (const k of keys.sort((a, b) => (s[a].t || 0) - (s[b].t || 0)).slice(0, keys.length - 150)) delete s[k];
@@ -651,7 +651,7 @@ export function messagesFeature(ctx) {
         // one loads.
         if (pk && /^[0-9a-f]{64}$/.test(pk)) {
           warmProfiles();
-          if (!profiles.has(pk)) profiles.set(pk, { name, t: 0, loading: true });
+          if (!profiles.has(pk)) profiles.set(pk, { name, addr: `${name}@${domain}`, t: 0, loading: true });
         }
       }
       if (pk && /^[0-9a-f]{64}$/.test(pk)) {
@@ -1200,7 +1200,11 @@ export function messagesFeature(ctx) {
       // light cache (and persist) so a picture changed elsewhere replaces the
       // stale one everywhere within a session, not after the 24h TTL. The
       // repaint covers the header/chat avatars, not just an open profile page.
-      const entry = { name: m.display_name || m.name || null, picture: m.picture || null, t: Date.now() };
+      const entry = {
+        name: m.display_name || m.name || null, picture: m.picture || null,
+        nip05: m.nip05 || null, lud16: typeof m.lud16 === 'string' ? m.lud16.trim() : null,
+        t: Date.now(),
+      };
       profiles.set(pk, entry);
       persistProfile(pk, entry);
       if (ui.profilePk === pk) render();
@@ -1649,8 +1653,13 @@ export function messagesFeature(ctx) {
     // A lightning address worth showing: not an npub-shaped machine address
     // (npub1…@some.relay duplicates the npub below) and not the same string
     // as the nip05 already on screen.
-    const nip05 = full && full.nip05 ? String(full.nip05).replace(/^_@/, '') : null;
-    const lud16 = full && full.lud16 ? String(full.lud16) : null;
+    // The address must not wait for the kind 0: our own claimed name is
+    // authoritative locally, a deep link carries the address in the URL
+    // (seeded as `addr`), and the light cache remembers it from last time.
+    const lp = profileOf(pk) || {};
+    const rawNip05 = (full && full.nip05) || (mine && myAddr) || lp.nip05 || lp.addr || null;
+    const nip05 = rawNip05 ? String(rawNip05).replace(/^_@/, '') : null;
+    const lud16 = (full && full.lud16 ? String(full.lud16) : null) || lp.lud16 || null;
     const showLud = lud16 && !/^npub1/i.test(lud16) && lud16 !== nip05;
     // an about of "~" or a lone character is noise, not a bio
     const about = full && typeof full.about === 'string' ? full.about.trim() : '';

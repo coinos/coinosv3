@@ -512,7 +512,6 @@ const STR = {
     arkRenewForecast: 'Coins renew automatically {when} · fee: {fee}',
     arkRenewInDays: 'in ~{n} day(s)',
     arkRenewNow: 'at the next opportunity',
-    feeFree: 'free',
     arkBoardStuck: 'Moving money hit a snag and will keep retrying: {error}',
     arkRenewWarnPush: 'Your Spending balance is too small to renew itself and expires around {date}. Receive any amount or spend it to keep it alive.',
     giftArkOutstanding: '{n} unclaimed instant gift(s)',

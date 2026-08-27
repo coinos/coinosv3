@@ -2344,9 +2344,10 @@ export function arkFeature(ctx) {
           amount: fmtAmount(arkRenewWarn.sat) + ' ' + unitLabel(),
           date: new Date(arkRenewWarn.deadlineMs).toLocaleDateString(),
         })));
-      // The next automatic renewal — date and price — stated before it
+      // An upcoming renewal that will COST something — stated before it
       // happens. Ark is new to nearly everyone, and a fee nobody announced
-      // reads as money gone missing (it did, once). Usually it says "free".
+      // reads as money gone missing (it did, once). Free renewals — the
+      // normal case now — pass without comment.
       if (ark && ark.state && ark._tipH && !wallet.watchOnly) {
         const spend = (ark.state.vtxos || []).filter((v) => v.state === 'spendable' && v.expiryHeight);
         if (spend.length) {
@@ -2361,10 +2362,10 @@ export function arkFeature(ctx) {
           let feeSat = 0;
           try { feeSat = ark.refreshFee(batch, simTip); } catch {}
           const days = Math.max(1, Math.round(blocksUntil / 144));
-          out.push(h('div', { class: 'small faint', style: 'margin:10px 0 0;text-align:center' },
+          if (feeSat > 0) out.push(h('div', { class: 'small faint', style: 'margin:10px 0 0;text-align:center' },
             t('arkRenewForecast', {
               when: blocksUntil <= 0 ? t('arkRenewNow') : t('arkRenewInDays', { n: days }),
-              fee: feeSat > 0 ? fmtAmount(feeSat) + ' ' + unitLabel() : t('feeFree'),
+              fee: fmtAmount(feeSat) + ' ' + unitLabel(),
             })));
         }
       }

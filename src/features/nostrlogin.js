@@ -221,18 +221,20 @@ export function nostrLoginFeature(ctx) {
   async function googleLogin(run) {
     const popup = window.open('about:blank', 'OAuth', 'width=600,height=600');
     ui.nostrLoginError = '';
+    // no status narration — a quiet spinner on the button itself is the whole
+    // story (the popup is where anything needing the user's eyes happens)
+    ui.nostrLoginVia = 'google';
+    busy(true);
     try {
       const pome = await import('../pomegranate.js');
-      const { uri } = await pome.loginWithGoogle(popup, {
-        onStatus: (s) => { ui.nostrLoginStatus = t('nlGoogleStatus_' + s); render(); },
-      });
-      ui.nostrLoginStatus = '';
+      const { uri } = await pome.loginWithGoogle(popup);
       await run(() => bunkerSigner(uri, { onAuth: (url) => { ui.nostrLoginAuthUrl = url; render(); } }));
     } catch (e) {
       try { popup && popup.close(); } catch {}
-      ui.nostrLoginStatus = '';
       ui.nostrLoginError = e.message;
-      render();
+    } finally {
+      ui.nostrLoginVia = null;
+      busy(false);
     }
   }
 
@@ -281,9 +283,8 @@ export function nostrLoginFeature(ctx) {
     const pad = big ? 'padding:14px' : '';
     return [
       h('button', { class: 'btn-block', style: pad, disabled: ui.nostrLoginBusy,
-        onClick: () => googleLogin(run) }, markedLabel(GOOGLE_MARK, t('nlGoogle'))),
-      ui.nostrLoginStatus ? h('div', { class: 'row gap6', style: 'align-items:center;justify-content:center' },
-        h('span', { class: 'spinner sm' }), h('span', { class: 'small muted' }, ui.nostrLoginStatus)) : null,
+        onClick: () => googleLogin(run) },
+        ui.nostrLoginVia === 'google' ? h('span', { class: 'spinner sm' }) : markedLabel(GOOGLE_MARK, t('nlGoogle'))),
       hasPasskey
         ? h('button', { class: 'btn-block', style: pad, disabled: ui.nostrLoginBusy,
             onClick: () => passkeyLogin(run) }, markedLabel(PASSKEY_MARK, t('nlPasskey')))

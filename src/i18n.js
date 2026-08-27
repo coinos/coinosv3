@@ -226,7 +226,7 @@ const STR = {
     profPicture: 'Picture URL',
     profSaved: 'Profile published',
     hats: 'Hats',
-    hatShopSupport: 'Support Coinos — buy a hat for your avatar',
+    hatShopSupport: 'Buy your avatar a hat',
     hatShopTitle: 'Hat shop',
     hatShopBlurb: 'Support coinos and wear the proof: your hat shows above your avatar everywhere you appear.',
     hatShopOffline: 'The hat stand is unreachable right now.',

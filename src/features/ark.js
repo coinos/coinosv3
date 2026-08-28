@@ -2081,28 +2081,54 @@ export function arkFeature(ctx) {
   // a cancel for an exit that never published. Shown on the exit page.
   function arkExitStatusLines() {
     const s = arkStateNow();
-    return ((s && s.actions) || []).filter((a) => a.type === 'exit' && !['done', 'failed'].includes(a.step)).map((a) => {
-      const left = a.step === 'timelock' ? Math.max(0, a.claimableAt - (a.tipSeen || 0)) : 0;
-      const mins = left * 10;
-      const eta = getNetwork() === 'regtest' ? ''
-        : mins >= 2880 ? ` (≈ ${Math.round(mins / 1440)} d)`
-        : mins >= 120 ? ` (≈ ${Math.round(mins / 60)} h)`
-        : ` (≈ ${mins} min)`;
-      return h('div', { class: 'small muted', style: 'margin-top:4px' },
-        a.step === 'chain' ? t('arkExitChainStatus', { n: fmtAmount(a.amountSat), done: String(a.hopsDone || 0), total: String((a.txids || []).length) })
-          : a.step === 'timelock' ? t('arkExitTimelockStatus', { n: fmtAmount(a.amountSat), blocks: String(left), eta })
-          : t('arkExitClaimingStatus', { n: fmtAmount(a.amountSat) }),
-        a.lastError ? h('div', { class: a.actionable ? 'small err' : 'small faint' }, a.actionable ? a.lastError : t('arkExitRetrying')) : null,
-        a.actionable && !(a.hopsDone > 0)
-          ? h('button', { class: 'linklike small', onClick: () => {
+    const acts = ((s && s.actions) || []).filter((a) => a.type === 'exit' && !['done', 'failed'].includes(a.step));
+    if (!acts.length) return [];
+    const exitDelta = (ark && ark.info && ark.info.vtxoExitDelta) || 144;
+    const totalSat = acts.reduce((n, a) => n + a.amountSat, 0);
+    // One story for the whole batch: each coin's chain unrolls a confirmed
+    // hop per block, then waits out the CSV timelock, then the claim itself
+    // confirms. Coins run in parallel, so the slowest one sets the ETA.
+    const blocksFor = (a) =>
+      a.step === 'chain' ? ((a.txids || []).length - (a.hopsDone || 0)) + exitDelta + 1
+        : a.step === 'timelock' ? Math.max(0, a.claimableAt - (a.tipSeen || 0)) + 1
+        : 1;
+    const mins = Math.max(...acts.map(blocksFor)) * 10;
+    const eta = getNetwork() === 'regtest' ? t('arkExitSoon')
+      : mins >= 2880 ? `≈ ${Math.round(mins / 1440)} d`
+      : mins >= 120 ? `≈ ${Math.round(mins / 60)} h`
+      : `≈ ${mins} min`;
+    // The most advanced tx that's actually out there — the one worth watching.
+    // A chain hop that errored before broadcast has nothing to link yet.
+    let watch = null, watchScore = -1;
+    for (const a of acts) {
+      const score = a.step === 'claiming' ? 3 : a.step === 'timelock' ? 2 : (a.hopsDone > 0 || !a.lastError) ? 1 : 0;
+      const txid = a.claimTxid || (a.txids || [])[Math.min(a.hopsDone || 0, (a.txids || []).length - 1)];
+      if (score > 0 && txid && score > watchScore) { watch = txid; watchScore = score; }
+    }
+    const err = acts.find((a) => a.lastError && a.actionable);
+    const softErr = !err && acts.some((a) => a.lastError);
+    // Cancelling is only real while nothing has touched the chain AND the
+    // driver is parked waiting on the user (a needs-fee stall) — a healthy
+    // exit may be mid-broadcast this very second. One button for the whole
+    // batch, gone the moment it would be a lie.
+    const cancellable = acts.every((a) => a.actionable && !(a.hopsDone > 0) && a.step === 'chain');
+    return [h('div', { class: 'small muted', style: 'margin-top:4px' },
+      t('arkExitSummary', { n: fmtAmount(totalSat), eta }),
+      err ? h('div', { class: 'small err' }, err.lastError)
+        : softErr ? h('div', { class: 'small faint' }, t('arkExitRetrying')) : null,
+      watch ? h('div', { style: 'margin-top:4px' },
+        h('a', { class: 'linklike small', href: wallet.api.explorerTx(watch), target: '_blank', rel: 'noopener' }, t('arkExitViewTx'))) : null,
+      cancellable
+        ? h('button', { class: 'linklike small', style: 'display:block;margin-top:4px', onClick: () => {
+            for (const a of acts) {
               a.step = 'failed';
               const v = ark && ark._vtxo(a.vtxoId);
               if (v && v.state === 'pending') v.state = 'spendable';
-              if (ark) ark._save();
-              render();
-            } }, t('arkExitCancel'))
-          : null);
-    });
+            }
+            if (ark) ark._save();
+            render();
+          } }, t('arkExitCancel'))
+        : null)];
   }
 
   // The exit page: cooperative offboard vs unilateral exit, with explanation.

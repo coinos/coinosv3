@@ -478,7 +478,13 @@ function renderInner() {
   // navigations: boot screens shuffle beneath the shell (unlock → restored
   // wallet), then the resolved profile replaces the shell in place. The key
   // still updates, but nothing slides or re-animates until the landing ends.
-  if (uiChanged('nav', navKey) && !(ui.pubProfPending || ui.pubProfHold)) _navAt = performance.now();
+  if (uiChanged('nav', navKey)) {
+    // ui.navAnimSkip: a one-shot "this navigation must not animate" — set by
+    // sign-in right before the wallet screen takes over, so the handover is
+    // an instant swap instead of a fade over a page that's still settling.
+    if (!(ui.pubProfPending || ui.pubProfHold || ui.navAnimSkip)) _navAt = performance.now();
+    ui.navAnimSkip = false;
+  }
   applyAnim(screen, 'anim-page', (performance.now() - _navAt) < 340 ? performance.now() - _navAt : -1);
   morphChildren(root, [screen, footer()]);
   if (fpath) {
@@ -3229,6 +3235,7 @@ function balanceCard() {
       ? h('button', { class: 'btn-sm', style: 'margin-top:10px', onClick: () => { ui.arkMoveDir = 'toSpending'; ui.arkMoveOpen = true; render(); } }, t('topUpFromSavings'))
       : null,
     !hasSpending && !kindLocked && featureHook('arkReady') && !wallet.watchOnly && acc0 && acc0.type === 'full'
+      && featureHook('namesSettled') !== 'pending' // a restoring name may prove Spending any second — don't flash the setup ask
       ? h('button', { class: 'btn-sm', style: 'margin-top:10px', onClick: () => {
           acc0.spendingSetup = Date.now();
           persistAccounts();

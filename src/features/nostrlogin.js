@@ -108,6 +108,7 @@ export function nostrLoginFeature(ctx) {
       // back into onboarding while ui.onb is set, so clearing it afterwards
       // re-animated the welcome screen for a beat before the wallet appeared
       ctx.onbNostrLogin(res.mode === 'restored');
+      ui.navAnimSkip = true; // the handover swaps instantly, no fade
       await ctx.openMnemonic(res.mnemonic, res.passphrase || '', { nostrPubkey: signer.pubkey });
       save({ ...load(), pubkey: signer.pubkey, linked: Date.now(), ...sessionOf(signer) });
       attaching = false;
@@ -131,6 +132,7 @@ export function nostrLoginFeature(ctx) {
       attaching = true;
       live = selfHealing(st.signer);
       ctx.onbNostrLogin(!!existing); // before the screen flips — see loginWith
+      ui.navAnimSkip = true; // the handover swaps instantly, no fade
       await ctx.openMnemonic(mnemonic, (existing && existing.passphrase) || '', { nostrPubkey: st.signer.pubkey });
       save({ ...load(), pubkey: st.signer.pubkey, linked: Date.now(), ...sessionOf(st.signer) });
       attaching = false;

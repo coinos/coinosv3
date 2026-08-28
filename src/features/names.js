@@ -650,6 +650,9 @@ export function namesFeature(ctx) {
     namesAdoptIdentity(signer, npub) { return adoptIdentity(signer, npub); },
     // the claimed payment address, for anyone prefilling a lightning address
     namesAddress() { const st = load(); return st.name ? `${st.name}@${st.domain || DOMAIN()}` : null; },
+    // 'pending' while the restore/claim pass is still running — the wallet
+    // screen holds spending-setup prompts until the name question is settled.
+    namesSettled() { return checked ? 'yes' : 'pending'; },
     // the onboarding wizard renders the same claim form on its username step
     namesClaimForm() { return claimForm(true); },
     // claim a specific name (the migration flow, after coinos.io released it)

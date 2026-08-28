@@ -764,7 +764,13 @@ Bun.serve({
       const domFilter = (url.searchParams.get('domain') || '').toLowerCase();
       const mine = Object.entries(state.names)
         .filter(([k, r]) => r.pubkey === pm[1] && (!domFilter || k.endsWith('@' + domFilter)))
-        .sort((a, b) => (b[1].updated || 0) - (a[1].updated || 0));
+        // a custom name outranks the free npub placeholder regardless of
+        // which record is fresher — a placeholder re-claimed on a new device
+        // must not shadow the name the user actually chose
+        .sort((a, b) => {
+          const ph = ([k]) => (/^npub1/.test(k.split('@')[0]) ? 1 : 0);
+          return ph(a) - ph(b) || (b[1].updated || 0) - (a[1].updated || 0);
+        });
       if (!mine.length) return json({});
       const [key, r] = mine[0];
       const [name, domain] = key.split('@');

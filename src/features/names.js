@@ -102,7 +102,13 @@ export function namesFeature(ctx) {
     }, signer);
     const prev = load().name;
     save({ name, domain: DOMAIN(), uri, offerPk: hook('nwcOfferPubkey') || null, updated: Date.now() });
-    if (prev && prev !== name) {
+    // Releasing the previous name is for renames the user meant. A CUSTOM
+    // name must never be released because a placeholder claim raced in: that
+    // exact race once deleted a user's claimed name — adoptIdentity's npub
+    // claim landed in the same instant refresh() was adopting their real
+    // name, and `prev` here picked up the fresher read.
+    const demotion = /^npub1/.test(name) && prev && !/^npub1/.test(prev);
+    if (prev && prev !== name && !demotion) {
       post('/register', 'DELETE', { name: prev, domain: DOMAIN() }).catch(() => {});
       // the old address just died — a kind 0 still pointing at it would send
       // zaps into the void, so the profile's lud16/nip05 follow the rename
@@ -223,6 +229,22 @@ export function namesFeature(ctx) {
     // A restored wallet may not know its name yet — ask the registrar before
     // assuming there is none.
     if (!st.name) { await lookupMine(); st = load(); }
+    // The LOGIN identity may already own a custom name, claimed in a past
+    // session or on another device — find and adopt it BEFORE reaching for a
+    // placeholder (lookupMine only asks by the wallet's own key).
+    if (!st.name || /^npub1/.test(st.name)) {
+      try {
+        const r = await withTimeout(
+          fetch(`${REGISTRAR}/pubkey/${signer.pubkey}?domain=${encodeURIComponent(DOMAIN())}`).then((x) => x.json()),
+          8000, 'registrar');
+        if (r && r.name && !/^npub1/.test(r.name)) {
+          save({ ...load(), name: r.name, domain: r.domain || DOMAIN(), uri: r.uri });
+          render();
+          return r.name;
+        }
+      } catch {}
+      st = load(); // refresh() may have adopted a name while we were looking
+    }
     // The npub default is a placeholder for wallets with no name. Adopting it
     // must never displace a custom name — claim() releases the previous name,
     // so getting this wrong deletes the user's address from the registrar.

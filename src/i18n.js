@@ -228,7 +228,7 @@ const STR = {
     hats: 'Hats',
     hatShopSupport: 'Support Coinos, Buy a Hat!',
     hatShopTitle: 'Hat shop',
-    hatShopBlurb: 'Support coinos and wear the proof.',
+    hatShopBlurb: 'Support Coinos and wear the proof on your avatar.',
     hatShopOffline: 'The hat stand is unreachable right now.',
     hatBeanie: 'Toque',
     hatParty: 'Party hat',

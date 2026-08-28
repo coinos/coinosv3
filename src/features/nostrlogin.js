@@ -85,6 +85,9 @@ export function nostrLoginFeature(ctx) {
     let signer;
     try {
       signer = await makeSigner();
+      // warm the identity's profile + avatar in parallel with the seed work,
+      // so the home screen's first paint already has the picture
+      ctx.hook('warmProfile', signer.pubkey);
       const res = await walletForSigner(signer);
       if (res.mode === 'new') {
         // No wallet on this identity yet — make one and walk straight in.

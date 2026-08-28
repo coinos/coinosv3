@@ -202,6 +202,11 @@ export function messagesFeature(ctx) {
     }
     wallet.saveFeatureState('profiles', s);
   }
+  // Pull the picture bytes into the HTTP cache the moment we learn the URL —
+  // an avatar div then paints instantly instead of holding its quiet circle
+  // while the image downloads.
+  const preloadPicture = (p) => { try { if (p && p.picture) new Image().src = p.picture; } catch {} };
+
   function profileOf(pk) {
     warmProfiles();
     const cur = profiles.get(pk);
@@ -211,6 +216,7 @@ export function messagesFeature(ctx) {
       const entry = { ...(p || {}), t: Date.now() };
       profiles.set(pk, entry);
       persistProfile(pk, entry);
+      preloadPicture(entry);
       scheduleRepaint();
     }).catch(() => profiles.set(pk, { t: Date.now() }));
     return cur || null;
@@ -1207,6 +1213,7 @@ export function messagesFeature(ctx) {
       };
       profiles.set(pk, entry);
       persistProfile(pk, entry);
+      preloadPicture(entry);
       if (ui.profilePk === pk) render();
       else scheduleRepaint();
     }).catch(() => { if (!fullProfiles.has(pk)) fullProfiles.set(pk, {}); });
@@ -2445,6 +2452,10 @@ export function messagesFeature(ctx) {
     // The light profile cache, read-only — lets the onboarding wizard skip
     // asks (like the avatar picker) that a loaded identity already answered.
     cachedProfile(pk) { return profileOf(pk); },
+    // Start fetching a profile (and its picture bytes) NOW — the login flow
+    // calls this the moment it knows the identity, so the avatar is already
+    // in cache by the time the home screen first paints.
+    warmProfile(pk) { try { prefetchProfilePage(pk); profileOf(pk); } catch {} return true; },
     // Publish (merge) kind-0 fields for the current identity — the onboarding
     // wizard sets name + picture through this.
     publishProfile(fields, opts = {}) { return publishProfileFields(fields, opts); },

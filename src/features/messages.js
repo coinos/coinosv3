@@ -2406,7 +2406,16 @@ export function messagesFeature(ctx) {
       return avatar(pk, 'chat-avatar header-ava', false);
     },
     // Conversations waiting on us, for the header's message button.
-    unreadMessages() { return unreadCount(); },
+    unreadMessages() {
+      // A device with no read watermarks yet (a fresh restore or brand-new
+      // wallet) will show the dot the moment the community messages land —
+      // which is always: the default community is never empty and read state
+      // is device-local. Paint it from the first frame instead of popping it
+      // in when the fetch returns.
+      const s = st();
+      if (!Object.keys(s.read || {}).length && !threads.size && !rooms.size) return 1;
+      return unreadCount();
+    },
     notifySettingsCards() { return [notifyCard()]; },
     screenView() {
       // A profile deep link mid-resolution holds the frame over EVERY screen

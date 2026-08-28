@@ -2294,12 +2294,25 @@ export function arkFeature(ctx) {
       const inv = (text || '').trim().replace(/^lightning:/i, '');
       // In a Spending wallet an on-chain address means "exit ark to there":
       // the offboard happens right in the send flow, no Move money ceremony.
-      if (ctx.getAccount() === 'spending' && wallet.isOnchainAddress(inv)
-          && arkAvailable() && (arkBalance()?.spendableSat || 0) > 0) {
-        ui.arkOffboardSend = { address: inv, amount: '' };
-        ui.sendError = '';
-        render();
-        return true;
+      if (ctx.getAccount() === 'spending' && wallet.isOnchainAddress(inv) && arkAvailable()) {
+        const b = arkBalance() || {};
+        if ((b.spendableSat || 0) > 0) {
+          ui.arkOffboardSend = { address: inv, amount: '' };
+          ui.sendError = '';
+          render();
+          return true;
+        }
+        // Every coin is mid-exit: the balance face still shows the pending
+        // sats, so falling through to the SAVINGS send form here read as the
+        // spending send silently swapping accounts (fee-adjusted Max and
+        // all). Show the exit's status instead — that's where the money is.
+        if ((b.pendingSat || 0) > 0
+            && (arkStateNow()?.actions || []).some((a) => a.type === 'exit' && !['done', 'failed'].includes(a.step))) {
+          ui.arkExitPage = true;
+          ui.sendError = '';
+          render();
+          return true;
+        }
       }
       if (maybeBolt11(inv)) return startArkLnPay(inv);
       const pk = npubToHex(text);

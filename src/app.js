@@ -373,6 +373,7 @@ let _swipeDir = null; // set by the swipe handler just before render
 // tab switches carousel just the content pane, not the whole page
 let _tabAt = -1e9;
 let _tabCls = 'anim-tab-left';
+let _tabSeen = false; // a tab has rendered before (slides are for CHANGES, not arrivals)
 let _prevTabIdx = 0;
 const _animAt = new Map();
 function animWindow(key, val, durMs) {
@@ -3035,8 +3036,14 @@ function walletScreen() {
   const TAB_ORDER = ['receive', 'send', 'history'];
   if (uiChanged('tabnav', ui.tab)) {
     const idx = TAB_ORDER.indexOf(ui.tab);
-    _tabCls = 'anim-tab-' + (_swipeDir || (idx >= 0 && idx < _prevTabIdx ? 'right' : 'left'));
-    _tabAt = performance.now();
+    // The pane slides only BETWEEN tabs the user has seen: the first
+    // observation after a sign-in (and the handover render itself) is the
+    // wallet simply appearing, not a navigation.
+    if (!ui.navAnimSkip && _tabSeen) {
+      _tabCls = 'anim-tab-' + (_swipeDir || (idx >= 0 && idx < _prevTabIdx ? 'right' : 'left'));
+      _tabAt = performance.now();
+    }
+    _tabSeen = true;
     if (idx >= 0) _prevTabIdx = idx;
   }
   _swipeDir = null;
@@ -3151,6 +3158,7 @@ function accountSel() {
   return ui.account;
 }
 let _accDir = null; // which way the balance face should slide in
+let _accAnim = false; // whether the current face switch animates (decided at the switch)
 function setAccountSel(a, dir) {
   if (ui.account === a) return;
   _accDir = dir || (a === 'savings' ? 'left' : 'right');
@@ -3189,7 +3197,12 @@ function balanceCard() {
     : null;
   // One balance at a time, full size: the card IS the account you're in, and
   // everything (receive, gifts) follows it. Swipe or tap the dots to flip.
-  const dtAcc = animWindow('acct', sel, 300);
+  const dtRaw = animWindow('acct', sel, 300);
+  // Decide AT the change whether this face switch animates: only deliberate
+  // switches (tap/swipe set _accDir) slide — a background flip (arkReady
+  // arriving and revealing Spending right after sign-in) must not.
+  if (dtRaw >= 0 && dtRaw < 16.7) _accAnim = !!_accDir && !ui.navAnimSkip;
+  const dtAcc = _accAnim ? dtRaw : -1;
   const face = h('div', { class: 'balance-face' },
     h('div', { class: 'row between', style: 'align-items:center' },
       h('div', { class: 'small faint', style: 'text-transform:uppercase;letter-spacing:.06em' },

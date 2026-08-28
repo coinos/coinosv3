@@ -36,6 +36,7 @@ export function nostrLoginFeature(ctx) {
   // the wallet hasn't been persisted yet, so init() must not sever it
   let attaching = false;
   let resuming = null;
+  let _spendingHinted = false; // relay backup already carries the spending hint
   let resumeFailedAt = 0;
 
   // A remote signer's connection can die quietly — the app is left holding a
@@ -102,6 +103,7 @@ export function nostrLoginFeature(ctx) {
       // so an extension login later finds this wallet instead of making a new
       // one. Costs nothing — anyone with the key could derive it anyway.
       if (res.publish) await publishWalletBackup(signer, { mnemonic: res.mnemonic }).catch(() => {});
+      const spendingHint = !!res.spending;
       attaching = true;
       live = selfHealing(signer);
       // hand the wizard over BEFORE the screen flips: walletScreen routes
@@ -109,12 +111,12 @@ export function nostrLoginFeature(ctx) {
       // re-animated the welcome screen for a beat before the wallet appeared
       ctx.onbNostrLogin(res.mode === 'restored');
       ui.navAnimSkip = true; // the handover swaps instantly, no fade
-      await ctx.openMnemonic(res.mnemonic, res.passphrase || '', { nostrPubkey: signer.pubkey });
+      await ctx.openMnemonic(res.mnemonic, res.passphrase || '', { nostrPubkey: signer.pubkey, spendingHint });
       save({ ...load(), pubkey: signer.pubkey, linked: Date.now(), ...sessionOf(signer) });
       attaching = false;
       // claim the real npub as the payment address while this signer is live
       ctx.hook('namesAdoptIdentity', signer, npubOf(signer.pubkey))?.catch?.(() => {});
-      toast(res.mode === 'derived' ? t('nlOpenedDerived') : t('nlOpenedRestored'));
+      // no success toast: the wallet appearing IS the message
       busy(false);
     } catch (e) { fail(e); }
   }
@@ -133,11 +135,10 @@ export function nostrLoginFeature(ctx) {
       live = selfHealing(st.signer);
       ctx.onbNostrLogin(!!existing); // before the screen flips — see loginWith
       ui.navAnimSkip = true; // the handover swaps instantly, no fade
-      await ctx.openMnemonic(mnemonic, (existing && existing.passphrase) || '', { nostrPubkey: st.signer.pubkey });
+      await ctx.openMnemonic(mnemonic, (existing && existing.passphrase) || '', { nostrPubkey: st.signer.pubkey, spendingHint: !!(existing && existing.spending) });
       save({ ...load(), pubkey: st.signer.pubkey, linked: Date.now(), ...sessionOf(st.signer) });
       attaching = false;
       ctx.hook('namesAdoptIdentity', st.signer, npubOf(st.signer.pubkey))?.catch?.(() => {});
-      toast(existing ? t('nlOpenedRestored') : t('nlCreated'));
       busy(false);
     } catch (e) { fail(e); }
   }
@@ -585,6 +586,16 @@ export function nostrLoginFeature(ctx) {
     unlockExtra() { return unlockExtra(); },
     // The welcome screen's sign-in block: Google and passkey act right there;
     // the Nostr button steps into the wizard's signer list.
+    // Spending just became real (name claimed / balance appeared): stamp the
+    // hint into the relay backup while a signer is live, so the NEXT restore
+    // paints Spending from its first frame. Once per session is plenty.
+    spendingEvident() {
+      if (_spendingHinted || !live || !wallet.mnemonic) return null;
+      _spendingHinted = true;
+      publishWalletBackup(live, { mnemonic: wallet.mnemonic, passphrase: wallet.passphrase || '', spending: true })
+        .catch(() => { _spendingHinted = false; });
+      return true;
+    },
     frontDoorSignin() {
       return h('div', { class: 'col', style: 'gap:8px' },
         ...externalButtons(loginWith, true),

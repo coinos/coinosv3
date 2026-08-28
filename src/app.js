@@ -1111,6 +1111,10 @@ async function activateAccount(acc, opts = {}) {
   // current global choice once, then keep it. The global setting remains the
   // default for the NEXT new wallet.
   if (!acc.network) acc.network = getNetwork();
+  // The relay backup said this wallet has a Spending side: latch it BEFORE
+  // the first paint, so a restored wallet doesn't open as savings-only and
+  // reflow when the name lookup proves Spending a beat later.
+  if (opts.spendingHint && !acc.spendingSetup) { acc.spendingSetup = Date.now(); }
   const netName = acc.network;
   if (netName !== getNetwork()) {
     setNetwork(netName);
@@ -2954,7 +2958,7 @@ function onboardScreen() {
       const spendReady = claimedNow || (featureHook('spendingSat') || 0) > 0
         || (getNetwork() === 'mainnet' && named);
       if (spendReady) {
-        if (acc && !acc.spendingSetup) { acc.spendingSetup = Date.now(); persistAccounts(); }
+        if (acc && !acc.spendingSetup) { acc.spendingSetup = Date.now(); persistAccounts(); featureHook('spendingEvident'); }
         ui.account = 'spending';
         try { localStorage.setItem(ACCOUNT_KEY, 'spending'); } catch {}
       }
@@ -3095,7 +3099,7 @@ function spendingActive() {
   const evident = (featureHook('spendingSat') || 0) > 0 || (!!addr && !/^npub1/.test(addr));
   // Latch demonstrated use onto the record, so the Wallets list keeps showing
   // this seed's Spending side even while it's locked or not the active one.
-  if (evident && acc && !acc.spendingSetup) { acc.spendingSetup = Date.now(); persistAccounts(); }
+  if (evident && acc && !acc.spendingSetup) { acc.spendingSetup = Date.now(); persistAccounts(); featureHook('spendingEvident'); }
   return evident;
 }
 // ---- the flat wallet model -------------------------------------------------
@@ -3239,6 +3243,7 @@ function balanceCard() {
       ? h('button', { class: 'btn-sm', style: 'margin-top:10px', onClick: () => {
           acc0.spendingSetup = Date.now();
           persistAccounts();
+          featureHook('spendingEvident');
           setAccountSel('spending', 'right');
           ui.onbError = '';
           ui.onb = { step: 'spend' };

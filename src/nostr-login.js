@@ -233,8 +233,11 @@ export async function fetchWalletBackup(signer, relays = BACKUP_RELAYS) {
 }
 
 // Publish (or replace) the encrypted wallet association for this account.
-export async function publishWalletBackup(signer, { mnemonic, passphrase }, relays = BACKUP_RELAYS) {
-  const content = await signer.encryptSelf(JSON.stringify({ mnemonic, passphrase: passphrase || '' }));
+// `spending` rides along as a hint: a restored wallet paints its Spending
+// side from the first frame instead of reflowing when the name lookup proves
+// it seconds later.
+export async function publishWalletBackup(signer, { mnemonic, passphrase, spending }, relays = BACKUP_RELAYS) {
+  const content = await signer.encryptSelf(JSON.stringify({ mnemonic, passphrase: passphrase || '', ...(spending ? { spending: true } : {}) }));
   const evt = await signer.signEvent({
     kind: BACKUP_KIND, created_at: Math.floor(Date.now() / 1000),
     tags: [['d', SEED_DTAG]], content,
@@ -256,7 +259,7 @@ export async function publishWalletBackup(signer, { mnemonic, passphrase }, rela
 // deriving (key in hand) or generating (signer only).
 export async function walletForSigner(signer) {
   const found = await fetchWalletBackup(signer);
-  if (found) return { mnemonic: found.mnemonic, passphrase: found.passphrase, mode: 'restored' };
+  if (found) return { mnemonic: found.mnemonic, passphrase: found.passphrase, spending: !!found.spending, mode: 'restored' };
   if (signer.secret) {
     // Publishing the derived seed costs nothing: the derivation is public,
     // so anyone holding this key could compute it anyway. It buys the thing

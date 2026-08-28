@@ -89,6 +89,8 @@ export function nostrLoginFeature(ctx) {
       // warm the identity's profile + avatar in parallel with the seed work,
       // so the home screen's first paint already has the picture
       ctx.hook('warmProfile', signer.pubkey);
+      // and the payment name too — the Receive pane should open with its QR
+      const nameHintP = ctx.hook('namesLookupByPk', signer.pubkey);
       const res = await walletForSigner(signer);
       if (res.mode === 'new') {
         // No wallet on this identity yet — make one and walk straight in.
@@ -111,7 +113,12 @@ export function nostrLoginFeature(ctx) {
       // re-animated the welcome screen for a beat before the wallet appeared
       ctx.onbNostrLogin(res.mode === 'restored');
       ui.navAnimSkip = true; // the handover swaps instantly, no fade
-      await ctx.openMnemonic(res.mnemonic, res.passphrase || '', { nostrPubkey: signer.pubkey, spendingHint });
+      // usually resolved long ago; the race caps a slow registrar at 1.5s
+      const nameHint = await Promise.race([
+        Promise.resolve(nameHintP).catch(() => null),
+        new Promise((r) => setTimeout(() => r(null), 1500)),
+      ]);
+      await ctx.openMnemonic(res.mnemonic, res.passphrase || '', { nostrPubkey: signer.pubkey, spendingHint, nameHint });
       save({ ...load(), pubkey: signer.pubkey, linked: Date.now(), ...sessionOf(signer) });
       attaching = false;
       // claim the real npub as the payment address while this signer is live

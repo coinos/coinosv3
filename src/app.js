@@ -1129,6 +1129,9 @@ async function activateAccount(acc, opts = {}) {
   if (acc.type !== 'watch' && !acc.provisional) acc.xpub = wallet.accountXpub();
   persistAccounts();
   autoSave(acc);
+  // A name fetched during sign-in seeds the names state BEFORE features init
+  // and the first paint — the Receive pane opens showing its QR.
+  if (opts.nameHint) { try { featureHook('namesSeed', opts.nameHint); } catch {} }
   for (const f of FEATURES) { try { f.init && f.init(); } catch {} } // per-feature wallet lifecycle
   _featuresInited = true; // a deferred feature landing after this point gets its init() on arrival
   // A freshly generated identity provably has no profile yet — let features

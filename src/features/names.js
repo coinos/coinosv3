@@ -650,6 +650,21 @@ export function namesFeature(ctx) {
     namesAdoptIdentity(signer, npub) { return adoptIdentity(signer, npub); },
     // the claimed payment address, for anyone prefilling a lightning address
     namesAddress() { const st = load(); return st.name ? `${st.name}@${st.domain || DOMAIN()}` : null; },
+    // Sign-in races this lookup against the seed work: by the time the
+    // wallet opens, the answer is usually already in hand…
+    namesLookupByPk(pk) {
+      if (!pk) return null;
+      return fetch(`${REGISTRAR}/pubkey/${pk}?domain=${encodeURIComponent(DOMAIN())}`)
+        .then((x) => x.json()).catch(() => null);
+    },
+    // …and this seeds it into state just before the first paint, so the
+    // Receive pane opens with the QR instead of "setting up your address".
+    namesSeed(rec) {
+      if (!rec || !rec.name) return null;
+      const st = load();
+      if (!st.name) save({ name: rec.name, domain: rec.domain || DOMAIN(), uri: rec.uri });
+      return true;
+    },
     // 'pending' while the restore/claim pass is still running — the wallet
     // screen holds spending-setup prompts until the name question is settled.
     namesSettled() { return checked ? 'yes' : 'pending'; },

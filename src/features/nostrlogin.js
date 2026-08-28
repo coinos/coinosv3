@@ -247,6 +247,8 @@ export function nostrLoginFeature(ctx) {
   // ours would just be a second question.
   async function passkeyLogin(run) {
     ui.nostrLoginError = '';
+    ui.nostrLoginVia = 'passkey';
+    render();
     const pass = await import('../passkey.js');
     try {
       const sk = await pass.passkeySignIn();
@@ -261,6 +263,9 @@ export function nostrLoginFeature(ctx) {
         if (!/NotAllowed|abort/i.test(String(e2.name || '') + e2.message)) ui.nostrLoginError = e2.message;
         render();
       }
+    } finally {
+      ui.nostrLoginVia = null;
+      render();
     }
   }
 
@@ -269,9 +274,13 @@ export function nostrLoginFeature(ctx) {
   // Person + key, stroke style matching the app's other line icons.
   const PASSKEY_MARK = '<svg width="19" height="19" style="display:block" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" xmlns="http://www.w3.org/2000/svg"><circle cx="10" cy="7" r="4"/><path d="M3 21v-1a5 5 0 0 1 5-5h4"/><circle cx="17.5" cy="14.5" r="2.5"/><path d="M17.5 17v5l2-1.7"/></svg>';
 
-  const markedLabel = (mark, label) =>
+  // `spinning` swaps the ICON for a same-sized spinner and keeps the label —
+  // the button must not change size mid-login, or the whole column shifts.
+  const markedLabel = (mark, label, spinning) =>
     h('span', { style: 'display:flex;align-items:center;justify-content:center;gap:8px' },
-      h('span', { style: 'display:flex;flex-shrink:0', html: mark }),
+      spinning
+        ? h('span', { class: 'spinner sm', style: 'flex-shrink:0' })
+        : h('span', { style: 'display:flex;flex-shrink:0', html: mark }),
       label);
 
   // Google + passkey, with their transient status rows — shared between the
@@ -282,10 +291,10 @@ export function nostrLoginFeature(ctx) {
     return [
       h('button', { class: 'btn-block', style: pad, disabled: ui.nostrLoginBusy,
         onClick: () => googleLogin(run) },
-        ui.nostrLoginVia === 'google' ? h('span', { class: 'spinner sm' }) : markedLabel(GOOGLE_MARK, t('nlGoogle'))),
+        markedLabel(GOOGLE_MARK, t('nlGoogle'), ui.nostrLoginVia === 'google')),
       hasPasskey
         ? h('button', { class: 'btn-block', style: pad, disabled: ui.nostrLoginBusy,
-            onClick: () => passkeyLogin(run) }, markedLabel(PASSKEY_MARK, t('nlPasskey')))
+            onClick: () => passkeyLogin(run) }, markedLabel(PASSKEY_MARK, t('nlPasskey'), ui.nostrLoginVia === 'passkey'))
         : null,
     ];
   }

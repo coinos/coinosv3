@@ -1606,23 +1606,37 @@ export function messagesFeature(ctx) {
     // One Log out button; the popup offers the two exits — leave (wallets
     // stay saved, one unlock away) or leave and take everything with you.
     // The full wipe still routes through the Delete-all warning after this.
+    // Two stages in one popup: the plain logout choices, then — if "forget
+    // all data" is picked — the delete-everything warning right here. The old
+    // flow detoured to the Accounts page for that confirmation, which read
+    // as broken navigation (and left people thinking data was wiped when
+    // only a confirm screen had opened).
     const logoutPop = () => !ui.logoutConfirm ? null : h('div', {
       class: 'confirm-pop-backdrop',
       onClick: (e) => { if (e.target === e.currentTarget) { ui.logoutConfirm = null; render(); } },
     },
-      h('div', { class: 'card col confirm-pop', style: 'gap:10px' },
-        h('h3', { style: 'margin:0' }, t('logout') + '?'),
-        h('p', { class: 'small muted', style: 'margin:0' }, t('logoutPopBlurb')),
-        h('button', { class: 'btn-primary btn-block', onClick: () => {
-          ui.logoutConfirm = null;
-          ui.profilePk = null; ui.profEdit = null; ui.profEditFilled = false;
-          ctx.logout && ctx.logout();
-        } }, t('logout')),
-        ctx.logoutForget ? h('button', {
-          class: 'btn-block', style: 'color:var(--red,#c0392b)',
-          onClick: () => { ui.logoutConfirm = null; ctx.logoutForget(); },
-        }, t('logoutForget')) : null,
-        h('button', { class: 'btn-ghost btn-block', onClick: () => { ui.logoutConfirm = null; render(); } }, t('back'))));
+      ui.logoutConfirm === 'forget'
+        ? h('div', { class: 'card col confirm-pop', style: 'gap:10px' },
+            h('h3', { style: 'margin:0' }, t('logoutForget') + '?'),
+            h('div', { class: 'notice err small' }, t('clearAllWarn')),
+            h('button', {
+              class: 'btn-block', style: 'color:var(--red,#c0392b)',
+              onClick: () => { ui.logoutConfirm = null; ctx.logoutForget(); },
+            }, t('clearAll')),
+            h('button', { class: 'btn-ghost btn-block', onClick: () => { ui.logoutConfirm = true; render(); } }, t('back')))
+        : h('div', { class: 'card col confirm-pop', style: 'gap:10px' },
+            h('h3', { style: 'margin:0' }, t('logout') + '?'),
+            h('p', { class: 'small muted', style: 'margin:0' }, t('logoutPopBlurb')),
+            h('button', { class: 'btn-primary btn-block', onClick: () => {
+              ui.logoutConfirm = null;
+              ui.profilePk = null; ui.profEdit = null; ui.profEditFilled = false;
+              ctx.logout && ctx.logout();
+            } }, t('logout')),
+            ctx.logoutForget ? h('button', {
+              class: 'btn-block', style: 'color:var(--red,#c0392b)',
+              onClick: () => { ui.logoutConfirm = 'forget'; render(); },
+            }, t('logoutForget')) : null,
+            h('button', { class: 'btn-ghost btn-block', onClick: () => { ui.logoutConfirm = null; render(); } }, t('back'))));
     const full = fullProfiles.get(pk);
     // Your own profile IS the editor — and it renders IMMEDIATELY, seeded
     // from the local name/picture cache, so the page never reflows when the

@@ -4409,11 +4409,12 @@ const ctx = {
   },
   // The drastic exit: leave AND remove everything saved on this device.
   // Routes through the Delete-all warning — never a single tap.
+  // The popup has already shown the delete-everything warning by the time
+  // this runs — wipe now and land on the front door.
   logoutForget: () => {
     ui.profilePk = null; ui.profEdit = null; ui.profEditFilled = false; ui.chatOpen = false;
-    ui.screen = 'accounts';
-    ui.confirmClear = true;
-    render();
+    ui.pubProf = null;
+    clearAll();
   },
   // the identity the header avatar currently wears (login > seed key >
   // remembered) — profile "mine"-ness must match what the user clicked

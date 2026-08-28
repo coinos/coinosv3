@@ -880,7 +880,9 @@ export function arkFeature(ctx) {
       'div',
       { class: 'card col', style: 'gap:10px' },
       h('div', { class: 'row gap6', style: 'align-items:center' },
-        h('span', { html: ARK_ICON(18) }),
+        // the rail the user chose is the one to show: a payment SENT over
+        // Lightning stays Lightning here, however it settled underneath
+        m.type.startsWith('ln-') ? h('span', { style: 'font-size:18px' }, '⚡') : h('span', { html: ARK_ICON(18) }),
         h('h3', { style: 'margin:0' }, label),
         m.status !== 'complete' ? h('span', { class: 'tag pending' }, m.status) : null),
       h('div', { class: incoming ? 'amount-pos' : 'amount-neg', style: 'font-size:20px' },
@@ -898,6 +900,9 @@ export function arkFeature(ctx) {
       m.to ? row(t('arkPayTo'), shortAddr(m.to, 16, 12)) : null,
       m.vtxoId ? row(t('arkVtxoId'), shortTxid(m.vtxoId)) : null,
       m.detail ? row(t('detailsLabel'), m.detail) : null,
+      // proof of payment: the preimage is what a merchant asks for
+      m.preimage ? row(t('preimageLabel'), shortTxid(m.preimage)) : null,
+      m.preimage ? copyBtn(m.preimage, t('copyPreimage')) : null,
       // A send that funded a bearer gift: show its fate, and while unclaimed
       // offer the link again plus the sweep-back — same powers the gift card
       // has, where the sender will actually go looking for them: history.

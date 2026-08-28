@@ -525,6 +525,8 @@ const STR = {
     arkExitBtn: 'Move to Savings without the server',
     arkExitStarted: 'Unilateral exit started for {n} coin(s) — broadcasting the exit chain.',
     arkExitNoFeeCoin: 'This needs a little in Savings to pay the mining fees.',
+    preimageLabel: 'Preimage',
+    copyPreimage: 'Copy preimage',
     arkExitSummary: 'Moving {n} sats to Savings on-chain — about {eta} until it lands.',
     arkExitViewTx: 'View on block explorer',
     arkExitSoon: 'soon',

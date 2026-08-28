@@ -214,7 +214,7 @@ export function giftsFeature(ctx) {
           ),
           h('div', { class: 'row gap6' }, copyBtn(wallet.mnemonic, t('copyPhrase'))),
           h('button', { class: 'btn-primary btn-block', onClick: () => { ui.confirm = pickConfirm(words); ui.claimError = ''; ui.claimStep = 'verify'; render(); } }, t('verifyBackup')),
-          h('button', { class: 'btn-block', onClick: () => { ui.screen = 'wallet'; ui.claimStep = null; render(); } }, t('skipVerification'))
+          h('button', { class: 'btn-block', onClick: () => { ui.screen = 'wallet'; ui.claimStep = null; landAccount(); render(); } }, t('skipVerification'))
         )
       );
     }
@@ -247,11 +247,12 @@ export function giftsFeature(ctx) {
                 const ok = ui.confirm.every((c) => c.value.toLowerCase() === words[c.index]);
                 if (!ok) { ui.claimError = t('wordsMismatch'); render(); return; }
                 ui.screen = 'wallet'; ui.claimStep = null; ui.claimError = '';
+                landAccount();
                 render();
               },
             }, t('openWallet'))
           ),
-          h('button', { class: 'btn-block', onClick: () => { ui.screen = 'wallet'; ui.claimStep = null; render(); } }, t('skipVerification'))
+          h('button', { class: 'btn-block', onClick: () => { ui.screen = 'wallet'; ui.claimStep = null; landAccount(); render(); } }, t('skipVerification'))
         )
       );
     }
@@ -286,7 +287,7 @@ export function giftsFeature(ctx) {
         h('button', { class: 'btn-primary btn-block', onClick: () => {
             ui.claimTaken = null; ui.claimedAmount = 0;
             if (activeAccount() && activeAccount().provisional) { ui.claimStep = 'backup'; commitAccount(); }
-            else { ui.screen = 'wallet'; ui.claimStep = null; }
+            else { ui.screen = 'wallet'; ui.claimStep = null; landAccount(); }
             render();
           } }, activeAccount() && activeAccount().provisional ? t('createWalletAnyway') : t('goToWallet')),
         ui.claimTaken.txid
@@ -377,6 +378,15 @@ export function giftsFeature(ctx) {
   // Broadcast the presigned gift to this fresh wallet's first receive address.
   // Shared post-claim navigation: fresh wallets go to seed backup, existing
   // ones straight in with the instant celebration.
+  // An ark gift lands in Spending — say so with the selection, or the new
+  // owner opens onto an empty Savings face wondering where the sats went.
+  function landAccount() {
+    if (ui.claimVia !== 'ark') return;
+    const acc = activeAccount();
+    if (acc && !acc.spendingSetup) acc.spendingSetup = Date.now();
+    if (ctx.setAccount) ctx.setAccount('spending');
+  }
+
   function afterClaim(amount) {
     ui.claimedAmount = amount;
     const wasProvisional = !!(activeAccount() && activeAccount().provisional);
@@ -388,6 +398,7 @@ export function giftsFeature(ctx) {
       ui.claimStep = null;
       ui.tab = 'receive';
       ui.giftJustClaimed = amount; // celebration shows instantly, no scan wait
+      landAccount();
     }
     return wasProvisional;
   }
@@ -404,6 +415,7 @@ export function giftsFeature(ctx) {
       // off-chain, instant, no fee, works for a brand-new empty wallet.
       try {
         const amount = await hook('arkGiftClaim', ui.claimCode);
+        ui.claimVia = 'ark';
         afterClaim(amount);
       } catch (e) {
         if (e && e.giftTaken) ui.claimTaken = {};

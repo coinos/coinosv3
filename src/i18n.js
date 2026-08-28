@@ -717,7 +717,7 @@ const STR = {
     settingsNotifications: 'Notifications',
     searchUsers: 'Search',
     spendingName: 'Spending',
-    manageAccounts: 'Wallets',
+    manageAccounts: 'Accounts',
     lockedToast: 'Locked',
     logout: 'Log out',
     lockedTitle: 'Locked',

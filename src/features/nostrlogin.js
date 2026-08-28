@@ -104,12 +104,15 @@ export function nostrLoginFeature(ctx) {
       if (res.publish) await publishWalletBackup(signer, { mnemonic: res.mnemonic }).catch(() => {});
       attaching = true;
       live = selfHealing(signer);
+      // hand the wizard over BEFORE the screen flips: walletScreen routes
+      // back into onboarding while ui.onb is set, so clearing it afterwards
+      // re-animated the welcome screen for a beat before the wallet appeared
+      ctx.onbNostrLogin(res.mode === 'restored');
       await ctx.openMnemonic(res.mnemonic, res.passphrase || '', { nostrPubkey: signer.pubkey });
       save({ ...load(), pubkey: signer.pubkey, linked: Date.now(), ...sessionOf(signer) });
       attaching = false;
       // claim the real npub as the payment address while this signer is live
       ctx.hook('namesAdoptIdentity', signer, npubOf(signer.pubkey))?.catch?.(() => {});
-      ctx.onbNostrLogin(res.mode === 'restored');
       toast(res.mode === 'derived' ? t('nlOpenedDerived') : t('nlOpenedRestored'));
       busy(false);
     } catch (e) { fail(e); }
@@ -127,11 +130,11 @@ export function nostrLoginFeature(ctx) {
       if (!existing) await publishWalletBackup(st.signer, { mnemonic });
       attaching = true;
       live = selfHealing(st.signer);
+      ctx.onbNostrLogin(!!existing); // before the screen flips — see loginWith
       await ctx.openMnemonic(mnemonic, (existing && existing.passphrase) || '', { nostrPubkey: st.signer.pubkey });
       save({ ...load(), pubkey: st.signer.pubkey, linked: Date.now(), ...sessionOf(st.signer) });
       attaching = false;
       ctx.hook('namesAdoptIdentity', st.signer, npubOf(st.signer.pubkey))?.catch?.(() => {});
-      ctx.onbNostrLogin(!!existing);
       toast(existing ? t('nlOpenedRestored') : t('nlCreated'));
       busy(false);
     } catch (e) { fail(e); }

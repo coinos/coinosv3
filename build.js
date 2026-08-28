@@ -114,13 +114,13 @@ self.addEventListener('fetch', (e) => {
 });
 `;
 
-const PWA_HEAD = `<link rel="manifest" href="manifest.webmanifest">
+const PWA_HEAD = `<link rel="manifest" href="/manifest.webmanifest">
 <meta name="theme-color" content="#15171a">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="Coinos">
-<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="/icon-192.png">
 `;
 
 // Register with updateViaCache:'none' so the browser always re-fetches sw.js
@@ -144,7 +144,7 @@ const SW_REGISTER =
   // a mismatch would reload forever.
   `if(_had&&!_ref&&e.data.version&&_v.charAt(0)!=='{'&&e.data.version!==_v){_ref=true;location.reload()}});` +
   `navigator.serviceWorker.addEventListener('controllerchange',function(){_ask(navigator.serviceWorker.controller)});` +
-  `addEventListener('load',function(){navigator.serviceWorker.register('sw.js',{updateViaCache:'none'}).catch(function(){})})}</script>`;
+  `addEventListener('load',function(){navigator.serviceWorker.register('/sw.js',{updateViaCache:'none'}).catch(function(){})})}</script>`;
 
 // Lazy bundles load as classic scripts into the page's global scope, where
 // the main bundle's minified top-level names already live — two Bun outputs
@@ -383,7 +383,11 @@ export async function buildSplit({ minify = true, features = process.env.HAL_FEA
   })));
   const css = await Bun.file('./src/style.css').text();
   // module scripts defer by default; the boot shell paints while this loads
-  const html = (await pageHtml({ css, staging, pwa: true, scriptHtml: '<script type="module" src="app-{{VERSION}}.js"></script>' }))
+  const html = (await pageHtml({ css, staging, pwa: true, // root-absolute: the page can be served from any path (/ag/…, /g/…) and a
+    // relative src would resolve into that subpath, get the index.html
+    // fallback, and die on strict module MIME checking — a gift link once
+    // showed nothing but the boot shell this way
+    scriptHtml: '<script type="module" src="/app-{{VERSION}}.js"></script>' }))
     .replaceAll('{{COMMIT}}', gitCommit());
   return { html, js, chunks };
 }

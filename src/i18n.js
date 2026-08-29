@@ -85,6 +85,7 @@ const STR = {
     enterPassword: 'Enter your password',
     enterPasswordDesc: 'Unlock your saved accounts to continue.',
     profUsername: 'Username',
+    profUploadPic: 'Upload photo',
     profDisplayName: 'Display name',
     profUnameInvalid: 'Usernames can only use letters, numbers, dots, dashes and underscores.',
     lockSaveDesc: 'The accounts already saved on this device are protected by a password. Enter it to save this account with them and lock.',

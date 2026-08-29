@@ -1723,6 +1723,24 @@ export function messagesFeature(ctx) {
               field(t('profDisplayName'), 'name'),
               field(t('profAbout'), 'about', '', true),
               field(t('profPicture'), 'picture', 'https://…'),
+              // or skip the URL entirely: pick a photo, we upload and fill it
+              h('div', { class: 'row gap6' },
+                h('button', {
+                  class: 'btn-sm', type: 'button', disabled: !!ui.profUploading,
+                  onClick: () => document.getElementById('prof-pic-file')?.click(),
+                }, ui.profUploading ? h('span', { class: 'spinner sm' }) : t('profUploadPic')),
+                h('input', {
+                  id: 'prof-pic-file', type: 'file', accept: 'image/*', style: 'display:none',
+                  onChange: async (e) => {
+                    const f = e.target.files && e.target.files[0];
+                    e.target.value = '';
+                    if (!f || !ctx.uploadImage) return;
+                    ui.profUploading = true; render();
+                    try { if (ui.profEdit) ui.profEdit.picture = await ctx.uploadImage(f); }
+                    catch (err) { toast(err.message); }
+                    ui.profUploading = false; render();
+                  },
+                })),
               h('button', { class: 'btn-primary btn-block', disabled: ui.profSaving, onClick: saveProfile },
                 ui.profSaving ? h('span', { class: 'spinner sm' }) : t('save')),
               logoutBtn())

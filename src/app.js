@@ -4439,6 +4439,9 @@ const ctx = {
   setAccount: (a, dir) => setAccountSel(a, dir),
   // Open (or create) a wallet from a mnemonic — used by nostr login.
   openMnemonic: async (mnemonic, passphrase, opts) => enterWallet(mnemonic, passphrase, opts),
+  // Upload an image (avatar) and get back its URL — the same signed
+  // nostr.build path the onboarding picker uses.
+  uploadImage: (file) => onbUpload(file),
   // A nostr login that lands mid-wizard: a restored wallet has been through
   // onboarding elsewhere, so the wizard ends without tour or prompts; a fresh
   // one falls through to the wallet + tour on the next render.

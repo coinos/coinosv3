@@ -246,19 +246,19 @@ const lnMut = CFG.lnMut ? lnBackend(CFG.lnMut) : null;
 // patch: floor max_routing_fee at 1 sat), not a rounder-down here.
 const quoteSat = (msat) => Math.ceil(msat / 1000);
 
-let _ourNodeId = null;
-async function ourNodeId() {
-  if (!_ourNodeId) _ourNodeId = (await ln.call('getinfo')).id;
-  return _ourNodeId;
+const _nodeIds = new Map();
+async function ourNodeId(lnq = ln) {
+  if (!_nodeIds.has(lnq)) _nodeIds.set(lnq, (await lnq.call('getinfo')).id);
+  return _nodeIds.get(lnq);
 }
 
 // Ask askrene (the router xpay itself uses) what delivering amountMsat to
 // dest would cost from here. The maxfee passed in is only the SEARCH cap —
 // generous on purpose, since the user sees and approves the quoted fee
 // before anything is locked.
-async function routeFeeMsat(our, dest, amountMsat, finalCltv) {
+async function routeFeeMsat(our, dest, amountMsat, finalCltv, lnq = ln) {
   const cap = Math.max(50_000, Math.ceil(amountMsat * 0.05));
-  const r = await ln.call('getroutes', {
+  const r = await lnq.call('getroutes', {
     source: our, destination: dest, amount_msat: amountMsat,
     // localchans FIRST: it re-adds our channels with their advertised fees,
     // so sourcefree must come after it to zero our own hops (verified live —
@@ -676,23 +676,27 @@ Bun.serve({
     // a wrong quote fails the payment (refunded in full) or overpays a route,
     // it can never spend more than the user chose to lock.
     if (url.pathname === '/lnquote' && req.method === 'GET') {
-      if (!ln) return json({ error: 'no lightning backend' }, 503);
+      // network=mutinynet quotes from the staging ASP's CLN (the same node
+      // lnMut points at) so staging wallets get the quoted-route-fee model
+      // mainnet has, instead of a flat schedule
+      const lnq = (url.searchParams.get('network') || '') === 'mutinynet' ? lnMut : ln;
+      if (!lnq) return json({ error: 'no lightning backend' }, 503);
       if (!rateOk(ip, 30)) return json({ error: 'rate limited' }, 429);
       try {
         const invoice = (url.searchParams.get('invoice') || '').trim().toLowerCase();
         if (!invoice || invoice.length > 4000) return json({ error: 'invoice required' }, 400);
-        const dec = await ln.call('decode', { string: invoice });
+        const dec = await lnq.call('decode', { string: invoice });
         if (dec.valid === false) return json({ error: 'invalid invoice' }, 400);
         const dest = dec.payee || dec.invoice_node_id;
         const amountMsat = Math.floor(Number(url.searchParams.get('amount_msat')) || 0)
           || Number(dec.amount_msat || dec.invoice_amount_msat || 0);
         if (!dest) return json({ error: 'no destination in invoice' }, 400);
         if (!amountMsat || amountMsat < 0) return json({ error: 'amount required' }, 400);
-        const our = await ourNodeId();
+        const our = await ourNodeId(lnq);
         if (dest === our) return json({ feeMsat: 0, feeSat: 0, direct: true });
         const finalCltv = dec.min_final_cltv_expiry || 18;
         try {
-          const feeMsat = await routeFeeMsat(our, dest, amountMsat, finalCltv);
+          const feeMsat = await routeFeeMsat(our, dest, amountMsat, finalCltv, lnq);
           return json({ feeMsat, feeSat: quoteSat(feeMsat), direct: false });
         } catch (e) {
           // A bolt12 invoice with blinded paths: its node id is a blinded
@@ -706,7 +710,7 @@ Bun.serve({
             if (!entry) continue;
             const f = (pay.fee_base_msat || 0) + Math.ceil(amountMsat * (pay.fee_proportional_millionths || 0) / 1_000_000);
             try {
-              const toEntry = entry === our ? 0 : await routeFeeMsat(our, entry, amountMsat + f, finalCltv);
+              const toEntry = entry === our ? 0 : await routeFeeMsat(our, entry, amountMsat + f, finalCltv, lnq);
               if (best == null || toEntry + f < best) best = toEntry + f;
             } catch {}
           }
@@ -724,7 +728,7 @@ Bun.serve({
           }
           const entry = hint[0].pubkey;
           const toEntry = entry === our ? 0
-            : await routeFeeMsat(our, entry, amountMsat + hintFeeMsat, finalCltv);
+            : await routeFeeMsat(our, entry, amountMsat + hintFeeMsat, finalCltv, lnq);
           const feeMsat = toEntry + hintFeeMsat;
           return json({ feeMsat, feeSat: quoteSat(feeMsat), direct: false, hinted: true });
         }

@@ -119,7 +119,8 @@ export const lnReceiveFee = (amountSat, fees) =>
 // surplus to CLN as the routing budget, so this number is the user's entire
 // network cost — 0 between wallets on this ASP and to direct peers.
 export async function fetchLnRouteFee(quoteUrl, invoice, amountSat) {
-  const r = await fetch(`${quoteUrl}?invoice=${encodeURIComponent(invoice)}&amount_msat=${amountSat * 1000}`);
+  const sep = quoteUrl.includes('?') ? '&' : '?';
+  const r = await fetch(`${quoteUrl}${sep}invoice=${encodeURIComponent(invoice)}&amount_msat=${amountSat * 1000}`);
   if (!r.ok) throw new Error(`quote failed: ${r.status}`);
   const d = await r.json();
   if (d.error) throw new Error(d.error);

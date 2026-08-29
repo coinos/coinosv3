@@ -75,7 +75,9 @@ export class ArkManager {
     this.network = network;
     // where to ask what a lightning payment's route will cost (names /lnquote)
     this.lnQuoteUrl = lnQuoteUrl !== undefined ? lnQuoteUrl
-      : (network === 'mainnet' ? 'https://names.halwallet.app/lnquote' : null);
+      : network === 'mainnet' ? 'https://names.halwallet.app/lnquote'
+      : network === 'mutinynet' ? 'https://names.halwallet.app/lnquote?network=mutinynet'
+      : null;
     this.onUpdate = onUpdate || (() => {});
     this.state = null;
     this.info = null;

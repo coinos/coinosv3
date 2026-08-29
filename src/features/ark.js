@@ -362,7 +362,7 @@ export function arkFeature(ctx) {
         const tx = (wallet.txs || []).find((t2) => t2.txid === txid2);
         return tx && tx.confirmed ? { confirmed: true, block_height: tx.blockHeight || NaN } : null;
       },
-      onUpdate: () => render(),
+      onUpdate: () => { maybeAutoSelectSpending(); render(); },
     });
     ui.arkError = '';
     arkConnectPromise = mgr.init().then(() => {
@@ -417,6 +417,23 @@ export function arkFeature(ctx) {
     const cfg = getArkConfig();
     if (!cfg) return null;
     return wallet.loadArkState(cfg.ark);
+  }
+
+  // A wallet that opens onto "Savings: 0" while its money sits in Spending
+  // is answering the wrong question — a stale device-global selection (or
+  // the default) shouldn't hide the balance. One shot per wallet open; any
+  // manual switch afterwards is respected.
+  let _autoSelected = false;
+  function maybeAutoSelectSpending() {
+    if (_autoSelected || wallet.watchOnly) return;
+    const b = arkBalance();
+    if (!b || b.spendableSat + b.pendingSat <= 0) return;
+    _autoSelected = true;
+    if ((wallet.spendable || 0) === 0 && ctx.getAccount() === 'savings') {
+      ui.navAnimSkip = true; // a correction at open paints, never slides
+      ctx.setAccount('spending'); // renders synchronously; the flip is decided here
+      ui.navAnimSkip = false; // don't let the one-shot eat the next real navigation
+    }
   }
 
   function arkBalance() {
@@ -2338,7 +2355,7 @@ export function arkFeature(ctx) {
 
   return {
     id: 'ark',
-    init() { initArk(); },
+    init() { _autoSelected = false; initArk(); },
     stop() { stopArk(); },
     screenView() { return ui.arkExitPage ? arkExitPage() : null; },
     receiveTakeover() {
@@ -2515,8 +2532,20 @@ export function arkFeature(ctx) {
       const exits = (s.actions || [])
         .filter((a) => a.type === 'exit' && !['done', 'failed'].includes(a.step))
         .map((a) => ({ time: exitStartedTs(a), render: () => arkExitActionItem(a) }));
+      // Same-payment duplicates (the old settle race, or a snapshot adopted
+      // whole before the merge learned to dedupe) fold at display time too —
+      // the earliest telling wins, everywhere, however the state got here.
+      const seenPay = new Set();
       return exits.concat((s.movements || [])
         .filter((m) => ['receive', 'send', 'board', 'offboard', 'exit', 'ln-send', 'ln-receive', 'refresh'].includes(m.type) && m.status === 'complete')
+        .sort((m, n) => (m.ts || 0) - (n.ts || 0))
+        .filter((m) => {
+          if (!m.type.startsWith('ln-')) return true;
+          const key = m.type + ':' + (m.paymentHash || m.preimage || m.invoice || m.id);
+          if (seenPay.has(key)) return false;
+          seenPay.add(key);
+          return true;
+        })
         .map((m) => ({ time: m.ts, render: () => arkHistoryItem(m) })));
     },
     historyDetail() {

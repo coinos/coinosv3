@@ -868,6 +868,57 @@ export function arkFeature(ctx) {
     );
   }
 
+  const exitStartedTs = (a) => Number((a.id || '').split('-')[1]) || Date.now();
+  const exitWatchTxid = (a) => a.claimTxid
+    || ((a.hopsDone > 0 || (a.step !== 'chain') || !a.lastError)
+      ? (a.txids || [])[Math.min(a.hopsDone || 0, (a.txids || []).length - 1)] : null);
+
+  function arkExitActionItem(a) {
+    return h('div', { class: 'item', style: 'cursor:pointer', onClick: () => { ui.arkExitDetail = a.id; render(); } },
+      h('div', { class: 'ico out', html: ARK_MARK(15) }),
+      h('div', { class: 'grow' },
+        h('div', { class: 'row gap6', style: 'align-items:center' },
+          t('arkExitingHistory'), h('span', { class: 'tag pending' }, t('arkExitPendingTag'))),
+        h('div', { class: 'small faint' }, timeAgo(exitStartedTs(a) / 1000))),
+      h('div', { style: 'text-align:right' },
+        h('div', { class: 'amount-neg' }, '-' + fmtAmount(a.amountSat))));
+  }
+
+  function arkExitActionDetail(a) {
+    const exitDelta = (ark && ark.info && ark.info.vtxoExitDelta) || 144;
+    const blocks = a.step === 'chain' ? ((a.txids || []).length - (a.hopsDone || 0)) + exitDelta + 1
+      : a.step === 'timelock' ? Math.max(0, a.claimableAt - (a.tipSeen || 0)) + 1 : 1;
+    const mins = blocks * 10;
+    const eta = getNetwork() === 'regtest' ? t('arkExitSoon')
+      : mins >= 2880 ? `≈ ${Math.round(mins / 1440)} d`
+      : mins >= 120 ? `≈ ${Math.round(mins / 60)} h`
+      : `≈ ${mins} min`;
+    const watch = exitWatchTxid(a);
+    const url = watch ? wallet.api.explorerTx(watch) : null;
+    const cancellable = a.actionable && !(a.hopsDone > 0) && a.step === 'chain';
+    const row = (k, v) => h('div', { class: 'row between', style: 'gap:12px' },
+      h('span', { class: 'small muted', style: 'flex-shrink:0' }, k), h('span', { class: 'small', style: 'text-align:right;word-break:break-all' }, v));
+    return h('div', { class: 'card col', style: 'gap:10px' },
+      h('div', { class: 'row gap6', style: 'align-items:center' },
+        h('span', { html: ARK_ICON(18) }),
+        h('h3', { style: 'margin:0' }, t('arkExitingHistory')),
+        h('span', { class: 'tag pending' }, t('arkExitPendingTag'))),
+      h('div', { class: 'amount-neg', style: 'font-size:20px' }, '-' + fmtAmount(a.amountSat) + ' ' + unitLabel()),
+      row(t('dateLabel'), new Date(exitStartedTs(a)).toLocaleString()),
+      h('div', { class: 'small muted' }, t('arkExitSummary', { n: fmtAmount(a.amountSat), eta })),
+      a.lastError ? h('div', { class: a.actionable ? 'small err' : 'small faint' }, a.actionable ? a.lastError : t('arkExitRetrying')) : null,
+      url ? h('a', { class: 'btn btn-sm', href: url, target: '_blank', rel: 'noopener' }, t('arkExitViewTx')) : null,
+      cancellable ? h('button', { class: 'linklike small', onClick: () => {
+        a.step = 'failed';
+        const v = ark && ark._vtxo(a.vtxoId);
+        if (v && v.state === 'pending') v.state = 'spendable';
+        if (ark) ark._save();
+        ui.arkExitDetail = null;
+        render();
+      } }, t('arkExitCancel')) : null,
+      h('button', { class: 'btn-ghost btn-block', onClick: () => { ui.arkExitDetail = null; render(); } }, t('back')));
+  }
+
   function arkMoveDetailView(m) {
     const incoming = !['send', 'offboard', 'exit', 'ln-send'].includes(m.type);
     const label = m.type === 'receive' ? t('received') : m.type === 'board' ? t('arkBoarded')
@@ -2156,11 +2207,7 @@ export function arkFeature(ctx) {
         total > 0 ? h('div', { class: 'row between', style: 'margin-top:4px' },
           h('span', { class: 'small muted' }, t('arkBalance')),
           h('span', { class: 'small' }, fmtAmount(total) + ' ' + unitLabel())) : null,
-        // money held by an in-flight exit isn't movable by anything else —
-        // say so next to the total instead of letting the cards contradict it
-        exitingSat > 0 ? h('div', { class: 'row between' },
-          h('span', { class: 'small muted' }, t('arkExitingLabel')),
-          h('span', { class: 'small' }, fmtAmount(exitingSat) + ' ' + unitLabel())) : null),
+        null),
       // cooperative
       h('div', { class: 'card col', style: 'gap:8px' },
         h('h4', { style: 'margin:0' }, t('arkCoopTitle')),
@@ -2310,14 +2357,12 @@ export function arkFeature(ctx) {
           render();
           return true;
         }
-        // Every coin is mid-exit: the balance face still shows the pending
-        // sats, so falling through to the SAVINGS send form here read as the
-        // spending send silently swapping accounts (fee-adjusted Max and
-        // all). Show the exit's status instead — that's where the money is.
+        // Every coin is mid-exit: the send page is for CREATING payments,
+        // so stay right here with an honest error — the in-flight exit is a
+        // history record now, and sendFormExtras links straight to it.
         if ((b.pendingSat || 0) > 0
             && (arkStateNow()?.actions || []).some((a) => a.type === 'exit' && !['done', 'failed'].includes(a.step))) {
-          ui.arkExitPage = true;
-          ui.sendError = '';
+          ui.sendError = t('arkNoSpendableMidExit');
           render();
           return true;
         }
@@ -2337,14 +2382,35 @@ export function arkFeature(ctx) {
       startNpubPay(pk, npub, eventId || null, autoSat || 0);
       return true;
     },
+    sendFormExtras() {
+      if (ctx.getAccount() !== 'spending') return null;
+      const acts = ((arkStateNow() && arkStateNow().actions) || []).filter((a) => a.type === 'exit' && !['done', 'failed'].includes(a.step));
+      if (!acts.length) return null;
+      return h('button', { class: 'linklike small', style: 'align-self:center', onClick: () => {
+        ui.tab = 'history';
+        ui.sendError = '';
+        ui.arkExitDetail = acts[0].id;
+        render();
+      } }, t('arkExitInFlightLink', { n: fmtAmount(acts.reduce((s2, a) => s2 + a.amountSat, 0)) }));
+    },
     historyEntries() {
       const s = arkStateNow();
       if (!s) return [];
-      return (s.movements || [])
+      // In-flight exits are payments the user made — they belong in history
+      // as pending records, not on a monitoring page nobody thinks to visit.
+      const exits = (s.actions || [])
+        .filter((a) => a.type === 'exit' && !['done', 'failed'].includes(a.step))
+        .map((a) => ({ time: exitStartedTs(a), render: () => arkExitActionItem(a) }));
+      return exits.concat((s.movements || [])
         .filter((m) => ['receive', 'send', 'board', 'offboard', 'exit', 'ln-send', 'ln-receive'].includes(m.type) && m.status === 'complete')
-        .map((m) => ({ time: m.ts, render: () => arkHistoryItem(m) }));
+        .map((m) => ({ time: m.ts, render: () => arkHistoryItem(m) })));
     },
     historyDetail() {
+      if (ui.arkExitDetail) {
+        const a = ((arkStateNow() && arkStateNow().actions) || []).find((x) => x.id === ui.arkExitDetail);
+        if (a && !['done', 'failed'].includes(a.step)) return arkExitActionDetail(a);
+        ui.arkExitDetail = null;
+      }
       if (!ui.arkMoveDetail) return null;
       const s = arkStateNow();
       const m = s ? (s.movements || []).find((x) => x.id === ui.arkMoveDetail) : null;

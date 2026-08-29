@@ -263,6 +263,27 @@ export function messagesFeature(ctx) {
           if (tms) observeAuthor(room.members, author, tms);
         }
     };
+    // The replay of stored wraps arrives one event at a time, and folding
+    // after every wrap paints each intermediate state: a superseded ban-list
+    // version blinks members' messages out until the newest version lands,
+    // and the member count creeps upward as joins stream in. Fold once per
+    // burst instead — a short quiet gap ends the burst — so the page goes
+    // from cache straight to the settled state.
+    let foldTimer = 0;
+    const scheduleFold = () => {
+      clearTimeout(foldTimer);
+      foldTimer = setTimeout(() => {
+        refold();
+        refoldGuestbook();
+        // remember the settled count — next session's list paints it
+        // immediately instead of "encrypted" flipping to a number
+        const s = st();
+        (s.memberCounts ||= {})[jm.community_id] =
+          [...room.members.values()].filter((m) => m.state === 'join').length;
+        save(s);
+        scheduleRepaint();
+      }, 250);
+    };
 
     allUnsubs.push(
       subscribeOn(room.relays, { kinds: [1059], authors: [room.control.pk], limit: 500 }, (wrap) => {
@@ -271,8 +292,7 @@ export function messagesFeature(ctx) {
         const opened = openWrap(wrap, room.control);
         if (!opened || opened.rumor.kind !== 3308) return;
         room.controlEntries.push(opened);
-        refold();
-        scheduleRepaint();
+        scheduleFold();
       }),
       subscribeOn(room.relays, { kinds: [1059], authors: [room.guestbook.pk], limit: 500 }, (wrap) => {
         if (seenWraps.has(wrap.id)) return;
@@ -280,8 +300,7 @@ export function messagesFeature(ctx) {
         const opened = openWrap(wrap, room.guestbook);
         if (!opened) return;
         room.guestEntries.push(opened);
-        refoldGuestbook();
-        scheduleRepaint();
+        scheduleFold();
       })
     );
     for (const c of jm.channels || []) subChannel(room, c.id);
@@ -2128,7 +2147,10 @@ export function messagesFeature(ctx) {
     kids.push(h('div', { class: 'list' }, communities().map((jm) => {
       const room = rooms.get(jm.community_id);
       const name = room?.folded?.metadata?.name || jm.name;
-      const memberCount = room ? [...room.members.values()].filter((m) => m.state === 'join').length : 0;
+      // until the guestbook fold lands, last session's settled count beats
+      // a placeholder that flips a moment later
+      const live = room ? [...room.members.values()].filter((m) => m.state === 'join').length : 0;
+      const memberCount = live || (st().memberCounts || {})[jm.community_id] || 0;
       const unread = room ? roomUnread(room) : false;
       return h('div', {
         class: 'item chat-thread-row' + (unread ? ' unread' : ''),

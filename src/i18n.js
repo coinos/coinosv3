@@ -206,6 +206,8 @@ const STR = {
     arkDepthBtn: 'Manage',
     arkDepthRenewed: 'Renewal requested',
     arkDepthRenewBtn: 'Renew now',
+    arkSpentElsewhere: 'Spent on another device',
+    arkSpentElsewhereN: '{n} coins',
     arkCoinsTitle: 'Spending coins',
     arkCoinsIntro: 'Your Spending balance lives in {n} coins totalling {total}. Each can be pulled on-chain without the server’s help — at a cost that grows with the coin’s history.',
     arkCoinsColAmount: 'Amount',

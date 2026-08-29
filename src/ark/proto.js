@@ -511,6 +511,12 @@ export function decodeMailboxMessage(value) {
         if (a.field === 1) msg.vtxos.push(decodeVtxo(a.value));
       }
     }
+    if (f.field === 4) { // RoundParticipationCompleted — wallet-recovery breadcrumb
+      msg.kind = 'roundCompleted';
+      for (const a of pbFields(f.value)) {
+        if (a.field === 2) msg.unlockHash = hex.encode(a.value);
+      }
+    }
     if (f.field === 5) { // IncomingLightningPaymentMessage
       msg.kind = 'lnIncoming';
       for (const a of pbFields(f.value)) {

@@ -291,8 +291,11 @@ export function participationAttestation(inputVtxoIdRaw, outputs, vtxoPrivkey) {
   return schnorr.sign(msg, vtxoPrivkey);
 }
 
-// inputs: [{ vtxo, keys }] — each input's attestation is signed by its own key
-export async function submitRoundParticipation(ark, { inputs, outputs }) {
+// inputs: [{ vtxo, keys }] — each input's attestation is signed by its own key.
+// mailboxId: when given, the server posts a recovery breadcrumb (the unlock
+// hash) to that mailbox once the round runs — any device of this wallet can
+// then claim the output even if the action that submitted it is lost.
+export async function submitRoundParticipation(ark, { inputs, outputs, mailboxId }) {
   const w = pbWriter();
   for (const { vtxo, keys } of inputs) {
     const iv = pbWriter();
@@ -306,6 +309,7 @@ export async function submitRoundParticipation(ark, { inputs, outputs }) {
     vr.bytesField(2, concatBytes(Uint8Array.of(0x00), o.userPubkey));
     w.bytesField(3, vr.finish());
   }
+  if (mailboxId) w.bytesField(4, mailboxId);
   const resp = await grpcCall(ark, 'bark_server.ArkService/SubmitRoundParticipation', w.finish());
   for (const { field, value } of pbFields(resp)) if (field === 1) return value; // unlock_hash
   throw new Error('no unlock hash in response');
@@ -315,12 +319,16 @@ export async function roundParticipationStatus(ark, unlockHash) {
   const w = pbWriter();
   w.bytesField(1, unlockHash);
   const resp = await grpcCall(ark, 'bark_server.ArkService/RoundParticipationStatus', w.finish());
-  const out = { status: 0, outputVtxos: [] };
+  const out = { status: 0, outputVtxos: [], inputVtxoIds: [] };
   for (const { field, value } of pbFields(resp)) {
     if (field === 1) out.status = Number(value);
     if (field === 2) out.fundingTx = value;
     if (field === 3) out.outputVtxos.push(value);
     if (field === 4) out.unlockPreimage = value;
+    if (field === 5 && value.length === 36) { // input vtxo ids (LE txid + LE vout)
+      const vout = value[32] | (value[33] << 8) | (value[34] << 16) | (value[35] << 24);
+      out.inputVtxoIds.push(`${hex.encode(value.slice(0, 32).reverse())}:${vout}`);
+    }
   }
   return out;
 }

@@ -319,6 +319,21 @@ export class ArkManager {
       if (a) this._driveLnRecv(a).catch(() => {}); // claim promptly; sync poll is the fallback
       return changed;
     }
+    if (m.kind === 'roundCompleted') {
+      // A round ran for one of our participations. Normally the action that
+      // submitted it drives the claim — but if that action is gone (crash
+      // mid-claim, snapshot rollback, a foreign device that never came
+      // back), this breadcrumb is the only trace, and money sits 'unclaimed'
+      // on the server until someone acts on it (cooney's 28,833 sats did,
+      // for 8 days). Adopt it; rescueParticipation no-ops on inputs we don't
+      // hold and the server side is idempotent.
+      if (m.unlockHash
+          && !this.state.actions.some((a) => a.unlockHash === m.unlockHash && a.step !== 'failed')) {
+        this.rescueParticipation(m.unlockHash).catch((e) =>
+          console.warn('ark: stranded participation not adopted —', e.message));
+      }
+      return changed;
+    }
     if (m.kind !== 'arkoor') return changed;
     const ourKeys = [hex.encode(this._key(0).pubkey)];
     const tip = await this._tipMemo();
@@ -1610,6 +1625,10 @@ export class ArkManager {
         unlockHash = await submitRoundParticipation(this.arkUrl, {
           inputs: inputRecs.map((v) => ({ vtxo: this._decoded(v), keys: this._keyForVtxo(v) })),
           outputs,
+          // recovery breadcrumb: the round posts our unlock hash to the
+          // mailbox, so a lost action (crash, foreign device) is found and
+          // claimed by whichever device reads the mailbox next
+          mailboxId: this._mailboxKey().pubkey,
         });
       } catch (e) {
         // "unusable inputs" never becomes usable by resubmission — some input
@@ -1665,28 +1684,34 @@ export class ArkManager {
       }
       for (const v of inputRecs) v.state = 'spent';
       action.step = 'done';
-      this._movement({ type: 'refresh', amountSat: action.outAmountSat, feeSat: action.feeSat || 0, status: 'complete', detail: `${inputRecs.length} in -> ${newVtxos.length} out${action.feeSat ? ` · fee ${action.feeSat} sat` : ''}` });
+      // unlockHash keys the cross-device display fold (two devices adopting
+      // the same participation must not become two "Renewed" rows);
+      // inputIds let the history skip "spent elsewhere" rows for coins this
+      // renewal consumed — reconciled before the claim, they'd otherwise
+      // stand as spends that the renewed coin silently contradicts.
+      this._movement({ type: 'refresh', amountSat: action.outAmountSat, feeSat: action.feeSat || 0, status: 'complete', unlockHash: action.unlockHash, inputIds: [...(action.inputIds || [])], detail: `${inputRecs.length} in -> ${newVtxos.length} out${action.feeSat ? ` · fee ${action.feeSat} sat` : ''}` });
       this._save();
     }
   }
 
   // Rebuild a refresh claim from its unlock hash — for a participation whose
-  // action was lost (snapshot rollback, device wipe) after its round ran,
-  // leaving the output stranded 'unclaimed' on the server. The server replays
-  // the funding tx and output vtxos; our key index is rediscovered by
-  // scanning; the forfeit handshake needs the original input records, which
-  // must still exist in this wallet's state (already marked spent is fine).
-  // inputVtxoIds comes from the operator (the server knows which inputs the
-  // participation locked; there is no client-facing API for that lookup).
+  // action was lost (snapshot rollback, device wipe, crash mid-claim) after
+  // its round ran, leaving the output stranded 'unclaimed' on the server.
+  // The server replays the funding tx, output vtxos AND input ids; our key
+  // index is rediscovered by scanning; the forfeit handshake needs the
+  // original input records, which must still exist in this wallet's state
+  // (already marked spent is fine). inputVtxoIds may be passed explicitly
+  // (the operator recipe) — omitted, they come from the status response.
   async rescueParticipation(unlockHashHex, inputVtxoIds) {
-    const missing = (inputVtxoIds || []).filter((id) => !this._vtxo(id));
-    if (!inputVtxoIds?.length) throw new Error('input vtxo ids required');
-    if (missing.length) throw new Error('input records not in this wallet: ' + missing.join(', '));
     if (this.state.actions.some((a) => a.unlockHash === unlockHashHex && a.step !== 'failed')) {
       throw new Error('an action for this participation already exists — sync drives it');
     }
     const status = await roundParticipationStatus(this.arkUrl, hex.decode(unlockHashHex));
     if (status.status === 0 || !status.fundingTx) throw new Error('the round for this participation has not run');
+    if (!inputVtxoIds?.length) inputVtxoIds = status.inputVtxoIds;
+    if (!inputVtxoIds?.length) throw new Error('input vtxo ids required');
+    const missing = inputVtxoIds.filter((id) => !this._vtxo(id));
+    if (missing.length) throw new Error('input records not in this wallet: ' + missing.join(', '));
     const outs = status.outputVtxos.map((b) => decodeVtxo(b));
     if (!outs.length) throw new Error('participation has no outputs');
     const want = new Set(outs.map((v) => v.policy.userPubkey));
@@ -1697,10 +1722,12 @@ export class ArkManager {
     }
     if (outKeyIndex == null) throw new Error('no wallet key matches the participation outputs');
     if (outKeyIndex >= this.state.nextKeyIndex) this.state.nextKeyIndex = outKeyIndex + 1;
+    const outSat = outs.reduce((n, v) => n + v.amountSat, 0);
+    const inSat = inputVtxoIds.reduce((n, id) => n + (this._vtxo(id).amountSat || 0), 0);
     const action = {
       id: `refresh-rescue-${Date.now()}`, type: 'refresh', step: 'issued',
       inputIds: [...inputVtxoIds], outKeyIndex,
-      outAmountSat: outs.reduce((n, v) => n + v.amountSat, 0), feeSat: 0,
+      outAmountSat: outSat, feeSat: Math.max(0, inSat - outSat),
       unlockHash: unlockHashHex,
       fundingTxHex: hex.encode(status.fundingTx),
       outputVtxos: status.outputVtxos.map((b) => hex.encode(b)),

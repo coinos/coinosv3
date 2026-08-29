@@ -873,6 +873,19 @@ export function arkFeature(ctx) {
       : m.type === 'ln-send' ? t('arkLnPaidHistory') : m.type === 'ln-receive' ? t('arkLnReceivedHistory')
       : m.type === 'offboard' ? t('arkOffboarded') : m.type === 'exit' ? t('arkExited')
       : m.type === 'refresh' ? t('arkRenewedHistory') : t('sent');
+    // coins the server saw spent outside this device's story (another
+    // device, a swept expiry, an adopted renewal) — the row that keeps the
+    // history summing to the balance. Folded per reconcile pass upstream.
+    if (m.type === 'reconcile') {
+      return h('div', { class: 'item' },
+        h('div', { class: 'ico out', html: ARK_MARK(15) }),
+        h('div', { class: 'grow' },
+          h('div', {}, t('arkSpentElsewhere')),
+          h('div', { class: 'small faint' },
+            timeAgo(m.ts / 1000) + (m.count > 1 ? ` · ${t('arkSpentElsewhereN', { n: m.count })}` : ''))),
+        h('div', { style: 'text-align:right' },
+          h('div', { class: 'amount-neg' }, '-' + fmtAmount(m.amountSat))));
+    }
     // a renewal moves nothing anywhere — its history amount is what it COST
     if (m.type === 'refresh') {
       return h('div', { class: 'item', style: 'cursor:pointer', onClick: () => { ui.arkMoveDetail = m.id; render(); } },
@@ -2589,18 +2602,46 @@ export function arkFeature(ctx) {
       // Same-payment duplicates (the old settle race, or a snapshot adopted
       // whole before the merge learned to dedupe) fold at display time too —
       // the earliest telling wins, everywhere, however the state got here.
+      // Renewals fold on their unlock hash (two devices can adopt the same
+      // participation), and only ones that COST something get a row — a free
+      // renewal is net zero, invisible money movement, noise.
       const seenPay = new Set();
-      return exits.concat((s.movements || [])
-        .filter((m) => ['receive', 'send', 'board', 'offboard', 'exit', 'ln-send', 'ln-receive', 'refresh'].includes(m.type) && m.status === 'complete')
+      const moves = (s.movements || [])
+        .filter((m) => ['receive', 'send', 'board', 'offboard', 'exit', 'ln-send', 'ln-receive', 'refresh', 'reconcile'].includes(m.type) && m.status === 'complete')
+        .filter((m) => m.type !== 'refresh' || m.feeSat > 0)
         .sort((m, n) => (m.ts || 0) - (n.ts || 0))
         .filter((m) => {
-          if (!m.type.startsWith('ln-')) return true;
-          const key = m.type + ':' + (m.paymentHash || m.preimage || m.invoice || m.id);
+          if (!m.type.startsWith('ln-') && !(m.type === 'refresh' && m.unlockHash)) return true;
+          const key = m.type + ':' + (m.unlockHash || m.paymentHash || m.preimage || m.invoice || m.id);
           if (seenPay.has(key)) return false;
           seenPay.add(key);
           return true;
-        })
-        .map((m) => ({ time: m.ts, render: () => arkHistoryItem(m) })));
+        });
+      // Coins the server reported spent elsewhere: without a row for them the
+      // history stops summing to the balance (cooney's looked 29k sats rich).
+      // One reconcile pass marks many coins in the same instant — fold each
+      // pass (and re-imported duplicates, deduped by coin) into one row.
+      // Coins a renewal is known to have consumed are excluded outright: the
+      // reconcile that noticed them gone was pre-empting the claim, and the
+      // renewed coin already balances the books invisibly.
+      const renewed = new Set();
+      for (const a of s.actions || []) if (a.type === 'refresh') for (const id of a.inputIds || []) renewed.add(id);
+      for (const m of s.movements || []) if (m.type === 'refresh') for (const id of m.inputIds || []) renewed.add(id);
+      const out = [];
+      const seenCoin = new Set();
+      for (const m of moves) {
+        if (m.type !== 'reconcile') { out.push(m); continue; }
+        if (m.vtxoId && (seenCoin.has(m.vtxoId) || renewed.has(m.vtxoId))) continue;
+        if (m.vtxoId) seenCoin.add(m.vtxoId);
+        const last = out[out.length - 1];
+        if (last && last.type === 'reconcile' && last.ts === m.ts) {
+          last.amountSat += m.amountSat;
+          last.count += 1;
+        } else {
+          out.push({ ...m, count: 1 });
+        }
+      }
+      return exits.concat(out.map((m) => ({ time: m.ts, render: () => arkHistoryItem(m) })));
     },
     historyDetail() {
       if (ui.arkExitDetail) {

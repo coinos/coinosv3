@@ -2440,7 +2440,10 @@ function accountsScreen() {
   return h(
     'div',
     { class: 'col', style: 'gap:16px' },
-    brandHeader(false),
+    // Reached from an open wallet this is a page, not a boot screen — the
+    // header icons (search, messages, settings, lock, avatar) stay put.
+    // Cold boot lands here with nothing loaded yet, and then they hide.
+    brandHeader(wallet.loaded),
     h('div', { class: 'card col' },
       h('h3', {}, t('accounts')),
       h('div', { class: 'col', style: 'gap:0' },

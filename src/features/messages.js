@@ -101,6 +101,55 @@ export function messagesFeature(ctx) {
     if (!ts || (s.read[key] || 0) >= ts) return;
     s.read[key] = ts;
     save(s);
+    // read markers ride their own sync domain (registered below) — nudging
+    // the cache is what gets the watermark onto the relays for other devices
+    try { wallet.saveCache(); } catch {}
+  }
+
+  // One tap, every dot: advance each conversation's watermark to its newest
+  // foreign message — DMs and community channels alike.
+  function markAllRead() {
+    const s = st();
+    const my = myPubkeys();
+    let changed = false;
+    const bump = (key, ts) => { if (ts && (s.read[key] || 0) < ts) { s.read[key] = ts; changed = true; } };
+    for (const [pk, msgs] of threads) bump(dmRead(pk), newestFrom(msgs.values(), (m) => !m.mine));
+    for (const room of rooms.values())
+      for (const [id, msgs] of room.byChannel)
+        bump(chRead(id), newestFrom(msgs.values(), (m) => !my.includes(m.author)));
+    if (changed) { save(s); try { wallet.saveCache(); } catch {} }
+    render();
+  }
+
+  const anyUnread = () => {
+    for (const [pk, msgs] of threads) if (dmUnread(pk, msgs)) return true;
+    for (const room of rooms.values()) if (roomUnread(room)) return true;
+    return false;
+  };
+
+  // Read state syncs across devices: each watermark only ever grows, so a
+  // per-key max is a clean commutative merge — a thread read anywhere is
+  // read everywhere.
+  if (wallet.registerCacheExtension && !wallet._msgReadSync) {
+    wallet._msgReadSync = true;
+    wallet.registerCacheExtension({
+      domain: 'msgread',
+      mergeAlways: true,
+      save: () => {
+        const read = wallet.loadFeatureState('messages', {}).read || {};
+        return Object.keys(read).length ? { msgRead: read } : {};
+      },
+      load: (d) => {
+        if (!d.msgRead) return;
+        const s = wallet.loadFeatureState('messages', {});
+        s.read ||= {};
+        let changed = false;
+        for (const [k, v] of Object.entries(d.msgRead)) {
+          if (typeof v === 'number' && (s.read[k] || 0) < v) { s.read[k] = v; changed = true; }
+        }
+        if (changed) wallet.saveFeatureState('messages', s);
+      },
+    });
   }
 
   // Per-conversation dots for the list screen: newer than when we last had
@@ -2076,7 +2125,10 @@ export function messagesFeature(ctx) {
     // Chat takes the whole screen, so home carries the way back to the wallet.
     kids.push(h('div', { class: 'row gap6', style: 'align-items:center' },
       backBtn(() => { ui.chatOpen = false; render(); }),
-      h('h3', { style: 'margin:0' }, t('tabMessages'))));
+      h('h3', { style: 'margin:0' }, t('tabMessages')),
+      anyUnread()
+        ? h('button', { class: 'linklike small', style: 'margin-left:auto', onClick: markAllRead }, t('msgMarkAllRead'))
+        : null));
 
     // A locked wallet can't decrypt or sign — say so up top, where the rooms
     // that quietly won't open are listed.

@@ -747,6 +747,7 @@ const STR = {
     namesZapCodeCopy: 'Copy code',
     namesOwnDomain: 'Use your own domain',
     namesOwnDomainHow: 'Have your own domain? Add this line to its DNS records (DNSSEC must be enabled) and your address works there too:',
+    msgMarkAllRead: 'Mark all read',
     namesOwnNode: 'Deliver to your own node',
     namesOwnNodeMenuHow: 'Run a Lightning node? Point your address at it — payments land there instead of in this wallet.',
     namesOwnNodeHow: 'Run your own Lightning node? Paste the CLINK offer code (noffer1…) from a service beside it — Lightning payments to your address will be delivered straight to your node instead of into this wallet.',

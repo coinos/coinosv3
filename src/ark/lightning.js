@@ -15,6 +15,7 @@ import { schnorr } from '@noble/curves/secp256k1';
 
 import { concatBytes, grpcCall, pbWriter, pbFields } from './proto.js';
 import { parsePackageCosignResponse } from './send.js';
+import { decodeBolt12Invoice } from '../bolt12.js';
 
 const te = new TextEncoder();
 const td = new TextDecoder();
@@ -66,6 +67,26 @@ export function decodeBolt11(invoice) {
 // Decoded invoice or null — the "is this a bolt11?" test.
 export function maybeBolt11(text) {
   try { return decodeBolt11(text); } catch { return null; }
+}
+
+// Either invoice kind, one shape: bolt11 via decodeBolt11, bolt12 (lni…) via
+// the BOLT 12 decoder. network is null for a bolt12 on an unrecognized chain
+// (custom signets) — callers skip the network gate rather than guess.
+export function decodeLnInvoice(invoice) {
+  const s = String(invoice || '').trim().toLowerCase().replace(/^lightning:/, '');
+  if (/^lni1/.test(s)) {
+    const d = decodeBolt12Invoice(s);
+    return {
+      network: d.network, paymentHash: d.paymentHash,
+      amountMsat: d.amountMsat, amountSat: d.amountSat,
+      expiresAt: d.expiresAt, bolt12: true,
+    };
+  }
+  return decodeBolt11(invoice);
+}
+
+export function maybeLnInvoice(text) {
+  try { return decodeLnInvoice(text); } catch { return null; }
 }
 
 // ---------------------------------------------------------------------------
@@ -125,6 +146,19 @@ export async function initiateLightningPayment(ark, { invoice, htlcVtxoIdRaws, a
   w.varintField(3, amountSat);
   if (mailboxPubkey) w.bytesField(4, mailboxPubkey);
   await grpcCall(ark, 'bark_server.ArkService/InitiateLightningPayment', w.finish());
+}
+
+// Ask the server's CLN to fetch a BOLT 12 invoice for an offer (it speaks
+// the onion messages the browser can't). Returns the invoice's raw TLV
+// bytes — the caller MUST decode and verify them (src/bolt12.js) before
+// locking anything to the payment hash inside.
+export async function fetchBolt12Invoice(ark, offerBytes, amountSat) {
+  const w = pbWriter();
+  w.bytesField(1, offerBytes);
+  if (amountSat) w.varintField(2, amountSat);
+  const data = await grpcCall(ark, 'bark_server.ArkService/FetchBolt12Invoice', w.finish());
+  for (const { field, value } of pbFields(data)) if (field === 1) return value;
+  throw new Error('server returned no invoice');
 }
 
 // -> { status: 'pending'|'success'|'failed', preimage? (hex) }

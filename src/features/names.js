@@ -89,12 +89,14 @@ export function namesFeature(ctx) {
     return addr ? `bitcoin:?ark=${encodeURIComponent(addr)}` : null;
   }
 
-  async function claim(name, { signer, manager, quietProfile, noffer } = {}) {
+  async function claim(name, { signer, manager, quietProfile, noffer, lno } = {}) {
     const uri = await currentUri();
     if (!uri) throw new Error(t('namesNeedArk'));
-    // Delivery noffer: undefined keeps whatever the record carries (here or
-    // registrar-side), '' clears it, a string points delivery at that code.
+    // Own-node fields (delivery noffer / published BOLT 12 offer): undefined
+    // keeps whatever the record carries (here or registrar-side), '' clears,
+    // a string sets.
     const nof = noffer !== undefined ? noffer : (load().noffer || undefined);
+    const ownLno = lno !== undefined ? lno : (load().lno || undefined);
     const j = await post('/register', 'POST', {
       name, uri, domain: DOMAIN(),
       // lets the address take Lightning payments from LNURL-only wallets:
@@ -104,9 +106,11 @@ export function namesFeature(ctx) {
       // wallet key to keep the record updated afterwards
       ...(manager ? { manager } : {}),
       ...(nof !== undefined ? { noffer: nof } : {}),
+      ...(ownLno !== undefined ? { lno: ownLno } : {}),
     }, signer);
     const prev = load().name;
-    save({ ...load(), name, domain: DOMAIN(), uri, offerPk: hook('nwcOfferPubkey') || null, noffer: nof || null, updated: Date.now() });
+    save({ ...load(), name, domain: DOMAIN(), uri, offerPk: hook('nwcOfferPubkey') || null,
+      noffer: nof || null, lno: ownLno || null, updated: Date.now() });
     // Releasing the previous name is for renames the user meant. A CUSTOM
     // name must never be released because a placeholder claim raced in: that
     // exact race once deleted a user's claimed name — adoptIdentity's npub
@@ -143,7 +147,8 @@ export function namesFeature(ctx) {
       const r = await withTimeout(
         fetch(`${REGISTRAR}/pubkey/${pk}?domain=${encodeURIComponent(DOMAIN())}`).then((x) => x.json()), 12000, 'registrar');
       if (r && r.name) save({ ...load(), name: r.name, domain: r.domain || DOMAIN(), uri: r.uri,
-        ...(r.noffer !== undefined ? { noffer: r.noffer } : {}) });
+        ...(r.noffer !== undefined ? { noffer: r.noffer } : {}),
+        ...(r.lno !== undefined ? { lno: r.lno } : {}) });
     } catch (e) { console.warn('names: lookup failed —', e.message); }
   }
 
@@ -184,7 +189,8 @@ export function namesFeature(ctx) {
               8000, 'registrar');
             if (r && r.name && !/^npub1/.test(r.name)) {
               save({ ...st, name: r.name, domain: r.domain || DOMAIN(), uri: r.uri,
-                ...(r.noffer !== undefined ? { noffer: r.noffer } : {}) });
+                ...(r.noffer !== undefined ? { noffer: r.noffer } : {}),
+                ...(r.lno !== undefined ? { lno: r.lno } : {}) });
               st = load();
             }
           } catch {}
@@ -315,6 +321,12 @@ export function namesFeature(ctx) {
         const ark = dec?.params?.ark;
         if (ark && isArkAddress(ark) && hook('arkReady')) {
           ui.send.recipients[0].address = ark;
+          render();
+          return;
+        }
+        // no payable ark instruction: a bolt12 offer (a foreign node, or a
+        // name delivered to its owner's own node) beats falling to on-chain
+        if (dec?.params?.lno && hook('startBolt12Pay', dec.params.lno, `${parsed.name}@${parsed.domain}`)) {
           render();
           return;
         }
@@ -589,50 +601,61 @@ export function namesFeature(ctx) {
       copyBtn(st.address, t('copy')));
   }
 
-  // Point the address's Lightning delivery at the user's own node: any
-  // CLINK-capable service beside their node (Lightning.Pub etc.) hands out
-  // its own noffer; registered here, the registrar asks THAT service for
-  // invoices, so payments land on their node and never touch this wallet.
-  async function setDeliveryNoffer(raw) {
+  // Point the address at the user's own node, two complementary ways:
+  //  - noffer: a CLINK service beside their node (Lightning.Pub etc.) mints
+  //    the invoices the registrar hands out and pays — LN delivery lands on
+  //    their node instead of in this wallet.
+  //  - lno: their node's own BOLT 12 offer goes into the DNS record, so
+  //    BIP-353 senders fetch invoices straight from their node — no coinos
+  //    hop at all.
+  async function setOwnNode(field, raw) {
     const st = load();
-    if (!st.name) { ui.namesNofferError = t('namesNeedArk'); render(); return; }
-    ui.namesNofferBusy = true; ui.namesNofferError = null; render();
+    if (!st.name) { ui.namesOwnErr = t('namesNeedArk'); render(); return; }
+    ui.namesOwnBusy = field; ui.namesOwnErr = null; render();
     try {
-      if (raw) {
+      if (raw && field === 'noffer') {
         const d = decodeNoffer(raw);
         if (!d.relay) throw new Error(t('namesOwnNodeNoRelay'));
       }
-      await claim(st.name, { noffer: raw || '' });
-      ui.namesNofferInput = '';
+      if (raw && field === 'lno' && !/^lno1[a-z0-9]+$/i.test(raw)) throw new Error(t('namesOwnLnoBad'));
+      await claim(st.name, { [field]: raw || '' });
+      ui.namesOwnInput = { ...ui.namesOwnInput, [field]: '' };
       toast(raw ? t('namesOwnNodeSet') : t('namesOwnNodeCleared'));
-    } catch (e) { ui.namesNofferError = e.message; }
-    ui.namesNofferBusy = false; render();
+    } catch (e) { ui.namesOwnErr = e.message; }
+    ui.namesOwnBusy = null; render();
+  }
+
+  function ownNodeField(field, current, placeholder, how) {
+    const busy = ui.namesOwnBusy === field;
+    if (current) {
+      return h('div', { class: 'col', style: 'gap:8px' },
+        h('div', { class: 'small muted' }, t(field === 'noffer' ? 'namesOwnNodeActive' : 'namesOwnLnoActive')),
+        h('div', { class: 'addr-box break', style: 'font-size:10px' }, current),
+        h('button', { class: 'btn-ghost btn-sm', disabled: !!ui.namesOwnBusy,
+          onClick: () => setOwnNode(field, '') },
+          busy ? h('span', { class: 'spinner sm' }) : t('namesOwnNodeClear')));
+    }
+    return h('div', { class: 'col', style: 'gap:8px' },
+      h('div', { class: 'small muted' }, how),
+      h('div', { class: 'row gap6' },
+        h('input', {
+          type: 'text', class: 'grow mono-input', placeholder,
+          value: (ui.namesOwnInput || {})[field] || '',
+          onInput: (e) => { ui.namesOwnInput = { ...ui.namesOwnInput, [field]: e.target.value }; },
+        }),
+        h('button', { class: 'btn-sm', disabled: !!ui.namesOwnBusy,
+          onClick: () => setOwnNode(field, ((ui.namesOwnInput || {})[field] || '').trim()) },
+          busy ? h('span', { class: 'spinner sm' }) : t('save'))));
   }
 
   function ownNodeSection() {
     const st = load();
     if (!st.name) return null;
-    return h('div', { class: 'col', style: 'gap:8px;width:100%;margin-top:6px' },
+    return h('div', { class: 'col', style: 'gap:10px;width:100%;margin-top:6px' },
       h('strong', { class: 'small' }, t('namesOwnNode')),
-      st.noffer
-        ? h('div', { class: 'col', style: 'gap:8px' },
-            h('div', { class: 'small muted' }, t('namesOwnNodeActive')),
-            h('div', { class: 'addr-box break', style: 'font-size:10px' }, st.noffer),
-            h('button', { class: 'btn-ghost btn-sm', disabled: !!ui.namesNofferBusy,
-              onClick: () => setDeliveryNoffer('') },
-              ui.namesNofferBusy ? h('span', { class: 'spinner sm' }) : t('namesOwnNodeClear')))
-        : h('div', { class: 'col', style: 'gap:8px' },
-            h('div', { class: 'small muted' }, t('namesOwnNodeHow')),
-            h('div', { class: 'row gap6' },
-              h('input', {
-                type: 'text', class: 'grow mono-input', placeholder: 'noffer1…',
-                value: ui.namesNofferInput || '',
-                onInput: (e) => { ui.namesNofferInput = e.target.value; },
-              }),
-              h('button', { class: 'btn-sm', disabled: !!ui.namesNofferBusy,
-                onClick: () => setDeliveryNoffer((ui.namesNofferInput || '').trim()) },
-                ui.namesNofferBusy ? h('span', { class: 'spinner sm' }) : t('save')))),
-      ui.namesNofferError ? h('div', { class: 'notice err small' }, ui.namesNofferError) : null);
+      ownNodeField('noffer', st.noffer, 'noffer1…', t('namesOwnNodeHow')),
+      ownNodeField('lno', st.lno, 'lno1…', t('namesOwnLnoHow')),
+      ui.namesOwnErr ? h('div', { class: 'notice err small' }, ui.namesOwnErr) : null);
   }
 
   function clinkPane() {
@@ -731,7 +754,7 @@ export function namesFeature(ctx) {
     namesSeed(rec) {
       if (!rec || !rec.name) return null;
       const st = load();
-      if (!st.name) save({ name: rec.name, domain: rec.domain || DOMAIN(), uri: rec.uri, noffer: rec.noffer ?? null });
+      if (!st.name) save({ name: rec.name, domain: rec.domain || DOMAIN(), uri: rec.uri, noffer: rec.noffer ?? null, lno: rec.lno ?? null });
       return true;
     },
     // 'pending' while the restore/claim pass is still running — the wallet

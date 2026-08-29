@@ -9,7 +9,7 @@ import { sha256 } from '@noble/hashes/sha256';
 import { ArkManager } from '../ark/manager.js';
 import { loadBg, saveBg, buildBg, disarmSiblingRecords } from '../nwc-bg.js';
 import { boardFee } from '../ark/board.js';
-import { maybeBolt11, lnSendFee } from '../ark/lightning.js';
+import { maybeBolt11, maybeLnInvoice, lnSendFee } from '../ark/lightning.js';
 import { decodeVtxo, getVtxoStatus, VTXO_STATE_SPENT, concatBytes } from '../ark/proto.js';
 import { signedExitTxs, buildBumpChild, buildExitClaim, submitPackage } from '../ark/exit.js';
 import { utxoId } from '../wallet.js';
@@ -662,7 +662,7 @@ export function arkFeature(ctx) {
   // directly when swaps is absent): take over when the ark balance can
   // plausibly cover it, else decline so the Boltz path handles it.
   function startArkLnPay(invoice, meta) {
-    const dec = maybeBolt11(invoice);
+    const dec = maybeLnInvoice(invoice);
     if (!dec || !arkAvailable() || wallet.watchOnly) return false;
     const s = arkStateNow();
     const covers = (state, sats) =>
@@ -2431,7 +2431,7 @@ export function arkFeature(ctx) {
     interceptReview(s) {
       if (s.recipients.length === 1) {
         const inv = (s.recipients[0].address || '').trim().replace(/^lightning:/i, '');
-        if (maybeBolt11(inv) && startArkLnPay(inv)) return true;
+        if (maybeLnInvoice(inv) && startArkLnPay(inv)) return true;
       }
       if (s.recipients.length === 1 && isArkAddress(s.recipients[0].address)) {
         if (!arkAvailable()) throw new Error(t('arkNotConnected'));
@@ -2457,6 +2457,12 @@ export function arkFeature(ctx) {
     // The zaps feature's generic Lightning seams (once served by the retired
     // swaps feature): the ASP pays invoices natively over ark.
     canLnPay() { return arkAvailable() && !wallet.watchOnly && !!(ark && ark.info); },
+    // Fetch + verify a bolt12 invoice for an offer (the ASP's CLN speaks the
+    // onion messages) — resolves { invoice (lni), amountSat, paymentHash }.
+    async arkFetchBolt12Invoice(offerStr, amountSat) {
+      const mgr = await connectArk();
+      return mgr.fetchBolt12(offerStr, amountSat);
+    },
     lnSpendableSat() { const b = arkBalance(); return b ? b.spendableSat : 0; },
     settingsCards() { return [autoWithdrawCard()]; },
     // The onboarding wizard's top-up step borrows the board form wholesale.
@@ -2546,7 +2552,7 @@ export function arkFeature(ctx) {
           return true;
         }
       }
-      if (maybeBolt11(inv)) return startArkLnPay(inv);
+      if (maybeLnInvoice(inv)) return startArkLnPay(inv);
       const pk = npubToHex(text);
       if (!pk || !arkAvailable() || !wallet.nostrFetch) return false;
       startNpubPay(pk, String(text).trim());

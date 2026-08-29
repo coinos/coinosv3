@@ -16,6 +16,7 @@ import { npubOf } from '../nostr.js';
 import { parseZapTarget, zapTargetFromProfile, fetchPayParams, buildZapRequest, requestInvoice } from '../lnurl.js';
 import { decodeNoffer } from '../noffer.js';
 import { requestOfferInvoice } from '../clink.js';
+import { decodeOffer } from '../bolt12.js';
 import { maybeBolt11 } from '../ark/lightning.js';
 
 export function zapsFeature(ctx) {
@@ -34,6 +35,22 @@ export function zapsFeature(ctx) {
     try { return { ...decodeNoffer(s), raw: s }; } catch { return null; }
   }
 
+  // A pasted BOLT 12 offer (`lno1…`) — decoded, or null.
+  function maybeOffer(text) {
+    const s = String(text || '').trim().replace(/^(lightning|bitcoin):/i, '').toLowerCase();
+    if (!/^lno1/.test(s)) return null;
+    try { return { ...decodeOffer(s), raw: s }; } catch { return null; }
+  }
+
+  const shortCode = (s) => s.slice(0, 12) + '…' + s.slice(-6);
+
+  // Begin the amount screen for a decoded offer. Fetching the actual invoice
+  // (via the ASP's CLN) and verifying it happens on confirm.
+  function beginBolt12(off, display) {
+    begin({ kind: 'bolt12', offer: off, address: display }, off.description || display);
+    return true;
+  }
+
   // Kick off resolution of a parsed target. `display` is what we show as the
   // recipient until a profile name arrives.
   function begin(target, display) {
@@ -46,6 +63,18 @@ export function zapsFeature(ctx) {
 
   async function resolve(z) {
     let target = z.target;
+    // A BOLT 12 offer carries its own terms — no lookup until confirm, when
+    // the ASP's CLN fetches (and this wallet verifies) the actual invoice.
+    if (target.kind === 'bolt12') {
+      const off = target.offer;
+      if (off.currency) throw new Error(t('bolt12Currency', { currency: off.currency }));
+      const fixedSat = off.amountMsat ? Number((off.amountMsat + 999n) / 1000n) : null;
+      if (fixedSat) z.amount = getUnit() === 'sats' ? String(fixedSat) : (fixedSat / 1e8).toFixed(8);
+      z.params = { minSendable: 1000, maxSendable: 21e15, commentAllowed: 0, allowsNostr: false, fixedSat };
+      z.status = 'ready';
+      render();
+      return;
+    }
     // A CLINK offer needs no HTTP at all: the code itself says who to ask.
     if (target.kind === 'noffer') {
       const n = target.noffer;
@@ -130,6 +159,19 @@ export function zapsFeature(ctx) {
       return render();
     }
     z.error = ''; z.status = 'invoicing'; render();
+    if (z.target.kind === 'bolt12') {
+      try {
+        // fetch through the ASP's CLN; the manager verifies signature, offer
+        // mirroring and amount before handing back the lni
+        const r = await hook('arkFetchBolt12Invoice', z.target.offer.raw, sats);
+        ui.zap = null;
+        hook('startLnPay', r.invoice, { name: z.name, address: z.address, pk: null, comment: '', isZap: false });
+        render();
+      } catch (e) {
+        z.status = 'ready'; z.error = e.message; render();
+      }
+      return;
+    }
     if (z.target.kind === 'noffer') {
       try {
         const invoice = await requestOfferInvoice(z.target.noffer, { amountSat: sats, description: z.comment });
@@ -249,10 +291,12 @@ export function zapsFeature(ctx) {
       if (!canPay() || !ui.send || ui.send.recipients.length !== 1) return false;
       const nof = maybeNoffer(text);
       if (nof) {
-        const short = nof.raw.slice(0, 12) + '…' + nof.raw.slice(-6);
+        const short = shortCode(nof.raw);
         begin({ kind: 'noffer', noffer: nof, address: short }, short);
         return true;
       }
+      const off = maybeOffer(text);
+      if (off) return beginBolt12(off, shortCode(off.raw));
       const target = parseZapTarget(text);
       if (!target) return false;
       // npub with no nostr seam to look up a profile → can't resolve here.
@@ -277,6 +321,15 @@ export function zapsFeature(ctx) {
         type: 'button', class: 'btn-primary btn-block',
         onClick: () => begin(target, display),
       }, '⚡ ' + t('lnZapOffer', { addr: display }));
+    },
+    // A BIP-353 name resolved to a record whose lno= is the only payable
+    // instruction (a foreign BOLT 12 node, or a coinos name whose owner
+    // pointed it at their own node) — pay the offer.
+    startBolt12Pay(lno, display) {
+      if (!canPay() || !ui.send || ui.send.recipients.length !== 1) return false;
+      const off = maybeOffer(lno);
+      if (!off) return false;
+      return beginBolt12(off, display || shortCode(off.raw));
     },
     // The names feature resolves user@domain over DNS first (BIP-353) and
     // lands here when the name has no DNS record — the classic LNURL path.

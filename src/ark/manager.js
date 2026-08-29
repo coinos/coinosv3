@@ -29,7 +29,7 @@ import {
   genUserNonces, cosignPartBytes, combineCosign,
 } from './send.js';
 import {
-  decodeBolt11, lnSendFee, lnReceiveFee, fetchLnRouteFee,
+  decodeBolt11, decodeLnInvoice, fetchBolt12Invoice, lnSendFee, lnReceiveFee, fetchLnRouteFee,
   requestLightningPayHtlcCosign, initiateLightningPayment, checkLightningPayment,
   requestLightningPayHtlcRevocation, startLightningReceive, checkLightningReceive,
   prepareLightningReceiveClaim, claimLightningReceive, cancelLightningReceive,
@@ -51,6 +51,7 @@ import {
 } from './offboard.js';
 import { signedExitTxs } from './exit.js';
 import { validateVtxo, VtxoValidationError } from './validate.js';
+import { decodeOffer, decodeBolt12Invoice, verifyOfferInvoice, encodeBech32Raw } from '../bolt12.js';
 
 const EMPTY_STATE = () => ({
   v: 1,
@@ -787,12 +788,33 @@ export class ArkManager {
     catch { return Math.max(3, Math.ceil(amountSat / 1000)); }
   }
 
-  // Pay a bolt11 invoice with ark funds. Returns the action id; drive to a
-  // terminal step ('done' | 'failed') via driveLn()/sync.
+  // Fetch a BOLT 12 invoice for an offer through the server's CLN, then
+  // verify it HERE: hash and amount are read out of the raw TLVs and the
+  // issuer's signature is checked, so the server can't hand back an invoice
+  // whose preimage it already holds. Returns the lni string payLnInvoice
+  // (and captaind) accept.
+  async fetchBolt12(offerStr, amountSat) {
+    const offer = decodeOffer(offerStr);
+    if (offer.currency) throw new Error(`offer is priced in ${offer.currency}, not sats`);
+    const bytes = await fetchBolt12Invoice(this.arkUrl, offer.bytes, amountSat);
+    const inv = decodeBolt12Invoice(bytes);
+    verifyOfferInvoice(offer, inv);
+    if (amountSat && inv.amountSat !== amountSat) throw new Error('invoice amount does not match');
+    if (inv.expiresAt && inv.expiresAt < Date.now() + 60_000) throw new Error('invoice already expired');
+    return {
+      invoice: encodeBech32Raw('lni', bytes),
+      amountSat: inv.amountSat, paymentHash: inv.paymentHash, description: inv.description,
+    };
+  }
+
+  // Pay a bolt11 or bolt12 invoice with ark funds. Returns the action id;
+  // drive to a terminal step ('done' | 'failed') via driveLn()/sync.
   async payLnInvoice(invoice, { amountSat: userAmountSat, routingFeeSat } = {}) {
-    const dec = decodeBolt11(invoice);
+    const dec = decodeLnInvoice(invoice);
     const expectNet = { bitcoin: 'mainnet', regtest: 'regtest', signet: 'signet', testnet: 'testnet' }[this.info.network];
-    if (expectNet && dec.network !== expectNet) throw new Error(`invoice is for ${dec.network}, wallet is on ${expectNet}`);
+    // a null network is a bolt12 on a chain we don't recognize (custom
+    // signets) — the server rejects a true mismatch, so don't guess here
+    if (expectNet && dec.network && dec.network !== expectNet) throw new Error(`invoice is for ${dec.network}, wallet is on ${expectNet}`);
     const amountSat = dec.amountSat ?? userAmountSat;
     if (!amountSat || amountSat <= 0) throw new Error('invoice has no amount');
     if (this.state.actions.some((a) =>

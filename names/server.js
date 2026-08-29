@@ -30,6 +30,7 @@ import { ArkManager } from '../src/ark/manager.js';
 import { decodeAddress } from '../src/ark/proto.js';
 import { decodeNoffer } from '../src/noffer.js';
 import { decodeBolt11 } from '../src/ark/lightning.js';
+import { decodeOffer } from '../src/bolt12.js';
 
 const CFG = JSON.parse(readFileSync(process.env.NAMES_CONFIG
   || join(import.meta.dir, 'config.json'), 'utf8'));
@@ -694,7 +695,23 @@ Bun.serve({
           const feeMsat = await routeFeeMsat(our, dest, amountMsat, finalCltv);
           return json({ feeMsat, feeSat: quoteSat(feeMsat), direct: false });
         } catch (e) {
-          // Private recipient: not in gossip, reachable only via the
+          // A bolt12 invoice with blinded paths: its node id is a blinded
+          // key no router knows. Quote = route to a path's public entry
+          // node + the blinded segment's advertised payinfo fees.
+          const paths = dec.invoice_paths || [];
+          let best = null;
+          for (const p of paths) {
+            const pay = p.payinfo || {};
+            const entry = p.first_node_id;
+            if (!entry) continue;
+            const f = (pay.fee_base_msat || 0) + Math.ceil(amountMsat * (pay.fee_proportional_millionths || 0) / 1_000_000);
+            try {
+              const toEntry = entry === our ? 0 : await routeFeeMsat(our, entry, amountMsat + f, finalCltv);
+              if (best == null || toEntry + f < best) best = toEntry + f;
+            } catch {}
+          }
+          if (best != null) return json({ feeMsat: best, feeSat: quoteSat(best), direct: false, blinded: true });
+          // Private bolt11 recipient: not in gossip, reachable only via the
           // invoice's route hints. Quote = route to the hint's public entry
           // node + the hint hops' advertised fees.
           const hint = (dec.routes || [])[0];
@@ -785,7 +802,7 @@ Bun.serve({
     if (m && req.method === 'GET') {
       const domain = (url.searchParams.get('domain') || DOMAIN).toLowerCase();
       const rec = state.names[`${m[1]}@${domain}`];
-      if (rec) return json({ name: m[1], domain, taken: true, pubkey: rec.pubkey, manager: rec.manager || null, uri: rec.uri, noffer: rec.noffer?.raw || null });
+      if (rec) return json({ name: m[1], domain, taken: true, pubkey: rec.pubkey, manager: rec.manager || null, uri: rec.uri, noffer: rec.noffer?.raw || null, lno: rec.lno || null });
       const reserved = RESERVED.has(m[1]) || !NAME_RE.test(m[1]) || await takenByCoinosUser(domain, m[1]);
       return json({ name: m[1], domain, taken: reserved, reserved });
     }
@@ -809,7 +826,7 @@ Bun.serve({
       if (!mine.length) return json({});
       const [key, r] = mine[0];
       const [name, domain] = key.split('@');
-      return json({ name, domain, uri: r.uri, noffer: r.noffer?.raw || null });
+      return json({ name, domain, uri: r.uri, noffer: r.noffer?.raw || null, lno: r.lno || null });
     }
 
     // --- hats ------------------------------------------------------------
@@ -1108,6 +1125,22 @@ Bun.serve({
           } catch (e) { return json({ error: 'bad noffer: ' + e.message }, 400); }
         }
       }
+      // Own BOLT 12 offer: same absent/''/set semantics. When set, the DNS
+      // record carries THEIR lno — senders' fetchinvoice goes straight to
+      // their node and no money ever touches this service.
+      let lno = existing?.lno;
+      if (claim.lno !== undefined) {
+        if (!claim.lno) lno = undefined;
+        else {
+          try {
+            const d = decodeOffer(String(claim.lno).trim());
+            if (domain !== 'staging.coinos.io' && d.network && d.network !== 'mainnet') {
+              throw new Error(`offer is for ${d.network}`);
+            }
+            lno = String(claim.lno).trim().toLowerCase();
+          } catch (e) { return json({ error: 'bad offer: ' + e.message }, 400); }
+        }
+      }
       // A corrupt ark address recorded here is a payment black hole: forwards
       // fail forever while the sats sit on the node (goyslop's 190k sat sat
       // behind an invalid checksum). Refuse it at the door.
@@ -1117,11 +1150,18 @@ Bun.serve({
         catch { return json({ error: 'the ark address in the uri does not decode' }, 400); }
       }
 
-      // Every name also gets a static Lightning offer on our node; payments
-      // to it are forwarded to the ark destination in the claim.
+      // The record's lno=: the owner's own offer when they set one, else a
+      // static offer on our node with the settle forwarder behind it.
       let offer = existing?.offerId ? { offerId: existing.offerId, bolt12: existing.bolt12 } : null;
-      if (!offer) { try { offer = await makeOffer(key); } catch (e) { log('offer creation failed: ' + e.message); } }
-      const published = offer ? `${claim.uri}${claim.uri.includes('?') ? '&' : '?'}lno=${offer.bolt12}` : claim.uri;
+      if (lno) {
+        // their node answers fetchinvoice directly now — retire our stand-in
+        if (offer && ln) await ln.call('disableoffer', { offer_id: offer.offerId }).catch(() => {});
+        offer = null;
+      } else if (!offer) {
+        try { offer = await makeOffer(key); } catch (e) { log('offer creation failed: ' + e.message); }
+      }
+      const pubLno = lno || offer?.bolt12;
+      const published = pubLno ? `${claim.uri}${claim.uri.includes('?') ? '&' : '?'}lno=${pubLno}` : claim.uri;
 
       const recordId = await cfWrite(name, domain, published, existing?.recordId);
       state.names[key] = {
@@ -1132,8 +1172,9 @@ Bun.serve({
         uri: published, recordId, updated: Date.now(), domain,
         // the wallet's CLINK offer key, so LNURL can ask it for invoices
         offerPk: (claim.offerPk && /^[0-9a-f]{64}$/.test(claim.offerPk)) ? claim.offerPk : existing?.offerPk,
-        // the owner's own CLINK service, when they pointed delivery at it
+        // the owner's own CLINK service / BOLT 12 offer, when they set one
         ...(noffer ? { noffer } : {}),
+        ...(lno ? { lno } : {}),
         offerId: offer?.offerId, bolt12: offer?.bolt12,
       };
       persist();

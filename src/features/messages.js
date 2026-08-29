@@ -65,6 +65,7 @@ export function messagesFeature(ctx) {
     s.tombstones ||= {}; // { [cid]: removed_at ms } — left communities (CORD-02 §8)
     s.read ||= {}; // { ['dm:'+pk | 'ch:'+id]: created_at } — last message we've seen
     s.notify ||= {}; // { [cid]: true } — communities that may buzz your phone (opt-in)
+    s.drafts ||= {}; // { ['dm:'+pk | 'ch:'+id]: text } — half-typed messages
     for (const c of s.communities) c.added_at ||= Date.now();
     // pre-multi-community shape: joined was { [pubkey]: true } for coinos
     for (const k of Object.keys(s.joined))
@@ -404,18 +405,38 @@ export function messagesFeature(ctx) {
     save(s);
   }
 
+  // ---- drafts -------------------------------------------------------------
+  // Half-typed text survives navigation and reloads: one draft per
+  // conversation ('dm:<pk>' / 'ch:<channelId>'), kept in feature state.
+  // The session map is authoritative while the app runs; persistence rides a
+  // debounce so typing doesn't hammer storage.
+  const sessionDrafts = new Map();
+  let draftPersist = 0;
+  const draftFor = (key) =>
+    (sessionDrafts.has(key) ? sessionDrafts.get(key) : (st().drafts || {})[key] || '');
+  function setDraft(key, text) {
+    sessionDrafts.set(key, text);
+    clearTimeout(draftPersist);
+    draftPersist = setTimeout(() => {
+      const s = st();
+      s.drafts ||= {};
+      for (const [k, v] of sessionDrafts) { if (v) s.drafts[k] = v; else delete s.drafts[k]; }
+      save(s);
+    }, 800);
+  }
+
   // The morph never rewrites a focused field's value (it would fight the user
   // mid-keystroke), and the composer is focused at the moment you send — so
-  // clearing ui.msgDraft alone leaves the sent text sitting in the input.
+  // clearing the draft alone leaves the sent text sitting in the input.
   // Clear the live element too.
-  function clearDraft() {
-    ui.msgDraft = '';
+  function clearDraft(key) {
+    setDraft(key, '');
     const inp = document.getElementById('msg-draft');
     if (inp) inp.value = '';
   }
 
   async function sendMessage(room, chId) {
-    const text = (ui.msgDraft || '').trim();
+    const text = draftFor('ch:' + chId).trim();
     if (!text) return;
     const id = await identity();
     if (!id) { noIdToast(); return; }
@@ -431,7 +452,7 @@ export function messagesFeature(ctx) {
     const msgs = room.byChannel.get(chId) || room.byChannel.set(chId, new Map()).get(chId);
     const entry = { rumor, author: id.pubkey, pending: true };
     msgs.set(rumor.id, entry);
-    clearDraft();
+    clearDraft('ch:' + chId);
     ui.msgStick = true;
     render();
     try {
@@ -1095,7 +1116,7 @@ export function messagesFeature(ctx) {
   }
 
   async function sendDM(peer) {
-    const text = (ui.msgDraft || '').trim();
+    const text = draftFor('dm:' + peer).trim();
     if (!text) return;
     const id = await identity();
     if (!id) { noIdToast(); return; }
@@ -1106,7 +1127,7 @@ export function messagesFeature(ctx) {
     const rumor = makeDMRumor(id.pubkey, peer, text);
     const entry = { rumor, mine: true, pending: true };
     threadOf(peer).set(rumor.id, entry);
-    clearDraft();
+    clearDraft('dm:' + peer);
     ui.msgStick = true;
     render();
     try {
@@ -1986,14 +2007,14 @@ export function messagesFeature(ctx) {
       }, ui.msgReconnecting ? h('span', { class: 'spinner sm' }) : t('msgReconnect')));
   }
 
-  const composer = (placeholder, onSend, onType) =>
+  const composer = (placeholder, onSend, onType, draftKey) =>
     h('div', { class: 'col', style: 'gap:6px' },
       signerNotice(),
     h('div', { class: 'chat-compose' },
       h('input', {
         class: 'grow', type: 'text', id: 'msg-draft', placeholder,
-        value: ui.msgDraft || '', maxlength: '2000',
-        onInput: (e) => { ui.msgDraft = e.target.value; if (onType && e.target.value) onType(); },
+        value: draftFor(draftKey), maxlength: '2000',
+        onInput: (e) => { setDraft(draftKey, e.target.value); if (onType && e.target.value) onType(); },
         onKeydown: (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onSend(); } },
         // Focus summons the keyboard; some browsers resize only after its
         // animation, so re-stick once now and once when it has settled.
@@ -2305,7 +2326,8 @@ export function messagesFeature(ctx) {
       composer(
         chans.length > 1 ? t('msgPlaceholder', { channel: ch ? ch.name : '' }) : t('msgPlaceholderPlain'),
         () => ch && sendMessage(room, ch.id),
-        () => ch && ping(room, ch.id, TYPING)));
+        () => ch && ping(room, ch.id, TYPING),
+        ch ? 'ch:' + ch.id : 'ch:'));
   }
 
   // "Alice is typing…" — named up to two, counted beyond that.
@@ -2421,7 +2443,7 @@ export function messagesFeature(ctx) {
                 h('div', { class: 'chat-bubble' + (m.mine ? ' me' : '') }, m.rumor.content),
                 h('div', { class: 'chat-time' }, timeLabel(m.rumor.created_at * 1000)))))
         : [h('div', { class: 'muted small', style: 'text-align:center;padding:24px 0' }, t('msgNoDmsYet'))])),
-      composer(t('msgDmPlaceholder'), () => sendDM(peer)));
+      composer(t('msgDmPlaceholder'), () => sendDM(peer), null, 'dm:' + peer));
   }
 
   // ---- feature ------------------------------------------------------------

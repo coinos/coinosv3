@@ -1558,11 +1558,10 @@ export function arkFeature(ctx) {
     const mgr = ark;
     const spend = ((mgr && mgr.state && mgr.state.vtxos) || []).filter((v) => v.state === 'spendable');
     const tip = (mgr && mgr._tipH) || 0;
-    const back = () => { ui.arkCoinsPage = null; render(); };
+    const back = () => { ui.arkCoinsPage = null; ui.arkCoinsSel = null; render(); };
     if (!spend.length) { ui.arkCoinsPage = null; return null; } // nothing left to manage
     const totalSat = spend.reduce((n, v) => n + v.amountSat, 0);
     let exitFee = 0; try { exitFee = estimateExitFeeSat(mgr); } catch {}
-    let renewFee = 0; try { renewFee = mgr.refreshFee(spend, tip); } catch {}
     const feeRate = Math.max(1, (wallet.feeRates && wallet.feeRates.halfHourFee) || 2);
     const afterFee = Math.ceil(530 * feeRate);
     const depthOf = (v) => { try { return mgr._decoded(v).genesis.length; } catch { return null; } };
@@ -1591,27 +1590,49 @@ export function arkFeature(ctx) {
       cost: e.ppm === 0 ? t('arkDepthFree') : (e.ppm / 10000).toLocaleString(undefined, { maximumFractionDigits: 3 }) + '%',
       free: e.ppm === 0,
     }));
+    // Which coins ride the renewal: all by default (the one-button behavior),
+    // any subset by unticking. Selection is per-visit; ids that vanished
+    // (spent meanwhile) drop out silently.
+    const ids = new Set(spend.map((v) => v.id));
+    if (!(ui.arkCoinsSel instanceof Set)) ui.arkCoinsSel = new Set(ids);
+    for (const id of ui.arkCoinsSel) if (!ids.has(id)) ui.arkCoinsSel.delete(id);
+    const sel = ui.arkCoinsSel;
+    const selCoins = spend.filter((v) => sel.has(v.id));
+    let selFee = 0; try { selFee = mgr.refreshFee(selCoins, tip); } catch {}
     const renew = () => {
+      if (!selCoins.length) return;
       // fire and let the round machinery carry it — rounds can be an hour out
-      mgr.refresh(spend.map((v) => v.id)).catch((e) => toast(e.message));
+      mgr.refresh(selCoins.map((v) => v.id)).catch((e) => toast(e.message));
       toast(t('arkDepthRenewed'));
+      ui.arkCoinsSel = null;
       back();
     };
     const cell = (s, extra = '') => h('span', { class: 'small', style: 'flex:1;' + extra }, s);
     const head = (s, extra = '') => h('span', { class: 'small faint', style: 'flex:1;' + extra }, s);
+    const tick = (checked, onChange, title) => h('input', {
+      type: 'checkbox', checked, title, style: 'flex:0 0 auto;margin:0', onChange,
+    });
     return h('div', { class: 'col', style: 'gap:16px' },
       h('div', { class: 'card col', style: 'gap:8px' },
         h('h3', { style: 'margin:0' }, t('arkCoinsTitle')),
         h('p', { class: 'small muted', style: 'margin:0' },
           t('arkCoinsIntro', { n: spend.length, total: fmtAmount(totalSat) + ' ' + unitLabel() })),
         h('div', { class: 'col', style: 'gap:4px;margin-top:4px' },
-          h('div', { class: 'row gap6' },
+          h('div', { class: 'row gap6', style: 'align-items:center' },
+            tick(sel.size === ids.size, (e) => {
+              ui.arkCoinsSel = e.target.checked ? new Set(ids) : new Set();
+              render();
+            }, t('arkCoinsSelectAll')),
             head(t('arkCoinsColAmount')), head(t('arkCoinsColExpires'), 'text-align:center'),
             head(t('arkCoinsColDepth'), 'text-align:center'), head(t('arkCoinsColFee'), 'text-align:right')),
           ...spend.map((v) => {
             const d = depthOf(v);
             const f = feeNowOf(v);
-            return h('div', { class: 'row gap6' },
+            return h('div', { class: 'row gap6', style: 'align-items:center' },
+              tick(sel.has(v.id), (e) => {
+                e.target.checked ? sel.add(v.id) : sel.delete(v.id);
+                render();
+              }),
               cell(fmtAmount(v.amountSat) + ' ' + unitLabel()),
               cell(expiresOf(v), 'text-align:center'),
               cell(d == null ? '—' : d === 1 ? t('arkCoinsHop') : t('arkCoinsHops', { n: d }), 'text-align:center'),
@@ -1630,8 +1651,11 @@ export function arkFeature(ctx) {
             h('span', { class: 'small muted' }, r.label),
             h('span', { class: 'small' + (r.free ? ' faint' : '') }, r.cost)))) : null,
         h('p', { class: 'small faint', style: 'margin:0' }, t('arkCoinsRenewAuto')),
-        h('button', { class: 'btn-primary btn-block', disabled: !!ui.arkBusy, onClick: renew },
-          renewFee > 0 ? t('arkCoinsRenewNowFee', { fee: fmtAmount(renewFee) + ' ' + unitLabel() }) : t('arkDepthRenewBtn'))),
+        h('button', { class: 'btn-primary btn-block', disabled: !!ui.arkBusy || !selCoins.length, onClick: renew },
+          !selCoins.length ? t('arkCoinsRenewNone')
+            : selCoins.length < spend.length
+              ? t('arkCoinsRenewSome', { n: selCoins.length, fee: selFee > 0 ? fmtAmount(selFee) + ' ' + unitLabel() : t('arkDepthFree') })
+              : selFee > 0 ? t('arkCoinsRenewNowFee', { fee: fmtAmount(selFee) + ' ' + unitLabel() }) : t('arkDepthRenewBtn'))),
       h('button', { class: 'btn-ghost btn-block', onClick: back }, t('back')));
   }
 

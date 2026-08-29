@@ -1481,8 +1481,13 @@ export function arkFeature(ctx) {
     if (depth < EXIT_DEPTH_ADVISORY) return null;
     let exitFee = 0; try { exitFee = estimateExitFeeSat(ark); } catch {}
     let renewFee = 0; try { renewFee = ark.refreshFee(spend, ark._tipH || 0); } catch {}
+    // after a renewal everything is ONE coin, ONE hop: parent + its fee
+    // child + the claim, ~530 vB all in at today's rate
+    const feeRate = Math.max(1, (wallet.feeRates && wallet.feeRates.halfHourFee) || 2);
+    const afterFee = Math.ceil(530 * feeRate);
+    if (afterFee >= exitFee) return null; // renewing wouldn't help — stay quiet
     return h('div', { class: 'small muted', style: 'margin:10px 0 0;text-align:center' },
-      t('arkDepthNotice', { fee: fmtAmount(exitFee), renew: renewFee > 0 ? fmtAmount(renewFee) + ' sats' : t('arkDepthFree') }),
+      t('arkDepthNotice', { fee: fmtAmount(exitFee), renew: renewFee > 0 ? fmtAmount(renewFee) + ' sats' : t('arkDepthFree'), after: fmtAmount(afterFee) }),
       ' ',
       h('button', { class: 'linklike small', disabled: !!ui.arkBusy, onClick: () => {
         // fire and let the round machinery carry it — rounds can be an hour out

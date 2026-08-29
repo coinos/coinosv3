@@ -1571,6 +1571,22 @@ export function arkFeature(ctx) {
       .sort((a, b) => a.value - b.value)[0] || null;
   }
 
+  // What a unilateral exit will need from Savings, BEFORE it starts: every
+  // chain hop is a zero-fee tx bumped by a ~130 vB CPFP child, plus the
+  // final claim. Priced at today's feerate — the driver reprices per hop.
+  function estimateExitFeeSat(mgr) {
+    const feeRate = Math.max(1, (wallet.feeRates && wallet.feeRates.halfHourFee) || 2);
+    let total = 0;
+    for (const v of mgr.vtxos().filter((x) => x.state === 'spendable')) {
+      try {
+        for (const txi of signedExitTxs(mgr._decoded(v), mgr.serverPub))
+          total += Math.ceil((txi.vsize + 130) * feeRate);
+        total += Math.ceil(150 * feeRate); // the claim tx
+      } catch {}
+    }
+    return total;
+  }
+
   async function doArkExit() {
     ui.arkBusy = 'exit'; ui.arkError = ''; render();
     try {
@@ -1839,18 +1855,29 @@ export function arkFeature(ctx) {
               if (!sats || sats <= 0 || sats > spendable) { ui.arkError = t('enterValidAmtForN', { n: 1 }); render(); return; }
               doArkOffboard(sats >= spendable ? 0 : sats, o.address);
             } }, t('send'))),
-      // This send IS the cooperative exit. The trustless door stays visible —
-      // quiet while things work, promoted to a button the moment the server
-      // fails to cooperate (that being the whole point of a unilateral exit).
-      ui.arkError && ui.arkBusy !== 'offboard'
-        ? h('button', {
-            class: 'btn-block',
-            onClick: () => { ui.arkOffboardSend = null; ui.arkError = ''; ui.arkExitPage = true; render(); },
-          }, t('arkUniOffer'))
-        : h('button', {
-            class: 'linklike small', style: 'align-self:center',
-            onClick: () => { ui.arkOffboardSend = null; ui.arkError = ''; ui.arkExitPage = true; render(); },
-          }, t('arkUniOfferQuiet')));
+      // This send IS the cooperative exit. The trustless fallback only
+      // appears when cooperation actually failed — and it states, before
+      // anything is confirmed, exactly what it does and what the mining
+      // fees from Savings will be.
+      (() => {
+        if (!ui.arkError || ui.arkBusy === 'offboard' || !ark) return null;
+        let feeEst = 0;
+        try { feeEst = estimateExitFeeSat(ark); } catch {}
+        const savings = wallet.spendable || 0;
+        const short = savings < feeEst;
+        return h('div', { class: 'col', style: 'gap:8px;border-top:1px solid var(--border,rgba(128,128,128,.2));padding-top:10px' },
+          h('div', { class: 'small muted' }, t('arkUniFallbackBody', { fee: fmtAmount(feeEst) })),
+          short ? h('div', { class: 'small err' }, t('arkUniFallbackShort', { need: fmtAmount(feeEst), have: fmtAmount(savings) })) : null,
+          h('button', {
+            class: 'btn-block', disabled: !!ui.arkBusy || short,
+            onClick: () => {
+              ui.arkOffboardSend = null; ui.arkError = ''; ui.send = blankSend();
+              doArkExit();
+              ui.tab = 'history'; // the exit lives as a pending record there
+              render();
+            },
+          }, t('arkUniFallbackBtn', { fee: fmtAmount(feeEst) })));
+      })());
   }
 
   async function doArkOffboard(amountSat, destAddress = null) {

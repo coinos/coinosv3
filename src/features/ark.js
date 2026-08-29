@@ -869,9 +869,13 @@ export function arkFeature(ctx) {
   }
 
   const exitStartedTs = (a) => Number((a.id || '').split('-')[1]) || Date.now();
+  // Only link a tx that is KNOWN to be out there: the claim, a confirmed
+  // hop, or the finished chain. Guessing from lastError made the link
+  // flicker in time with the retry loop.
   const exitWatchTxid = (a) => a.claimTxid
-    || ((a.hopsDone > 0 || (a.step !== 'chain') || !a.lastError)
-      ? (a.txids || [])[Math.min(a.hopsDone || 0, (a.txids || []).length - 1)] : null);
+    || (a.step !== 'chain' ? (a.txids || [])[(a.txids || []).length - 1]
+      : a.hopsDone > 0 ? (a.txids || [])[Math.min(a.hopsDone, (a.txids || []).length - 1)]
+      : null);
 
   function arkExitActionItem(a) {
     return h('div', { class: 'item', style: 'cursor:pointer', onClick: () => { ui.arkExitDetail = a.id; render(); } },
@@ -890,9 +894,9 @@ export function arkFeature(ctx) {
       : a.step === 'timelock' ? Math.max(0, a.claimableAt - (a.tipSeen || 0)) + 1 : 1;
     const mins = blocks * 10;
     const eta = getNetwork() === 'regtest' ? t('arkExitSoon')
-      : mins >= 2880 ? `≈ ${Math.round(mins / 1440)} d`
-      : mins >= 120 ? `≈ ${Math.round(mins / 60)} h`
-      : `≈ ${mins} min`;
+      : mins >= 2880 ? `${Math.round(mins / 1440)} days`
+      : mins >= 120 ? `${Math.round(mins / 60)} hours`
+      : `${mins} minutes`;
     const watch = exitWatchTxid(a);
     const url = watch ? wallet.api.explorerTx(watch) : null;
     const cancellable = a.actionable && !(a.hopsDone > 0) && a.step === 'chain';
@@ -2177,15 +2181,15 @@ export function arkFeature(ctx) {
         : 1;
     const mins = Math.max(...acts.map(blocksFor)) * 10;
     const eta = getNetwork() === 'regtest' ? t('arkExitSoon')
-      : mins >= 2880 ? `≈ ${Math.round(mins / 1440)} d`
-      : mins >= 120 ? `≈ ${Math.round(mins / 60)} h`
-      : `≈ ${mins} min`;
+      : mins >= 2880 ? `${Math.round(mins / 1440)} days`
+      : mins >= 120 ? `${Math.round(mins / 60)} hours`
+      : `${mins} minutes`;
     // The most advanced tx that's actually out there — the one worth watching.
     // A chain hop that errored before broadcast has nothing to link yet.
     let watch = null, watchScore = -1;
     for (const a of acts) {
-      const score = a.step === 'claiming' ? 3 : a.step === 'timelock' ? 2 : (a.hopsDone > 0 || !a.lastError) ? 1 : 0;
-      const txid = a.claimTxid || (a.txids || [])[Math.min(a.hopsDone || 0, (a.txids || []).length - 1)];
+      const score = a.step === 'claiming' ? 3 : a.step === 'timelock' ? 2 : a.hopsDone > 0 ? 1 : 0;
+      const txid = exitWatchTxid(a);
       if (score > 0 && txid && score > watchScore) { watch = txid; watchScore = score; }
     }
     const err = acts.find((a) => a.lastError && a.actionable);

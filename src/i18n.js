@@ -201,7 +201,7 @@ const STR = {
     topUpFromSavings: 'Top up from Savings',
     arkUniFallbackBody: 'The server didn’t cooperate, but your money can still move without it: your whole Spending balance exits to Savings on-chain. It takes about a day, and roughly {fee} sats of mining fees will be paid from Savings. Funds land in Savings — send them on from there once it completes.',
     arkUniFallbackShort: 'Savings holds {have} sats — about {need} sats are needed for the mining fees. Top up Savings first.',
-    arkUniFallbackBtn: 'Exit to Savings (≈ {fee} sats in fees)',
+    arkUniFallbackBtn: 'Exit to Savings ({fee} sats in fees)',
     msgPushOffer: 'Get notified when you receive payments and messages, even with coinos closed.',
     msgPushEnable: 'Enable notifications',
     msgPushOn: 'Notifications on',

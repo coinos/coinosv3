@@ -335,7 +335,7 @@ async function brandSvg() {
 function bootShell(logo, staging) {
   const badge = staging
     ? '<span class="staging-badge">staging</span>'
-    : '<span class="beta-badge">beta</span>';
+    : '<span class="beta-badge">v3 beta</span>';
   return `<div class="col" style="gap:16px"><div class="row between"><div class="brand ${staging ? 'staging' : 'beta'}">${badge}<div class="logo-full" aria-label="coinos" role="img">${logo}</div></div></div><div class="card col" id="boot-shell" style="gap:12px;display:none"><div class="row gap6" style="align-items:center"><div class="chat-avatar profile-avatar fallback loading"></div><div class="chat-title" id="boot-shell-name"></div></div></div></div>`;
 }
 const BOOT_SHELL_SCRIPT = `<script>try{var m=location.pathname.match(/^\\/([A-Za-z0-9._-]{1,64})\\/?$/);if(m){document.getElementById('boot-shell').style.display='';document.getElementById('boot-shell-name').textContent=decodeURIComponent(m[1]);}}catch(e){}</script>`;

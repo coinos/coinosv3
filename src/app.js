@@ -3164,6 +3164,12 @@ function setAccountSel(a, dir) {
   _accDir = dir || (a === 'savings' ? 'left' : 'right');
   ui.account = a;
   try { localStorage.setItem(ACCOUNT_KEY, a); } catch {}
+  // A payment's detail page belongs to the account it was opened from —
+  // switching accounts closes it and lands on Receive.
+  if (ui.txDetail || ui.arkMoveDetail || ui.arkExitDetail || ui.giftDetail) {
+    ui.txDetail = null; ui.arkMoveDetail = null; ui.arkExitDetail = null; ui.giftDetail = null;
+    ui.tab = 'receive';
+  }
   render();
 }
 

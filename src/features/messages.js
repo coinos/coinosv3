@@ -2007,15 +2007,33 @@ export function messagesFeature(ctx) {
       }, ui.msgReconnecting ? h('span', { class: 'spinner sm' }) : t('msgReconnect')));
   }
 
+  // Enter sends; Shift+Enter (the textarea's native edit) and Ctrl+J insert
+  // a newline. Height follows the text as it's typed — imperatively, since
+  // typing doesn't re-render — with rows as the re-render fallback.
+  const growComposer = (el) => {
+    el.style.height = 'auto';
+    el.style.height = Math.min(el.scrollHeight, 120) + 'px';
+  };
   const composer = (placeholder, onSend, onType, draftKey) =>
     h('div', { class: 'col', style: 'gap:6px' },
       signerNotice(),
     h('div', { class: 'chat-compose' },
-      h('input', {
-        class: 'grow', type: 'text', id: 'msg-draft', placeholder,
+      h('textarea', {
+        class: 'grow', id: 'msg-draft', placeholder, rows: String(Math.min(5, draftFor(draftKey).split('\n').length)),
         value: draftFor(draftKey), maxlength: '2000',
-        onInput: (e) => { setDraft(draftKey, e.target.value); if (onType && e.target.value) onType(); },
-        onKeydown: (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onSend(); } },
+        onInput: (e) => { setDraft(draftKey, e.target.value); growComposer(e.target); if (onType && e.target.value) onType(); },
+        onKeydown: (e) => {
+          if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onSend(); return; }
+          if (e.ctrlKey && (e.key === 'j' || e.key === 'J')) {
+            e.preventDefault();
+            const el = e.target;
+            const { selectionStart: s0, selectionEnd: s1, value } = el;
+            el.value = value.slice(0, s0) + '\n' + value.slice(s1);
+            el.selectionStart = el.selectionEnd = s0 + 1;
+            setDraft(draftKey, el.value);
+            growComposer(el);
+          }
+        },
         // Focus summons the keyboard; some browsers resize only after its
         // animation, so re-stick once now and once when it has settled.
         onFocus: () => { stickToBottom(); setTimeout(stickToBottom, 350); },

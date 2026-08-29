@@ -1577,8 +1577,23 @@ export function arkFeature(ctx) {
     const feeRate = Math.max(1, (wallet.feeRates && wallet.feeRates.halfHourFee) || 2);
     const afterFee = Math.ceil(530 * feeRate);
     const depthOf = (v) => { try { return mgr._decoded(v).genesis.length; } catch { return null; } };
-    const expiresOf = (v) => (v.expiryHeight && tip
-      ? new Date(Date.now() + (v.expiryHeight - tip) * 600_000).toLocaleDateString() : '—');
+    // relative and terse — "14d" / "13h" — a date says less than a countdown
+    const expiresOf = (v) => {
+      if (!v.expiryHeight || !tip) return '—';
+      const blocks = v.expiryHeight - tip;
+      if (blocks <= 0) return '0h';
+      return blocks >= 144 ? Math.round(blocks / 144) + 'd' : Math.max(1, Math.round(blocks / 6)) + 'h';
+    };
+    // what pulling THIS coin on-chain alone would cost: every hop's fee
+    // child plus the claim, at today's rate (the whole-balance figure below
+    // is the same sum over all coins)
+    const exitFeeOf = (v) => {
+      try {
+        let f = Math.ceil(150 * feeRate);
+        for (const txi of signedExitTxs(mgr._decoded(v), mgr.serverPub)) f += Math.ceil((txi.vsize + 130) * feeRate);
+        return f;
+      } catch { return null; }
+    };
     // The server prices a renewal by how much lifetime each coin still
     // carries (its ppm bracket) — waiting IS cheaper, and inside the final
     // bracket it's free, where the wallet renews on its own anyway.
@@ -1636,10 +1651,12 @@ export function arkFeature(ctx) {
               render();
             }, t('arkCoinsSelectAll')),
             head(t('arkCoinsColAmount')), head(t('arkCoinsColExpires'), 'text-align:center'),
-            head(t('arkCoinsColDepth'), 'text-align:center'), head(t('arkCoinsColFee'), 'text-align:right')),
+            head(t('arkCoinsColDepth'), 'text-align:center'), head(t('arkCoinsColExitFee'), 'text-align:center'),
+            head(t('arkCoinsColFee'), 'text-align:right')),
           ...spend.map((v) => {
             const d = depthOf(v);
             const f = feeNowOf(v);
+            const xf = exitFeeOf(v);
             return h('div', { class: 'row gap6', style: 'align-items:center' },
               tick(sel.has(v.id), (e) => {
                 e.target.checked ? sel.add(v.id) : sel.delete(v.id);
@@ -1647,7 +1664,8 @@ export function arkFeature(ctx) {
               }),
               cell(fmtAmount(v.amountSat) + ' ' + unitLabel()),
               cell(expiresOf(v), 'text-align:center'),
-              cell(d == null ? '—' : d === 1 ? t('arkCoinsHop') : t('arkCoinsHops', { n: d }), 'text-align:center'),
+              cell(d == null ? '—' : String(d), 'text-align:center'),
+              cell(xf == null ? '—' : fmtAmount(xf), 'text-align:center'),
               cell(f > 0 ? fmtAmount(f) : t('arkDepthFree'), 'text-align:right'));
           })),
         h('p', { class: 'small faint', style: 'margin:4px 0 0' }, t('arkCoinsExpiryNote'))),

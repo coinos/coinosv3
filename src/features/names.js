@@ -12,6 +12,7 @@
 // record falls back to the Lightning-address flow (zaps feature).
 
 import { resolveBip353, parsePaymentName, parseBip21 } from '../bip353.js';
+import { decodeNoffer } from '../noffer.js';
 import { nip98Header } from '../nip98.js';
 import { qrSvg } from '../qr.js';
 import { isArkAddress } from './ark.js';
@@ -88,9 +89,12 @@ export function namesFeature(ctx) {
     return addr ? `bitcoin:?ark=${encodeURIComponent(addr)}` : null;
   }
 
-  async function claim(name, { signer, manager, quietProfile } = {}) {
+  async function claim(name, { signer, manager, quietProfile, noffer } = {}) {
     const uri = await currentUri();
     if (!uri) throw new Error(t('namesNeedArk'));
+    // Delivery noffer: undefined keeps whatever the record carries (here or
+    // registrar-side), '' clears it, a string points delivery at that code.
+    const nof = noffer !== undefined ? noffer : (load().noffer || undefined);
     const j = await post('/register', 'POST', {
       name, uri, domain: DOMAIN(),
       // lets the address take Lightning payments from LNURL-only wallets:
@@ -99,9 +103,10 @@ export function namesFeature(ctx) {
       // when the login identity claims its own npub name, it nominates the
       // wallet key to keep the record updated afterwards
       ...(manager ? { manager } : {}),
+      ...(nof !== undefined ? { noffer: nof } : {}),
     }, signer);
     const prev = load().name;
-    save({ name, domain: DOMAIN(), uri, offerPk: hook('nwcOfferPubkey') || null, updated: Date.now() });
+    save({ ...load(), name, domain: DOMAIN(), uri, offerPk: hook('nwcOfferPubkey') || null, noffer: nof || null, updated: Date.now() });
     // Releasing the previous name is for renames the user meant. A CUSTOM
     // name must never be released because a placeholder claim raced in: that
     // exact race once deleted a user's claimed name — adoptIdentity's npub
@@ -137,7 +142,8 @@ export function namesFeature(ctx) {
       if (!pk) return;
       const r = await withTimeout(
         fetch(`${REGISTRAR}/pubkey/${pk}?domain=${encodeURIComponent(DOMAIN())}`).then((x) => x.json()), 12000, 'registrar');
-      if (r && r.name) save({ ...load(), name: r.name, domain: r.domain || DOMAIN(), uri: r.uri });
+      if (r && r.name) save({ ...load(), name: r.name, domain: r.domain || DOMAIN(), uri: r.uri,
+        ...(r.noffer !== undefined ? { noffer: r.noffer } : {}) });
     } catch (e) { console.warn('names: lookup failed —', e.message); }
   }
 
@@ -177,7 +183,8 @@ export function namesFeature(ctx) {
               fetch(`${REGISTRAR}/pubkey/${login.pubkey}?domain=${encodeURIComponent(DOMAIN())}`).then((x) => x.json()),
               8000, 'registrar');
             if (r && r.name && !/^npub1/.test(r.name)) {
-              save({ ...st, name: r.name, domain: r.domain || DOMAIN(), uri: r.uri });
+              save({ ...st, name: r.name, domain: r.domain || DOMAIN(), uri: r.uri,
+                ...(r.noffer !== undefined ? { noffer: r.noffer } : {}) });
               st = load();
             }
           } catch {}
@@ -582,6 +589,52 @@ export function namesFeature(ctx) {
       copyBtn(st.address, t('copy')));
   }
 
+  // Point the address's Lightning delivery at the user's own node: any
+  // CLINK-capable service beside their node (Lightning.Pub etc.) hands out
+  // its own noffer; registered here, the registrar asks THAT service for
+  // invoices, so payments land on their node and never touch this wallet.
+  async function setDeliveryNoffer(raw) {
+    const st = load();
+    if (!st.name) { ui.namesNofferError = t('namesNeedArk'); render(); return; }
+    ui.namesNofferBusy = true; ui.namesNofferError = null; render();
+    try {
+      if (raw) {
+        const d = decodeNoffer(raw);
+        if (!d.relay) throw new Error(t('namesOwnNodeNoRelay'));
+      }
+      await claim(st.name, { noffer: raw || '' });
+      ui.namesNofferInput = '';
+      toast(raw ? t('namesOwnNodeSet') : t('namesOwnNodeCleared'));
+    } catch (e) { ui.namesNofferError = e.message; }
+    ui.namesNofferBusy = false; render();
+  }
+
+  function ownNodeSection() {
+    const st = load();
+    if (!st.name) return null;
+    return h('div', { class: 'col', style: 'gap:8px;width:100%;margin-top:6px' },
+      h('strong', { class: 'small' }, t('namesOwnNode')),
+      st.noffer
+        ? h('div', { class: 'col', style: 'gap:8px' },
+            h('div', { class: 'small muted' }, t('namesOwnNodeActive')),
+            h('div', { class: 'addr-box break', style: 'font-size:10px' }, st.noffer),
+            h('button', { class: 'btn-ghost btn-sm', disabled: !!ui.namesNofferBusy,
+              onClick: () => setDeliveryNoffer('') },
+              ui.namesNofferBusy ? h('span', { class: 'spinner sm' }) : t('namesOwnNodeClear')))
+        : h('div', { class: 'col', style: 'gap:8px' },
+            h('div', { class: 'small muted' }, t('namesOwnNodeHow')),
+            h('div', { class: 'row gap6' },
+              h('input', {
+                type: 'text', class: 'grow mono-input', placeholder: 'noffer1…',
+                value: ui.namesNofferInput || '',
+                onInput: (e) => { ui.namesNofferInput = e.target.value; },
+              }),
+              h('button', { class: 'btn-sm', disabled: !!ui.namesNofferBusy,
+                onClick: () => setDeliveryNoffer((ui.namesNofferInput || '').trim()) },
+                ui.namesNofferBusy ? h('span', { class: 'spinner sm' }) : t('save')))),
+      ui.namesNofferError ? h('div', { class: 'notice err small' }, ui.namesNofferError) : null);
+  }
+
   function clinkPane() {
     const code = hook('nwcOfferString');
     if (!code) return h('div', { class: 'notice err small', style: 'width:100%' }, t('namesNeedArk'));
@@ -589,7 +642,8 @@ export function namesFeature(ctx) {
       h('div', { html: qrSvg(code) }),
       h('div', { class: 'addr-box break', style: 'width:100%;font-size:10px' }, code),
       copyBtn(code, t('copy')),
-      h('p', { class: 'small muted', style: 'margin:0' }, t('namesZapCodeHow')));
+      h('p', { class: 'small muted', style: 'margin:0' }, t('namesZapCodeHow')),
+      ownNodeSection());
   }
 
   // ---- more options -------------------------------------------------------
@@ -677,7 +731,7 @@ export function namesFeature(ctx) {
     namesSeed(rec) {
       if (!rec || !rec.name) return null;
       const st = load();
-      if (!st.name) save({ name: rec.name, domain: rec.domain || DOMAIN(), uri: rec.uri });
+      if (!st.name) save({ name: rec.name, domain: rec.domain || DOMAIN(), uri: rec.uri, noffer: rec.noffer ?? null });
       return true;
     },
     // 'pending' while the restore/claim pass is still running — the wallet

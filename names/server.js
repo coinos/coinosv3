@@ -28,6 +28,8 @@ import { mnemonicToSeedSync } from '@scure/bip39';
 import { lnBackend } from '../bridge/ln.js';
 import { ArkManager } from '../src/ark/manager.js';
 import { decodeAddress } from '../src/ark/proto.js';
+import { decodeNoffer } from '../src/noffer.js';
+import { decodeBolt11 } from '../src/ark/lightning.js';
 
 const CFG = JSON.parse(readFileSync(process.env.NAMES_CONFIG
   || join(import.meta.dir, 'config.json'), 'utf8'));
@@ -179,21 +181,24 @@ const lnurlMeta = (address) => JSON.stringify([
   ['text/identifier', address],
 ]);
 
-// Ask the recipient's own wallet for an invoice (CLINK offer, kind 21001).
-function requestInvoiceFromWallet(offerPk, { amountSat, description, zap }) {
+// Ask the recipient's own CLINK service for an invoice (kind 21001).
+// dest: { pubkey, relays, offerId } — a hal wallet listening on our relays,
+// or an external service (Lightning.Pub beside the user's own node) on the
+// relay its noffer names.
+function requestInvoiceFromWallet(dest, { amountSat, description, zap }) {
   return new Promise((resolve) => {
     let done = false;
     const finish = (v) => { if (!done) { done = true; try { sub.close(); } catch {} resolve(v); } };
-    const key = nip44.getConversationKey(SERVICE_SK, offerPk);
-    const payload = { offer: 'zap_default', amount_sats: amountSat };
+    const key = nip44.getConversationKey(SERVICE_SK, dest.pubkey);
+    const payload = { offer: dest.offerId, amount_sats: amountSat };
     if (description) payload.description = description.slice(0, 100);
     if (zap) payload.zap = zap;
     const req = finalizeEvent({
       kind: OFFER_KIND, created_at: Math.floor(Date.now() / 1000),
-      tags: [['p', offerPk], ['clink_version', '1']],
+      tags: [['p', dest.pubkey], ['clink_version', '1']],
       content: nip44.encrypt(JSON.stringify(payload), key),
     }, SERVICE_SK);
-    const sub = pool.subscribeMany(LNURL_RELAYS,
+    const sub = pool.subscribeMany(dest.relays,
       { kinds: [OFFER_KIND], '#e': [req.id], since: Math.floor(Date.now() / 1000) - 5 },
       {
         onevent: (ev) => {
@@ -203,9 +208,26 @@ function requestInvoiceFromWallet(offerPk, { amountSat, description, zap }) {
           } catch {}
         },
       });
-    Promise.allSettled(pool.publish(LNURL_RELAYS, req)).catch(() => {});
-    setTimeout(() => finish(null), 6000); // wallets that aren't listening
+    Promise.allSettled(pool.publish(dest.relays, req)).catch(() => {});
+    setTimeout(() => finish(null), 6000); // services that aren't listening
   });
+}
+
+// Where CLINK invoice requests for this name go. An external noffer the
+// owner registered wins over the hal wallet's own offer key — pointing the
+// name at their node is an explicit choice.
+const clinkDest = (rec) => (rec?.noffer
+  ? { pubkey: rec.noffer.pubkey, relays: [...new Set([rec.noffer.relay, ...LNURL_RELAYS])], offerId: rec.noffer.offerId || '' }
+  : rec?.offerPk ? { pubkey: rec.offerPk, relays: LNURL_RELAYS, offerId: 'zap_default' } : null);
+
+// An invoice a CLINK service hands back is only usable if it demands exactly
+// the sats owed on the right network — paying (or relaying) one on trust
+// would let a hostile service name any amount.
+function usableInvoice(pr, sat, network = null) {
+  try {
+    const dec = decodeBolt11(pr);
+    return dec.amountMsat === BigInt(sat) * 1000n && (!network || dec.network === network);
+  } catch { return false; }
 }
 
 const ln = CFG.ln ? lnBackend(CFG.ln) : null;
@@ -285,21 +307,31 @@ const arkParamOf = (uri) => {
 async function forward(name, sat) {
   const rec = state.names[name];
   const dest = rec && arkParamOf(rec.uri);
-  if (!dest && !rec?.offerPk) { log(`forward: nowhere to send ${sat} sat for ${name}`); return; }
+  const clink = clinkDest(rec);
+  if (!dest && !clink) { log(`forward: nowhere to send ${sat} sat for ${name}`); return; }
 
-  if (dest && fwd && fwd.balance().spendableSat >= sat) {
+  const viaFloat = async () => {
+    if (!dest || !fwd || fwd.balance().spendableSat < sat) return false;
     await fwd.send(dest, sat);
     log(`forwarded ${sat} sat to ${name}`);
-    return;
-  }
-
-  if (rec?.offerPk && ln) {
-    const pr = await requestInvoiceFromWallet(rec.offerPk, { amountSat: sat, description: `${name} payment` });
-    if (pr) {
-      await ln.pay(pr, { maxfeeSat: Math.max(2, Math.ceil(sat * 0.005)) });
-      log(`delivered ${sat} sat to ${name} over lightning (no float needed)`);
-      return;
+    return true;
+  };
+  const viaClink = async () => {
+    if (!clink || !ln) return false;
+    const pr = await requestInvoiceFromWallet(clink, { amountSat: sat, description: `${name} payment` });
+    if (!pr) return false;
+    if (!usableInvoice(pr, sat, 'mainnet')) {
+      log(`forward: ${name}'s service returned an unusable invoice — refusing to pay it`);
+      return false;
     }
+    await ln.pay(pr, { maxfeeSat: Math.max(2, Math.ceil(sat * 0.005)) });
+    log(`delivered ${sat} sat to ${name} over lightning (no float needed)`);
+    return true;
+  };
+  // A name pointed at its owner's own node delivers there first; the float
+  // is the fallback. Everyone else gets the instant free arkoor send first.
+  for (const step of rec?.noffer ? [viaClink, viaFloat] : [viaFloat, viaClink]) {
+    if (await step()) return;
   }
   throw new Error(fwd && dest ? 'insufficient float and the wallet is not listening' : 'no delivery route');
 }
@@ -753,7 +785,7 @@ Bun.serve({
     if (m && req.method === 'GET') {
       const domain = (url.searchParams.get('domain') || DOMAIN).toLowerCase();
       const rec = state.names[`${m[1]}@${domain}`];
-      if (rec) return json({ name: m[1], domain, taken: true, pubkey: rec.pubkey, manager: rec.manager || null, uri: rec.uri });
+      if (rec) return json({ name: m[1], domain, taken: true, pubkey: rec.pubkey, manager: rec.manager || null, uri: rec.uri, noffer: rec.noffer?.raw || null });
       const reserved = RESERVED.has(m[1]) || !NAME_RE.test(m[1]) || await takenByCoinosUser(domain, m[1]);
       return json({ name: m[1], domain, taken: reserved, reserved });
     }
@@ -777,7 +809,7 @@ Bun.serve({
       if (!mine.length) return json({});
       const [key, r] = mine[0];
       const [name, domain] = key.split('@');
-      return json({ name, domain, uri: r.uri });
+      return json({ name, domain, uri: r.uri, noffer: r.noffer?.raw || null });
     }
 
     // --- hats ------------------------------------------------------------
@@ -917,10 +949,16 @@ Bun.serve({
       const zap = url.searchParams.get('nostr') || null;
       const comment = (url.searchParams.get('comment') || '').slice(0, 200);
 
-      // 1. the recipient's own wallet, if it is listening
-      if (rec.offerPk) {
-        const pr = await requestInvoiceFromWallet(rec.offerPk, { amountSat: sat, description: comment, zap });
-        if (pr) { log(`lnurl ${key}: recipient minted ${sat} sat`); return json({ pr, routes: [] }); }
+      // 1. the recipient's own wallet or node service, if it is listening
+      const clink = clinkDest(rec);
+      if (clink) {
+        const pr = await requestInvoiceFromWallet(clink, { amountSat: sat, description: comment, zap });
+        // staging wallets mint signet invoices — only mainnet is checked
+        if (pr && usableInvoice(pr, sat, domain === 'staging.coinos.io' ? null : 'mainnet')) {
+          log(`lnurl ${key}: recipient minted ${sat} sat`);
+          return json({ pr, routes: [] });
+        }
+        if (pr) log(`lnurl ${key}: recipient returned an unusable invoice — minting instead`);
       }
       // Staging names are mutinynet wallets: only their own wallet can mint a
       // right-network invoice. Minting on our mainnet node would take real
@@ -1056,6 +1094,20 @@ Bun.serve({
         }
       }
       if (/[?&]lno=/.test(claim.uri)) return json({ error: 'lno is added by the registrar' }, 400);
+      // Delivery noffer: absent = keep, '' = clear, a code = point Lightning
+      // delivery at the owner's own CLINK service (their node's invoice
+      // minter). Decoded here so a typo can't become a delivery black hole.
+      let noffer = existing?.noffer;
+      if (claim.noffer !== undefined) {
+        if (!claim.noffer) noffer = undefined;
+        else {
+          try {
+            const d = decodeNoffer(String(claim.noffer));
+            if (!/^wss?:\/\/./.test(d.relay || '')) throw new Error('offer code names no relay');
+            noffer = { pubkey: d.pubkey, relay: d.relay, offerId: d.offerId || '', raw: String(claim.noffer) };
+          } catch (e) { return json({ error: 'bad noffer: ' + e.message }, 400); }
+        }
+      }
       // A corrupt ark address recorded here is a payment black hole: forwards
       // fail forever while the sats sit on the node (goyslop's 190k sat sat
       // behind an invalid checksum). Refuse it at the door.
@@ -1080,6 +1132,8 @@ Bun.serve({
         uri: published, recordId, updated: Date.now(), domain,
         // the wallet's CLINK offer key, so LNURL can ask it for invoices
         offerPk: (claim.offerPk && /^[0-9a-f]{64}$/.test(claim.offerPk)) ? claim.offerPk : existing?.offerPk,
+        // the owner's own CLINK service, when they pointed delivery at it
+        ...(noffer ? { noffer } : {}),
         offerId: offer?.offerId, bolt12: offer?.bolt12,
       };
       persist();

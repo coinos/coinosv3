@@ -14,6 +14,9 @@
 import { t } from '../i18n.js';
 import { npubOf } from '../nostr.js';
 import { parseZapTarget, zapTargetFromProfile, fetchPayParams, buildZapRequest, requestInvoice } from '../lnurl.js';
+import { decodeNoffer } from '../noffer.js';
+import { requestOfferInvoice } from '../clink.js';
+import { maybeBolt11 } from '../ark/lightning.js';
 
 export function zapsFeature(ctx) {
   const { h, ui, render, wallet, blankSend, parseAmount, getUnit, unitTag, hook, toast, fmtAmount, unitLabel } = ctx;
@@ -22,6 +25,14 @@ export function zapsFeature(ctx) {
   const canPay = () => !wallet.watchOnly && !!hook('canLnPay');
 
   const shortNpub = (npub) => (npub && npub.length > 16 ? npub.slice(0, 12) + '…' + npub.slice(-6) : npub);
+
+  // A pasted CLINK offer code (`noffer1…`) — decoded, or null. The bech32
+  // checksum means a partial paste never matches, so auto-advance is safe.
+  function maybeNoffer(text) {
+    const s = String(text || '').trim().replace(/^lightning:/i, '').toLowerCase();
+    if (!/^noffer1/.test(s)) return null;
+    try { return { ...decodeNoffer(s), raw: s }; } catch { return null; }
+  }
 
   // Kick off resolution of a parsed target. `display` is what we show as the
   // recipient until a profile name arrives.
@@ -35,6 +46,30 @@ export function zapsFeature(ctx) {
 
   async function resolve(z) {
     let target = z.target;
+    // A CLINK offer needs no HTTP at all: the code itself says who to ask.
+    if (target.kind === 'noffer') {
+      const n = target.noffer;
+      // pricing 1 = the service prices the payment itself: ask for an invoice
+      // with no amount and let the pay review screen show what came back —
+      // the user still approves the actual sats before anything is locked.
+      if (n.priceType === 1) {
+        z.status = 'invoicing'; render();
+        const invoice = await requestOfferInvoice(n, {});
+        if (ui.zap !== z) return;
+        const dec = maybeBolt11(invoice);
+        if (!dec || !dec.amountSat) throw new Error(t('clinkBadInvoice'));
+        ui.zap = null;
+        hook('startLnPay', invoice, { name: z.name, address: z.address, pk: null, comment: '', isZap: false });
+        render();
+        return;
+      }
+      const fixedSat = n.priceType === 0 && n.priceSats ? n.priceSats : null;
+      if (fixedSat) z.amount = getUnit() === 'sats' ? String(fixedSat) : (fixedSat / 1e8).toFixed(8);
+      z.params = { minSendable: 1000, maxSendable: 21e15, commentAllowed: 100, allowsNostr: false, fixedSat };
+      z.status = 'ready';
+      render();
+      return;
+    }
     // An npub needs a profile lookup to find its lud16/lud06.
     if (target.kind === 'npub') {
       const profile = await wallet.nostrProfile(target.pk);
@@ -85,7 +120,7 @@ export function zapsFeature(ctx) {
   async function confirm() {
     const z = ui.zap;
     if (!z || z.status !== 'ready') return;
-    const sats = parseAmount(z.amount, getUnit());
+    const sats = z.params.fixedSat || parseAmount(z.amount, getUnit());
     const p = z.params;
     if (!sats || sats <= 0) { z.error = t('enterValidAmtForN', { n: 1 }); return render(); }
     const msat = sats * 1000;
@@ -95,6 +130,20 @@ export function zapsFeature(ctx) {
       return render();
     }
     z.error = ''; z.status = 'invoicing'; render();
+    if (z.target.kind === 'noffer') {
+      try {
+        const invoice = await requestOfferInvoice(z.target.noffer, { amountSat: sats, description: z.comment });
+        // Never pay on trust: the invoice must say exactly the sats agreed.
+        const dec = maybeBolt11(invoice);
+        if (!dec || dec.amountMsat !== BigInt(sats) * 1000n) throw new Error(t('clinkBadInvoice'));
+        ui.zap = null;
+        hook('startLnPay', invoice, { name: z.name, address: z.address, pk: null, comment: z.comment, isZap: false });
+        render();
+      } catch (e) {
+        z.status = 'ready'; z.error = e.message; render();
+      }
+      return;
+    }
     try {
       // Attribute a real zap only when the server supports it and we know the
       // recipient's nostr key; otherwise fall back to a plain LNURL-pay.
@@ -171,11 +220,14 @@ export function zapsFeature(ctx) {
       h('div', { class: 'col gap6' },
         h('div', { class: 'input-group' },
           h('input', { type: 'number', min: '0', inputmode: 'decimal', placeholder: t('lnPayAmount'), value: z.amount,
+            disabled: !!p.fixedSat,
             onInput: (e) => { z.amount = e.target.value; render(); } }),
           h('div', { style: 'display:flex;align-items:center' }, unitTag())),
         broke
           ? h('div', { class: 'notice info' }, t('zapNoBalance'))
-          : h('div', { class: 'small faint' }, `Min ${min.toLocaleString()} · max ${max.toLocaleString()} sats`),
+          : p.fixedSat
+            ? h('div', { class: 'small faint' }, t('clinkFixedAmount'))
+            : h('div', { class: 'small faint' }, `Min ${min.toLocaleString()} · max ${max.toLocaleString()} sats`),
         commentOk
           ? h('input', { type: 'text', class: 'mono-input', placeholder: t('arkZapCommentPh'), value: z.comment,
               maxlength: p.allowsNostr ? '280' : String(p.commentAllowed || 280),
@@ -195,6 +247,12 @@ export function zapsFeature(ctx) {
     // A lightning address / lnurl (always), or an npub that Ark didn't claim.
     matchSendText(text, typed) {
       if (!canPay() || !ui.send || ui.send.recipients.length !== 1) return false;
+      const nof = maybeNoffer(text);
+      if (nof) {
+        const short = nof.raw.slice(0, 12) + '…' + nof.raw.slice(-6);
+        begin({ kind: 'noffer', noffer: nof, address: short }, short);
+        return true;
+      }
       const target = parseZapTarget(text);
       if (!target) return false;
       // npub with no nostr seam to look up a profile → can't resolve here.

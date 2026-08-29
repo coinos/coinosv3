@@ -1526,21 +1526,69 @@ export function arkFeature(ctx) {
     for (const v of spend) { try { depth = Math.max(depth, ark._decoded(v).genesis.length); } catch {} }
     if (depth < EXIT_DEPTH_ADVISORY) return null;
     let exitFee = 0; try { exitFee = estimateExitFeeSat(ark); } catch {}
-    let renewFee = 0; try { renewFee = ark.refreshFee(spend, ark._tipH || 0); } catch {}
     // after a renewal everything is ONE coin, ONE hop: parent + its fee
     // child + the claim, ~530 vB all in at today's rate
     const feeRate = Math.max(1, (wallet.feeRates && wallet.feeRates.halfHourFee) || 2);
     const afterFee = Math.ceil(530 * feeRate);
     if (afterFee >= exitFee) return null; // renewing wouldn't help — stay quiet
     return h('div', { class: 'small muted', style: 'margin:10px 0 0;text-align:center' },
-      t('arkDepthNotice', { fee: fmtAmount(exitFee), renew: renewFee > 0 ? fmtAmount(renewFee) + ' sats' : t('arkDepthFree'), after: fmtAmount(afterFee) }),
+      t('arkDepthNotice', { fee: fmtAmount(exitFee) }),
       ' ',
-      h('button', { class: 'linklike small', disabled: !!ui.arkBusy, onClick: () => {
-        // fire and let the round machinery carry it — rounds can be an hour out
-        ark.refresh(spend.map((v) => v.id)).catch((e) => toast(e.message));
-        toast(t('arkDepthRenewed'));
-        render();
-      } }, t('arkDepthBtn')));
+      h('button', { class: 'linklike small', onClick: () => { ui.arkCoinsPage = true; render(); } },
+        t('arkDepthBtn')));
+  }
+
+  // The screen behind that notice's Manage link: every spendable coin with
+  // its expiry and arkoor depth, what an uncooperative exit costs today, and
+  // what a renewal costs and buys.
+  function arkCoinsPage() {
+    const mgr = ark;
+    const spend = ((mgr && mgr.state && mgr.state.vtxos) || []).filter((v) => v.state === 'spendable');
+    const tip = (mgr && mgr._tipH) || 0;
+    const back = () => { ui.arkCoinsPage = null; render(); };
+    if (!spend.length) { ui.arkCoinsPage = null; return null; } // nothing left to manage
+    const totalSat = spend.reduce((n, v) => n + v.amountSat, 0);
+    let exitFee = 0; try { exitFee = estimateExitFeeSat(mgr); } catch {}
+    let renewFee = 0; try { renewFee = mgr.refreshFee(spend, tip); } catch {}
+    const feeRate = Math.max(1, (wallet.feeRates && wallet.feeRates.halfHourFee) || 2);
+    const afterFee = Math.ceil(530 * feeRate);
+    const depthOf = (v) => { try { return mgr._decoded(v).genesis.length; } catch { return null; } };
+    const expiresOf = (v) => (v.expiryHeight && tip
+      ? new Date(Date.now() + (v.expiryHeight - tip) * 600_000).toLocaleDateString() : '—');
+    const renew = () => {
+      // fire and let the round machinery carry it — rounds can be an hour out
+      mgr.refresh(spend.map((v) => v.id)).catch((e) => toast(e.message));
+      toast(t('arkDepthRenewed'));
+      back();
+    };
+    const cell = (s, extra = '') => h('span', { class: 'small', style: 'flex:1;' + extra }, s);
+    const head = (s, extra = '') => h('span', { class: 'small faint', style: 'flex:1;' + extra }, s);
+    return h('div', { class: 'col', style: 'gap:16px' },
+      h('div', { class: 'card col', style: 'gap:8px' },
+        h('h3', { style: 'margin:0' }, t('arkCoinsTitle')),
+        h('p', { class: 'small muted', style: 'margin:0' },
+          t('arkCoinsIntro', { n: spend.length, total: fmtAmount(totalSat) + ' ' + unitLabel() })),
+        h('div', { class: 'col', style: 'gap:4px;margin-top:4px' },
+          h('div', { class: 'row gap6' },
+            head(t('arkCoinsColAmount')), head(t('arkCoinsColExpires'), 'text-align:center'), head(t('arkCoinsColDepth'), 'text-align:right')),
+          ...spend.map((v) => {
+            const d = depthOf(v);
+            return h('div', { class: 'row gap6' },
+              cell(fmtAmount(v.amountSat) + ' ' + unitLabel()),
+              cell(expiresOf(v), 'text-align:center'),
+              cell(d == null ? '—' : d === 1 ? t('arkCoinsHop') : t('arkCoinsHops', { n: d }), 'text-align:right'));
+          })),
+        h('p', { class: 'small faint', style: 'margin:4px 0 0' }, t('arkCoinsExpiryNote'))),
+      h('div', { class: 'card col', style: 'gap:8px' },
+        h('h4', { style: 'margin:0' }, t('arkCoinsExitTitle')),
+        h('p', { class: 'small muted', style: 'margin:0' },
+          t('arkCoinsExitDesc', { fee: fmtAmount(exitFee), after: fmtAmount(afterFee) }))),
+      h('div', { class: 'card col', style: 'gap:8px' },
+        h('h4', { style: 'margin:0' }, t('arkCoinsRenewTitle')),
+        h('p', { class: 'small muted', style: 'margin:0' },
+          t('arkCoinsRenewDesc', { fee: renewFee > 0 ? fmtAmount(renewFee) + ' ' + unitLabel() : t('arkDepthFree') })),
+        h('button', { class: 'btn-primary btn-block', disabled: !!ui.arkBusy, onClick: renew }, t('arkDepthRenewBtn'))),
+      h('button', { class: 'btn-ghost btn-block', onClick: back }, t('back')));
   }
 
   function autoWithdrawCard() {
@@ -2357,7 +2405,7 @@ export function arkFeature(ctx) {
     id: 'ark',
     init() { _autoSelected = false; initArk(); },
     stop() { stopArk(); },
-    screenView() { return ui.arkExitPage ? arkExitPage() : null; },
+    screenView() { return ui.arkCoinsPage ? arkCoinsPage() : ui.arkExitPage ? arkExitPage() : null; },
     receiveTakeover() {
       const offboarded = arkOffboardedScreen();
       if (offboarded) return offboarded;

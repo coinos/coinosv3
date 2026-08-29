@@ -1531,24 +1531,36 @@ export function arkFeature(ctx) {
   // Most users never need to think about this — the card only appears once
   // coins run deep enough for the difference to matter.
   const EXIT_DEPTH_ADVISORY = 4;
+  const depthNoticeEl = (exitFee) =>
+    h('div', { class: 'small muted', style: 'margin:10px 0 0;text-align:center' },
+      t('arkDepthNotice', { fee: fmtAmount(exitFee) }),
+      ' ',
+      h('button', { class: 'linklike small', onClick: () => { ui.arkCoinsPage = true; render(); } },
+        t('arkDepthBtn')));
   function exitDepthNotice() {
-    if (!arkAvailable() || wallet.watchOnly || !ark || !ark.state) return null;
+    if (!arkAvailable() || wallet.watchOnly) return null;
+    // Ark connects lazily after the wallet paints, so the first renders have
+    // no state to price an exit from — the line popping in seconds later
+    // shoved the whole layout down. Paint the last computed answer at once;
+    // the live numbers replace it in place.
+    const cached = wallet.loadFeatureState('arkDepth', null);
+    if (!ark || !ark.state) return cached && cached.show ? depthNoticeEl(cached.exitFee) : null;
+    const remember = (show, exitFee = 0) => {
+      if (!cached || cached.show !== show || cached.exitFee !== exitFee)
+        wallet.saveFeatureState('arkDepth', { show, exitFee });
+    };
     const spend = (ark.state.vtxos || []).filter((v) => v.state === 'spendable');
-    if (!spend.length) return null;
     let depth = 0;
     for (const v of spend) { try { depth = Math.max(depth, ark._decoded(v).genesis.length); } catch {} }
-    if (depth < EXIT_DEPTH_ADVISORY) return null;
+    if (!spend.length || depth < EXIT_DEPTH_ADVISORY) { remember(false); return null; }
     let exitFee = 0; try { exitFee = estimateExitFeeSat(ark); } catch {}
     // after a renewal everything is ONE coin, ONE hop: parent + its fee
     // child + the claim, ~530 vB all in at today's rate
     const feeRate = Math.max(1, (wallet.feeRates && wallet.feeRates.halfHourFee) || 2);
     const afterFee = Math.ceil(530 * feeRate);
-    if (afterFee >= exitFee) return null; // renewing wouldn't help — stay quiet
-    return h('div', { class: 'small muted', style: 'margin:10px 0 0;text-align:center' },
-      t('arkDepthNotice', { fee: fmtAmount(exitFee) }),
-      ' ',
-      h('button', { class: 'linklike small', onClick: () => { ui.arkCoinsPage = true; render(); } },
-        t('arkDepthBtn')));
+    if (afterFee >= exitFee) { remember(false); return null; } // renewing wouldn't help — stay quiet
+    remember(true, exitFee);
+    return depthNoticeEl(exitFee);
   }
 
   // The screen behind that notice's Manage link: every spendable coin with

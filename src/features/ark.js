@@ -1874,6 +1874,14 @@ export function arkFeature(ctx) {
         if (!ui.arkError || ui.arkBusy === 'offboard' || !ark) return null;
         let feeEst = 0;
         try { feeEst = estimateExitFeeSat(ark); } catch {}
+        const balance = arkBalance()?.spendableSat || 0;
+        // A trustless exit that costs more than it moves isn't an option,
+        // it's a trap — say so, and point at the road that actually fits a
+        // small balance: Lightning carries no mining fees at all.
+        if (feeEst >= balance) {
+          return h('div', { class: 'col', style: 'gap:8px;border-top:1px solid var(--border,rgba(128,128,128,.2));padding-top:10px' },
+            h('div', { class: 'small muted' }, t('arkUniUneconomical', { fee: fmtAmount(feeEst), n: fmtAmount(balance) })));
+        }
         const savings = wallet.spendable || 0;
         const short = savings < feeEst;
         return h('div', { class: 'col', style: 'gap:8px;border-top:1px solid var(--border,rgba(128,128,128,.2));padding-top:10px' },

@@ -1627,7 +1627,7 @@ export class ArkManager {
       }
       for (const v of inputRecs) v.state = 'spent';
       action.step = 'done';
-      this._movement({ type: 'refresh', amountSat: action.outAmountSat, status: 'complete', detail: `${inputRecs.length} in -> ${newVtxos.length} out${action.feeSat ? ` · fee ${action.feeSat} sat` : ''}` });
+      this._movement({ type: 'refresh', amountSat: action.outAmountSat, feeSat: action.feeSat || 0, status: 'complete', detail: `${inputRecs.length} in -> ${newVtxos.length} out${action.feeSat ? ` · fee ${action.feeSat} sat` : ''}` });
       this._save();
     }
   }

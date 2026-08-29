@@ -839,10 +839,23 @@ export function arkFeature(ctx) {
     : null;
 
   function arkHistoryItem(m) {
-    const incoming = !['send', 'offboard', 'exit', 'ln-send'].includes(m.type);
+    const incoming = !['send', 'offboard', 'exit', 'ln-send', 'refresh'].includes(m.type);
     const label = m.type === 'receive' ? t('received') : m.type === 'board' ? t('arkBoarded')
       : m.type === 'ln-send' ? t('arkLnPaidHistory') : m.type === 'ln-receive' ? t('arkLnReceivedHistory')
-      : m.type === 'offboard' ? t('arkOffboarded') : m.type === 'exit' ? t('arkExited') : t('sent');
+      : m.type === 'offboard' ? t('arkOffboarded') : m.type === 'exit' ? t('arkExited')
+      : m.type === 'refresh' ? t('arkRenewedHistory') : t('sent');
+    // a renewal moves nothing anywhere — its history amount is what it COST
+    if (m.type === 'refresh') {
+      return h('div', { class: 'item', style: 'cursor:pointer', onClick: () => { ui.arkMoveDetail = m.id; render(); } },
+        h('div', { class: 'ico' }, '↻'),
+        h('div', { class: 'grow' },
+          h('div', {}, label),
+          h('div', { class: 'small faint' }, timeAgo(m.ts / 1000))),
+        h('div', { style: 'text-align:right' },
+          m.feeSat > 0
+            ? h('div', { class: 'amount-neg' }, '-' + fmtAmount(m.feeSat))
+            : h('div', { class: 'small faint' }, t('arkDepthFree'))));
+    }
     return h(
       'div',
       { class: 'item', style: 'cursor:pointer', onClick: () => { ui.arkMoveDetail = m.id; render(); } },
@@ -924,10 +937,11 @@ export function arkFeature(ctx) {
   }
 
   function arkMoveDetailView(m) {
-    const incoming = !['send', 'offboard', 'exit', 'ln-send'].includes(m.type);
+    const incoming = m.type === 'refresh' ? false : !['send', 'offboard', 'exit', 'ln-send'].includes(m.type);
     const label = m.type === 'receive' ? t('received') : m.type === 'board' ? t('arkBoarded')
       : m.type === 'ln-send' ? t('arkLnPaidHistory') : m.type === 'ln-receive' ? t('arkLnReceivedHistory')
-      : m.type === 'offboard' ? t('arkOffboarded') : m.type === 'exit' ? t('arkExited') : t('sent');
+      : m.type === 'offboard' ? t('arkOffboarded') : m.type === 'exit' ? t('arkExited')
+      : m.type === 'refresh' ? t('arkRenewedHistory') : t('sent');
     const row = (k, v) => h('div', { class: 'row between', style: 'gap:12px' },
       h('span', { class: 'small muted', style: 'flex-shrink:0' }, k), h('span', { class: 'small', style: 'text-align:right;word-break:break-all' }, v));
     const url = m.txid ? wallet.api.explorerTx(m.txid) : null;
@@ -940,8 +954,11 @@ export function arkFeature(ctx) {
         m.type.startsWith('ln-') ? h('span', { style: 'font-size:18px' }, '⚡') : h('span', { html: ARK_ICON(18) }),
         h('h3', { style: 'margin:0' }, label),
         m.status !== 'complete' ? h('span', { class: 'tag pending' }, m.status) : null),
-      h('div', { class: incoming ? 'amount-pos' : 'amount-neg', style: 'font-size:20px' },
-        (incoming ? '+' : '-') + fmtAmount(m.amountSat) + ' ' + unitLabel()),
+      m.type === 'refresh'
+        ? h('div', { class: m.feeSat > 0 ? 'amount-neg' : 'small faint', style: 'font-size:20px' },
+            m.feeSat > 0 ? '-' + fmtAmount(m.feeSat) + ' ' + unitLabel() : t('arkDepthFree'))
+        : h('div', { class: incoming ? 'amount-pos' : 'amount-neg', style: 'font-size:20px' },
+            (incoming ? '+' : '-') + fmtAmount(m.amountSat) + ' ' + unitLabel()),
       row(t('dateLabel'), new Date(m.ts).toLocaleString()),
       (() => {
         const pk = zapNoteFor(m);
@@ -2479,7 +2496,7 @@ export function arkFeature(ctx) {
         .filter((a) => a.type === 'exit' && !['done', 'failed'].includes(a.step))
         .map((a) => ({ time: exitStartedTs(a), render: () => arkExitActionItem(a) }));
       return exits.concat((s.movements || [])
-        .filter((m) => ['receive', 'send', 'board', 'offboard', 'exit', 'ln-send', 'ln-receive'].includes(m.type) && m.status === 'complete')
+        .filter((m) => ['receive', 'send', 'board', 'offboard', 'exit', 'ln-send', 'ln-receive', 'refresh'].includes(m.type) && m.status === 'complete')
         .map((m) => ({ time: m.ts, render: () => arkHistoryItem(m) })));
     },
     historyDetail() {

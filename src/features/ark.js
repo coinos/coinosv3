@@ -1472,7 +1472,7 @@ export function arkFeature(ctx) {
   // Most users never need to think about this — the card only appears once
   // coins run deep enough for the difference to matter.
   const EXIT_DEPTH_ADVISORY = 4;
-  function exitDepthCard() {
+  function exitDepthNotice() {
     if (!arkAvailable() || wallet.watchOnly || !ark || !ark.state) return null;
     const spend = (ark.state.vtxos || []).filter((v) => v.state === 'spendable');
     if (!spend.length) return null;
@@ -1481,11 +1481,10 @@ export function arkFeature(ctx) {
     if (depth < EXIT_DEPTH_ADVISORY) return null;
     let exitFee = 0; try { exitFee = estimateExitFeeSat(ark); } catch {}
     let renewFee = 0; try { renewFee = ark.refreshFee(spend, ark._tipH || 0); } catch {}
-    return h('div', { class: 'card col', style: 'gap:8px' },
-      h('h3', {}, t('arkDepthTitle')),
-      h('p', { class: 'small muted', style: 'margin:0' },
-        t('arkDepthBody', { d: String(depth), fee: fmtAmount(exitFee), renew: renewFee > 0 ? fmtAmount(renewFee) + ' sats' : t('arkDepthFree') })),
-      h('button', { class: 'btn-block', disabled: !!ui.arkBusy, onClick: () => {
+    return h('div', { class: 'small muted', style: 'margin:10px 0 0;text-align:center' },
+      t('arkDepthNotice', { fee: fmtAmount(exitFee), renew: renewFee > 0 ? fmtAmount(renewFee) + ' sats' : t('arkDepthFree') }),
+      ' ',
+      h('button', { class: 'linklike small', disabled: !!ui.arkBusy, onClick: () => {
         // fire and let the round machinery carry it — rounds can be an hour out
         ark.refresh(spend.map((v) => v.id)).catch((e) => toast(e.message));
         toast(t('arkDepthRenewed'));
@@ -2352,7 +2351,7 @@ export function arkFeature(ctx) {
     // swaps feature): the ASP pays invoices natively over ark.
     canLnPay() { return arkAvailable() && !wallet.watchOnly && !!(ark && ark.info); },
     lnSpendableSat() { const b = arkBalance(); return b ? b.spendableSat : 0; },
-    settingsCards() { return [autoWithdrawCard(), exitDepthCard()]; },
+    settingsCards() { return [autoWithdrawCard()]; },
     // The onboarding wizard's top-up step borrows the board form wholesale.
     arkBoardForm() {
       if (!arkAvailable() || wallet.watchOnly) return null;
@@ -2535,6 +2534,8 @@ export function arkFeature(ctx) {
           amount: fmtAmount(arkRenewWarn.sat) + ' ' + unitLabel(),
           date: new Date(arkRenewWarn.deadlineMs).toLocaleDateString(),
         })));
+      const depthNotice = exitDepthNotice();
+      if (depthNotice) out.push(depthNotice);
       // An upcoming renewal that will COST something — stated before it
       // happens. Ark is new to nearly everyone, and a fee nobody announced
       // reads as money gone missing (it did, once). Free renewals — the

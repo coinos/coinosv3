@@ -321,13 +321,19 @@ export class ArkManager {
     if (m.kind !== 'arkoor') return changed;
     const ourKeys = [hex.encode(this._key(0).pubkey)];
     const tip = await this._tipMemo();
+    // Expiry-based dating is for the FIRST catch-up only, where old receipts
+    // deserve old dates. A delivery landing on a live wallet happened NOW —
+    // the estimate mis-dated a fresh receive by a month when the server's
+    // vtxo lifetime changed under it (the math assumes every coin began with
+    // the full current lifetime).
+    const live = !this.state.baselinePending;
     for (const v of m.vtxos) {
       if (this._vtxo(v.id)) {
         // The vtxo beat the message here (a mirror or snapshot merge carried
         // it) — the money is present but the story is missing. Backfill the
         // receive movement so history matches the balance.
         if (!this.state.movements.some((x) => x.vtxoId === v.id)) {
-          this._movement({ type: 'receive', amountSat: v.amountSat, status: 'complete', vtxoId: v.id, ts: this._estimateReceiveTs(this._decoded(this._vtxo(v.id)), tip) });
+          this._movement({ type: 'receive', amountSat: v.amountSat, status: 'complete', vtxoId: v.id, ts: live ? Date.now() : this._estimateReceiveTs(this._decoded(this._vtxo(v.id)), tip) });
           changed = true;
         }
         continue;
@@ -348,7 +354,7 @@ export class ArkManager {
       if (!this._addVtxo(v, v._raw.bytes, 0)) continue;
       this._movement({
         type: 'receive', amountSat: v.amountSat, status: 'complete', vtxoId: v.id,
-        ts: this._estimateReceiveTs(v, tip),
+        ts: live ? Date.now() : this._estimateReceiveTs(v, tip),
       });
       changed = true;
     }

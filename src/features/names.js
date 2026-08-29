@@ -431,6 +431,10 @@ export function namesFeature(ctx) {
             copyBtn(code, t('namesZapCodeCopy'))) : null;
         })(),
         h('details', { class: 'small faint' },
+          h('summary', {}, t('namesOwnNode')),
+          h('p', { style: 'margin:4px 0' }, t('namesOwnNodeMenuHow')),
+          ownNodeSection()),
+        h('details', { class: 'small faint' },
           h('summary', {}, t('namesOwnDomain')),
           h('p', { style: 'margin:4px 0' }, t('namesOwnDomainHow')),
           h('div', { class: 'addr-box break', style: 'font-size:11px' },
@@ -648,11 +652,12 @@ export function namesFeature(ctx) {
           busy ? h('span', { class: 'spinner sm' }) : t('save'))));
   }
 
+  // The section body; the title comes from wherever it's mounted (the More
+  // menu pane, or the Settings card's details summary).
   function ownNodeSection() {
     const st = load();
-    if (!st.name) return null;
+    if (!st.name) return h('div', { class: 'small muted' }, t('namesNeedArk'));
     return h('div', { class: 'col', style: 'gap:10px;width:100%;margin-top:6px' },
-      h('strong', { class: 'small' }, t('namesOwnNode')),
       ownNodeField('noffer', st.noffer, 'noffer1…', t('namesOwnNodeHow')),
       ownNodeField('lno', st.lno, 'lno1…', t('namesOwnLnoHow')),
       ui.namesOwnErr ? h('div', { class: 'notice err small' }, ui.namesOwnErr) : null);
@@ -665,8 +670,7 @@ export function namesFeature(ctx) {
       h('div', { html: qrSvg(code) }),
       h('div', { class: 'addr-box break', style: 'width:100%;font-size:10px' }, code),
       copyBtn(code, t('copy')),
-      h('p', { class: 'small muted', style: 'margin:0' }, t('namesZapCodeHow')),
-      ownNodeSection());
+      h('p', { class: 'small muted', style: 'margin:0' }, t('namesZapCodeHow')));
   }
 
   // ---- more options -------------------------------------------------------
@@ -685,6 +689,7 @@ export function namesFeature(ctx) {
       opt('bolt12', t('namesMoreBolt12'), t('namesMoreBolt12How'), loadOffers),
       opt('ark', t('namesMoreArk'), t('namesMoreArkHow')),
       opt('clink', t('namesMoreClink'), t('namesMoreClinkHow')),
+      opt('ownnode', t('namesOwnNode'), t('namesOwnNodeMenuHow')),
       // Not a pane: a plain on-chain address means receiving to Savings, so
       // this hands over to the savings receive view instead of showing a
       // second address here.
@@ -705,11 +710,13 @@ export function namesFeature(ctx) {
       bolt12: t('namesMoreBolt12'),
       ark: t('namesMoreArk'),
       clink: t('namesMoreClink'),
+      ownnode: t('namesOwnNode'),
     };
     const body = ui.namesMore === 'bolt11' ? invoicePane()
       : ui.namesMore === 'bolt12' ? offerPane()
       : ui.namesMore === 'ark' ? arkPane()
       : ui.namesMore === 'clink' ? clinkPane()
+      : ui.namesMore === 'ownnode' ? ownNodeSection()
       : menuPane();
     return h('div', { class: 'col', style: 'gap:10px;width:100%' },
       h('div', { class: 'row between', style: 'align-items:baseline' },

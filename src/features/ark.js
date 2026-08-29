@@ -175,7 +175,19 @@ export function mergeArkStates(a, b) {
     return [...x, ...y.filter((i) => !ids.has(i.id))];
   };
   out.actions = unionById(a.actions, b.actions);
-  out.movements = unionById(a.movements, b.movements).sort((m, n) => (m.ts || 0) - (n.ts || 0));
+  // Two devices (or the push and the poll, pre-guard) can each record the
+  // SAME lightning payment under different movement ids — same preimage is
+  // the same payment, keep the earliest telling of it.
+  const seenPay = new Set();
+  out.movements = unionById(a.movements, b.movements)
+    .sort((m, n) => (m.ts || 0) - (n.ts || 0))
+    .filter((m) => {
+      if (!m.type || !m.type.startsWith('ln-') || m.status !== 'complete') return true;
+      const key = m.type + ':' + (m.paymentHash || m.preimage || m.invoice || m.id);
+      if (seenPay.has(key)) return false;
+      seenPay.add(key);
+      return true;
+    });
   const gifts = new Map((a.gifts || []).map((g) => [g.id, { ...g }]));
   for (const rg of b.gifts || []) {
     const lg = gifts.get(rg.id);

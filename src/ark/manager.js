@@ -990,16 +990,22 @@ export class ArkManager {
   }
 
   _settleLnPay(action, preimageHex) {
+    // The mailbox push and the status poll both land here, and their step
+    // checks happen BEFORE awaits — settle once, however many callers race
+    // (a hat purchase once wrote its history line twice this way).
+    if (action.step === 'done') return;
     for (const id of action.htlcVtxoIds || [action.htlcVtxoId]) {
       const htlc = this._vtxo(id);
       if (htlc) htlc.state = 'spent';
     }
     action.preimage = preimageHex;
     action.step = 'done';
-    this._movement({
+    const dup = this.state.movements.some((m) =>
+      m.type === 'ln-send' && (m.paymentHash === action.paymentHash || (m.preimage && m.preimage === preimageHex)));
+    if (!dup) this._movement({
       type: 'ln-send', amountSat: action.amountSat, status: 'complete',
       detail: action.feeSat ? `fee ${action.feeSat} sat` : undefined,
-      invoice: action.invoice, preimage: preimageHex,
+      invoice: action.invoice, preimage: preimageHex, paymentHash: action.paymentHash,
     });
     this._save();
   }

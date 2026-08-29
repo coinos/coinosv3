@@ -2790,8 +2790,10 @@ export function arkFeature(ctx) {
       // An upcoming renewal that will COST something — stated before it
       // happens. Ark is new to nearly everyone, and a fee nobody announced
       // reads as money gone missing (it did, once). Free renewals — the
-      // normal case now — pass without comment.
-      if (ark && ark.state && ark._tipH && !wallet.watchOnly) {
+      // normal case now — pass without comment, and one line under the
+      // balance is enough: the depth advisory outranks this forecast, and
+      // Manage carries the full story either way.
+      if (!depthNotice && ark && ark.state && ark._tipH && !wallet.watchOnly) {
         const spend = (ark.state.vtxos || []).filter((v) => v.state === 'spendable' && v.expiryHeight);
         if (spend.length) {
           const tip = ark._tipH;
@@ -2806,10 +2808,13 @@ export function arkFeature(ctx) {
           try { feeSat = ark.refreshFee(batch, simTip); } catch {}
           const days = Math.max(1, Math.round(blocksUntil / 144));
           if (feeSat > 0) out.push(h('div', { class: 'small faint', style: 'margin:10px 0 0;text-align:center' },
-            t('arkRenewForecast', {
-              when: blocksUntil <= 0 ? t('arkRenewNow') : t('arkRenewInDays', { n: days }),
+            t(blocksUntil <= 0 ? 'arkRenewForecastNow' : 'arkRenewForecast', {
+              when: days === 1 ? t('arkCoinsSpanDay') : t('arkCoinsSpanDays', { n: days }),
               fee: fmtAmount(feeSat) + ' ' + unitLabel(),
-            })));
+            }),
+            ' ',
+            h('button', { class: 'linklike small', onClick: () => { ui.arkCoinsPage = true; render(); } },
+              t('arkDepthBtn'))));
         }
       }
       return out;

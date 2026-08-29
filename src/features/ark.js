@@ -2144,6 +2144,9 @@ export function arkFeature(ctx) {
     const spendable = b.spendableSat;
     const total = b.spendableSat + b.pendingSat;
     const nSpend = ((arkStateNow() && arkStateNow().vtxos) || []).filter((v) => v.state === 'spendable').length;
+    const exitingSat = ((arkStateNow() && arkStateNow().actions) || [])
+      .filter((a) => a.type === 'exit' && !['done', 'failed'].includes(a.step))
+      .reduce((n, a) => n + a.amountSat, 0);
     const exits = arkExitStatusLines();
     const back = () => { ui.arkExitPage = null; ui.arkError = ''; render(); };
     return h('div', { class: 'col', style: 'gap:16px' },
@@ -2152,7 +2155,12 @@ export function arkFeature(ctx) {
         h('p', { class: 'small muted', style: 'margin:0' }, t('arkExitPageIntro')),
         total > 0 ? h('div', { class: 'row between', style: 'margin-top:4px' },
           h('span', { class: 'small muted' }, t('arkBalance')),
-          h('span', { class: 'small' }, fmtAmount(total) + ' ' + unitLabel())) : null),
+          h('span', { class: 'small' }, fmtAmount(total) + ' ' + unitLabel())) : null,
+        // money held by an in-flight exit isn't movable by anything else —
+        // say so next to the total instead of letting the cards contradict it
+        exitingSat > 0 ? h('div', { class: 'row between' },
+          h('span', { class: 'small muted' }, t('arkExitingLabel')),
+          h('span', { class: 'small' }, fmtAmount(exitingSat) + ' ' + unitLabel())) : null),
       // cooperative
       h('div', { class: 'card col', style: 'gap:8px' },
         h('h4', { style: 'margin:0' }, t('arkCoopTitle')),
@@ -2160,7 +2168,7 @@ export function arkFeature(ctx) {
         spendable > 0
           ? h('button', { class: 'btn-primary btn-block', disabled: !!ui.arkBusy, onClick: () => doArkOffboard() },
               ui.arkBusy === 'offboard' ? h('span', { class: 'spinner sm' }) : t('arkOffboardBtn', { n: fmtAmount(spendable) + ' ' + unitLabel() }))
-          : h('div', { class: 'small faint' }, t('arkExitNoBalance'))),
+          : h('div', { class: 'small faint' }, exitingSat > 0 ? t('arkExitCoopHeld') : t('arkExitNoBalance'))),
       // unilateral
       h('div', { class: 'card col', style: 'gap:8px' },
         h('h4', { style: 'margin:0' }, t('arkUniTitle')),

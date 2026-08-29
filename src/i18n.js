@@ -540,6 +540,8 @@ const STR = {
     arkUniTitle: 'Unilateral exit',
     arkUniDesc: 'Your escape hatch: claim the money yourself without anyone’s help. Takes about a day and costs mining fees, but works even if the server disappears.',
     arkExitNoBalance: 'Nothing in Spending to move.',
+    arkExitingLabel: 'Exiting on-chain',
+    arkExitCoopHeld: 'Your balance is in the unilateral exit below. While that exit hasn’t touched the chain yet, cancelling it frees the coins for a cooperative move.',
     arkZapTitle: 'Send a zap',
     awTitle: 'Auto-withdraw',
     awDesc: 'When Spending goes over an amount you choose, send it onward automatically — to an address, a payment name, a lightning address, or an npub.',

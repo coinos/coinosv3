@@ -1568,6 +1568,29 @@ export function arkFeature(ctx) {
     const depthOf = (v) => { try { return mgr._decoded(v).genesis.length; } catch { return null; } };
     const expiresOf = (v) => (v.expiryHeight && tip
       ? new Date(Date.now() + (v.expiryHeight - tip) * 600_000).toLocaleDateString() : '—');
+    // The server prices a renewal by how much lifetime each coin still
+    // carries (its ppm bracket) — waiting IS cheaper, and inside the final
+    // bracket it's free, where the wallet renews on its own anyway.
+    const table = ((mgr.info || {}).refreshFees || {}).ppmExpiryTable || [];
+    const ppmFor = (blocks) => (table.filter((e) => e.thresholdBlocks <= blocks).pop()?.ppm) ?? 0;
+    const feeNowOf = (v) => Math.ceil((v.amountSat * ppmFor((v.expiryHeight || 0) - tip)) / 1_000_000);
+    const span = (blocks) => {
+      if (blocks >= 144) {
+        const d = Math.round(blocks / 144);
+        return d === 1 ? t('arkCoinsSpanDay') : t('arkCoinsSpanDays', { n: d });
+      }
+      const hs = Math.max(1, Math.round(blocks / 6));
+      return hs === 1 ? t('arkCoinsSpanHour') : t('arkCoinsSpanHours', { n: hs });
+    };
+    const schedule = [...table].sort((a, b) => b.thresholdBlocks - a.thresholdBlocks).map((e, i, arr) => ({
+      label: e.ppm === 0
+        ? t('arkCoinsSchedFinal', { span: span(arr[i - 1] ? arr[i - 1].thresholdBlocks : 144) })
+        : i === 0
+          ? t('arkCoinsSchedOver', { span: span(e.thresholdBlocks) })
+          : t('arkCoinsSchedBetween', { a: span(e.thresholdBlocks), b: span(arr[i - 1].thresholdBlocks) }),
+      cost: e.ppm === 0 ? t('arkDepthFree') : (e.ppm / 10000).toLocaleString(undefined, { maximumFractionDigits: 3 }) + '%',
+      free: e.ppm === 0,
+    }));
     const renew = () => {
       // fire and let the round machinery carry it — rounds can be an hour out
       mgr.refresh(spend.map((v) => v.id)).catch((e) => toast(e.message));
@@ -1583,13 +1606,16 @@ export function arkFeature(ctx) {
           t('arkCoinsIntro', { n: spend.length, total: fmtAmount(totalSat) + ' ' + unitLabel() })),
         h('div', { class: 'col', style: 'gap:4px;margin-top:4px' },
           h('div', { class: 'row gap6' },
-            head(t('arkCoinsColAmount')), head(t('arkCoinsColExpires'), 'text-align:center'), head(t('arkCoinsColDepth'), 'text-align:right')),
+            head(t('arkCoinsColAmount')), head(t('arkCoinsColExpires'), 'text-align:center'),
+            head(t('arkCoinsColDepth'), 'text-align:center'), head(t('arkCoinsColFee'), 'text-align:right')),
           ...spend.map((v) => {
             const d = depthOf(v);
+            const f = feeNowOf(v);
             return h('div', { class: 'row gap6' },
               cell(fmtAmount(v.amountSat) + ' ' + unitLabel()),
               cell(expiresOf(v), 'text-align:center'),
-              cell(d == null ? '—' : d === 1 ? t('arkCoinsHop') : t('arkCoinsHops', { n: d }), 'text-align:right'));
+              cell(d == null ? '—' : d === 1 ? t('arkCoinsHop') : t('arkCoinsHops', { n: d }), 'text-align:center'),
+              cell(f > 0 ? fmtAmount(f) : t('arkDepthFree'), 'text-align:right'));
           })),
         h('p', { class: 'small faint', style: 'margin:4px 0 0' }, t('arkCoinsExpiryNote'))),
       h('div', { class: 'card col', style: 'gap:8px' },
@@ -1598,9 +1624,14 @@ export function arkFeature(ctx) {
           t('arkCoinsExitDesc', { fee: fmtAmount(exitFee), after: fmtAmount(afterFee) }))),
       h('div', { class: 'card col', style: 'gap:8px' },
         h('h4', { style: 'margin:0' }, t('arkCoinsRenewTitle')),
-        h('p', { class: 'small muted', style: 'margin:0' },
-          t('arkCoinsRenewDesc', { fee: renewFee > 0 ? fmtAmount(renewFee) + ' ' + unitLabel() : t('arkDepthFree') })),
-        h('button', { class: 'btn-primary btn-block', disabled: !!ui.arkBusy, onClick: renew }, t('arkDepthRenewBtn'))),
+        h('p', { class: 'small muted', style: 'margin:0' }, t('arkCoinsRenewDesc')),
+        schedule.length ? h('div', { class: 'col', style: 'gap:2px;margin:2px 0' },
+          ...schedule.map((r) => h('div', { class: 'row between' },
+            h('span', { class: 'small muted' }, r.label),
+            h('span', { class: 'small' + (r.free ? ' faint' : '') }, r.cost)))) : null,
+        h('p', { class: 'small faint', style: 'margin:0' }, t('arkCoinsRenewAuto')),
+        h('button', { class: 'btn-primary btn-block', disabled: !!ui.arkBusy, onClick: renew },
+          renewFee > 0 ? t('arkCoinsRenewNowFee', { fee: fmtAmount(renewFee) + ' ' + unitLabel() }) : t('arkDepthRenewBtn'))),
       h('button', { class: 'btn-ghost btn-block', onClick: back }, t('back')));
   }
 

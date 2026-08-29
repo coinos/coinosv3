@@ -572,15 +572,18 @@ const npubPrefixOwner = (name) => (/^npub1[a-z0-9]+$/.test(name) ? name : null);
 
 // coinos.io names that belong to existing coinos users are reserved for
 // them until the migration gives those users a way to claim their own.
-async function takenByCoinosUser(domain, name) {
+async function takenByCoinosUser(domain, name, claimantPubkey = null) {
   if (domain !== 'coinos.io') return false;
   try {
     const r = await fetch(`https://coinos.io/api/users/${encodeURIComponent(name)}`);
     if (r.status !== 200) return false;
-    // A migrated account has handed its name over: the old site keeps the
-    // account and its history, but receiving belongs to us now.
     const u = await r.json().catch(() => null);
-    return !(u && u.migrated);
+    if (!u) return false;
+    // An existing coinos.io account owns its name. The `migrated` flag once
+    // gated this and proved meaningless (poppy got squatted through it) —
+    // identity is the proof: only a claim SIGNED by the old account's own
+    // nostr key may take the name over.
+    return !(u.npub && claimantPubkey && u.npub === npubEncode(claimantPubkey));
   } catch { return true; } // can't verify → refuse rather than squat
 }
 
@@ -1044,7 +1047,7 @@ Bun.serve({
       if (existing && existing.pubkey !== auth.pubkey && existing.manager !== auth.pubkey) {
         return json({ error: 'name is taken' }, 409);
       }
-      if (!existing && await takenByCoinosUser(domain, name)) return json({ error: 'name is taken' }, 409);
+      if (!existing && await takenByCoinosUser(domain, name, auth.pubkey)) return json({ error: 'name is taken' }, 409);
       // an npub-shaped name belongs to that identity alone
       if (npubPrefixOwner(name)) {
         const managerOk = existing && existing.manager === auth.pubkey;

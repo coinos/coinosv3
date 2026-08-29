@@ -183,6 +183,21 @@ export function namesFeature(ctx) {
           } catch {}
         }
       }
+      // A name the registrar no longer grants us is a costume, not an
+      // address: verify ownership and drop stale local state (a record can
+      // be evicted server-side — a squatted legacy name once lingered in
+      // the squatter's UI this way). Registrar outages keep the benefit of
+      // the doubt.
+      if (st.name) {
+        try {
+          const r = await withTimeout(
+            fetch(`${REGISTRAR}/name/${encodeURIComponent(st.name)}?domain=${encodeURIComponent(st.domain || DOMAIN())}`).then((x) => x.json()),
+            8000, 'registrar');
+          const mine = new Set([wallet.nostrPubkey && wallet.nostrPubkey(), (hook('nostrLoginIdentity') || {}).pubkey].filter(Boolean));
+          const ours = r && r.taken && (mine.has(r.pubkey) || mine.has(r.manager));
+          if (r && !ours) { save({}); st = load(); render(); }
+        } catch {}
+      }
       if (!st.name) {
         // The address people see should be the identity they know the user
         // by: their real npub when a nostr account is linked, else the

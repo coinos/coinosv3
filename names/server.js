@@ -753,7 +753,7 @@ Bun.serve({
     if (m && req.method === 'GET') {
       const domain = (url.searchParams.get('domain') || DOMAIN).toLowerCase();
       const rec = state.names[`${m[1]}@${domain}`];
-      if (rec) return json({ name: m[1], domain, taken: true, pubkey: rec.pubkey, uri: rec.uri });
+      if (rec) return json({ name: m[1], domain, taken: true, pubkey: rec.pubkey, manager: rec.manager || null, uri: rec.uri });
       const reserved = RESERVED.has(m[1]) || !NAME_RE.test(m[1]) || await takenByCoinosUser(domain, m[1]);
       return json({ name: m[1], domain, taken: reserved, reserved });
     }

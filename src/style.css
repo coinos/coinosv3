@@ -510,7 +510,7 @@ hr.divider { margin: 16px 0; }
   padding: 2px 6px; border-radius: 5px; transform: rotate(-6deg);
   box-shadow: 0 1px 2px rgba(0, 0, 0, .25);
 }
-.beta-badge { background: #6d28d9; }
+.staging-badge { background: #6d28d9; }
 .wallet-row-btn { font-size: 19px; line-height: 1; padding: 8px 12px; }
 .chat-avatar.header-ava.fallback { align-items: center; justify-content: center; display: flex; color: var(--muted); }
 

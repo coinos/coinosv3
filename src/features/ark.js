@@ -1597,6 +1597,13 @@ export function arkFeature(ctx) {
       const mgr = await connectArk();
       const spendables = mgr.vtxos().filter((v) => v.state === 'spendable');
       if (!spendables.length) throw new Error(t('arkNotConnected'));
+      // Fees are paid hop by hop from Savings as the exit unrolls — an exit
+      // that can't fund its hops just stalls at step zero. Refuse to start
+      // one Savings can't carry, with the number on the table.
+      const feeEst = estimateExitFeeSat(mgr);
+      if ((wallet.spendable || 0) < feeEst) {
+        throw new Error(t('arkExitFeeShort', { need: fmtAmount(feeEst), have: fmtAmount(wallet.spendable || 0) }));
+      }
       for (const v of spendables) mgr.startExit(v.id);
       toast(t('arkExitStarted', { n: spendables.length }));
       driveExits(mgr).catch(() => {});
@@ -1650,7 +1657,7 @@ export function arkFeature(ctx) {
             mgr._save();
             return;
           } catch {
-            const e = new Error(t('arkExitNoFeeCoin'));
+            const e = new Error(t('arkExitNoFeeCoin', { need: fmtAmount(Math.max(294, feeSat)) }));
             e.actionable = true;
             throw e;
           }

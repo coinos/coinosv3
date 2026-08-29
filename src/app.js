@@ -3857,7 +3857,15 @@ function recipientRow(s, r, i) {
         },
       }),
       h('button', { type: 'button', title: t('switchUnit'), onClick: toggleUnit }, unitLabel()),
-      single && !featureHook('hideSendControls', r.address) && h('button', { type: 'button', class: s.max ? 'btn-primary' : '', onClick: () => { s.max = !s.max; render(); } }, t('max'))
+      single && !featureHook('hideSendControls', r.address) && h('button', { type: 'button', class: s.max ? 'btn-primary' : '', onClick: () => { s.max = !s.max; render(); } }, t('max')),
+      // features that hide the fee controls (ark) can still offer their own
+      // Max — it fills the amount with that rail's spendable balance
+      single && featureHook('hideSendControls', r.address)
+        ? (() => {
+            const v = featureHook('sendMaxFill', r.address);
+            return v != null ? h('button', { type: 'button', onClick: () => { r.amount = v; s.max = false; render(); } }, t('max')) : null;
+          })()
+        : null
     ) : null
   );
   syncCheck();

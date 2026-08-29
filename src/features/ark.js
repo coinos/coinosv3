@@ -2338,6 +2338,14 @@ export function arkFeature(ctx) {
     },
     isSendDest(a) { return isArkAddress(a) && arkAvailable(); },
     hideSendControls(a) { return isArkAddress(a); },
+    // Max for an ark recipient: arkoor sends are free, so the whole
+    // spendable Spending balance is the honest maximum.
+    sendMaxFill(a) {
+      if (!isArkAddress(a)) return null;
+      const sat = arkBalance()?.spendableSat || 0;
+      if (!sat) return null;
+      return ctx.getUnit() === 'sats' ? String(sat) : (sat / 1e8).toFixed(8);
+    },
     sendFormNote(a) {
       if (!isArkAddress(a)) return null;
       maybeReconcile();

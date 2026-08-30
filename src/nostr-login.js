@@ -126,7 +126,7 @@ export async function bunkerSigner(uri, { onAuth } = {}) {
 // permission to this client key, not to this page load, so rebuilding from
 // the same client key and pointer picks the session back up — usually without
 // prompting the user again.
-export async function resumeBunker(session, { onAuth, timeoutMs = 8000 } = {}) {
+export async function resumeBunker(session, { onAuth, timeoutMs = 15000 } = {}) {
   if (!session || !session.local || !session.bp || !session.bp.pubkey) return null;
   const { BunkerSigner } = await loadNip46();
   const local = hex.decode(session.local);

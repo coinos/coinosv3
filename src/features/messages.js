@@ -1155,10 +1155,17 @@ export function messagesFeature(ctx) {
   }
 
   async function drainPendingWraps() {
-    if (draining || !pendingWraps.size || !dmDecryptors().length) return;
+    if (draining || !pendingWraps.size) return;
     draining = true;
-    const complete = decryptorsComplete();
     try {
+      // Wraps sealed to the login npub can't open without its signer. Wake it
+      // up ourselves — the boot-time resume is a single attempt, and if it
+      // loses to cold-start churn nothing else asks until the user happens to
+      // touch a screen that calls identity(). Resume single-flights and
+      // rate-limits itself, so asking here is cheap.
+      if (!decryptorsComplete()) await Promise.resolve(hook('nostrLoginResume')).catch(() => null);
+      if (!dmDecryptors().length) return;
+      const complete = decryptorsComplete();
       for (const [id, p] of [...pendingWraps]) {
         // A remote signer can die mid-pass; counting the remaining wraps as
         // full-strength failures would evict messages that were never really
@@ -1169,7 +1176,7 @@ export function messagesFeature(ctx) {
       }
     } finally { draining = false; }
     // still holding wraps: the signer may connect later — keep a slow retry
-    if (pendingWraps.size) scheduleDrain(complete ? 30_000 : 60_000);
+    if (pendingWraps.size) scheduleDrain(decryptorsComplete() ? 30_000 : 60_000);
   }
 
   function openDirectBundle(json) {

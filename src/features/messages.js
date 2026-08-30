@@ -1160,6 +1160,10 @@ export function messagesFeature(ctx) {
     const complete = decryptorsComplete();
     try {
       for (const [id, p] of [...pendingWraps]) {
+        // A remote signer can die mid-pass; counting the remaining wraps as
+        // full-strength failures would evict messages that were never really
+        // tried. Stop here — the slow retry picks the rest up.
+        if (complete && !decryptorsComplete()) break;
         if (await openInboxWrap(p.wrap)) pendingWraps.delete(id);
         else if (complete && ++p.tries >= PENDING_TRIES) pendingWraps.delete(id);
       }

@@ -1634,8 +1634,6 @@ export function arkFeature(ctx) {
       ui.arkCoinsSel = null;
       back();
     };
-    const cell = (s, extra = '') => h('span', { class: 'small', style: 'flex:1;' + extra }, s);
-    const head = (s, extra = '') => h('span', { class: 'small faint', style: 'flex:1;' + extra }, s);
     const tick = (checked, onChange, title) => h('input', {
       type: 'checkbox', checked, title, style: 'flex:0 0 auto;margin:0', onChange,
     });
@@ -1644,29 +1642,34 @@ export function arkFeature(ctx) {
         h('h3', { style: 'margin:0' }, t('arkCoinsTitle')),
         h('p', { class: 'small muted', style: 'margin:0' },
           t('arkCoinsIntro', { n: spend.length, total: fmtAmount(totalSat) + ' ' + unitLabel() })),
-        h('div', { class: 'col', style: 'gap:4px;margin-top:4px' },
+        // One coin per row, two lines: the amount, then a terse meta line.
+        // Five flexed columns fit a laptop but wrap into confetti on a phone
+        // — labels riding inline with each value need no header row and no
+        // horizontal budget at all.
+        h('div', { class: 'col', style: 'gap:8px;margin-top:4px' },
           h('div', { class: 'row gap6', style: 'align-items:center' },
             tick(sel.size === ids.size, (e) => {
               ui.arkCoinsSel = e.target.checked ? new Set(ids) : new Set();
               render();
             }, t('arkCoinsSelectAll')),
-            head(t('arkCoinsColAmount')), head(t('arkCoinsColExpires'), 'text-align:center'),
-            head(t('arkCoinsColDepth'), 'text-align:center'), head(t('arkCoinsColExitFee'), 'text-align:center'),
-            head(t('arkCoinsColFee'), 'text-align:right')),
+            h('span', { class: 'small faint' }, t('arkCoinsSelectAll'))),
           ...spend.map((v) => {
             const d = depthOf(v);
             const f = feeNowOf(v);
             const xf = exitFeeOf(v);
-            return h('div', { class: 'row gap6', style: 'align-items:center' },
+            return h('div', { class: 'row gap6', style: 'align-items:flex-start' },
               tick(sel.has(v.id), (e) => {
                 e.target.checked ? sel.add(v.id) : sel.delete(v.id);
                 render();
               }),
-              cell(fmtAmount(v.amountSat) + ' ' + unitLabel()),
-              cell(expiresOf(v), 'text-align:center'),
-              cell(d == null ? '—' : String(d), 'text-align:center'),
-              cell(xf == null ? '—' : fmtAmount(xf), 'text-align:center'),
-              cell(f > 0 ? fmtAmount(f) : t('arkDepthFree'), 'text-align:right'));
+              h('div', { class: 'col grow', style: 'gap:1px;min-width:0' },
+                h('span', { class: 'small' }, fmtAmount(v.amountSat) + ' ' + unitLabel()),
+                h('span', { class: 'small faint' }, t('arkCoinsRowMeta', {
+                  exp: expiresOf(v),
+                  d: d == null ? '—' : String(d),
+                  exit: xf == null ? '—' : fmtAmount(xf),
+                  renew: f > 0 ? fmtAmount(f) : t('arkDepthFree'),
+                }))));
           })),
         h('p', { class: 'small faint', style: 'margin:4px 0 0' }, t('arkCoinsExpiryNote'))),
       h('div', { class: 'card col', style: 'gap:8px' },

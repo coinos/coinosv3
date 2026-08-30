@@ -2535,8 +2535,34 @@ export function arkFeature(ctx) {
         if (!arkAvailable()) throw new Error(t('arkNotConnected'));
         const sats = ctx.parseAmount(s.recipients[0].amount, ctx.getUnit());
         if (!sats || sats <= 0) throw new Error(t('enterValidAmtForN', { n: 1 }));
-        ui.arkSend = { address: s.recipients[0].address.trim(), amountSat: sats };
-        render();
+        const dest = s.recipients[0].address.trim();
+        const fromSavings = ctx.getAccount() !== 'spending';
+        (async () => {
+          // Whose address is this? The manager may still be connecting, so
+          // resolve async before painting a review.
+          let own = false;
+          try { const mgr = await connectArk(); own = dest === mgr.address(); }
+          catch (e) { ui.sendError = e.message; render(); return; }
+          if (own) {
+            // Your OWN ark address is never a payment — pasting it (or a
+            // coinos name that resolves to it) means "top up Spending", so
+            // open the board panel, funded from on-chain Savings. The old
+            // path made a silent Spending→Spending self-send.
+            ctx.goHome();
+            ui.arkMoveOpen = true;
+            ui.arkMoveDir = 'toSpending';
+            ui.arkBoardAmt = String(sats);
+            ui.send = blankSend();
+            toast(t('arkOwnAddrBoard'));
+          } else if (fromSavings) {
+            // An ark payment spends the Spending balance — never silently
+            // spend a different balance than the one selected.
+            ui.sendError = t('arkPayFromSpending');
+          } else {
+            ui.arkSend = { address: dest, amountSat: sats };
+          }
+          render();
+        })();
         return true;
       }
       return false;

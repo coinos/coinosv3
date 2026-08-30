@@ -847,6 +847,8 @@ const STR = {
     arkRefreshStarted: 'Refresh submitted — completes with the next round.',
     arkSendTitle: 'Send',
     arkSendHint: 'Ark address — sent instantly off-chain, no mining fee.',
+    arkOwnAddrBoard: "That's your own Spending address — moving from Savings instead.",
+    arkPayFromSpending: 'Ark payments come from your Spending balance — switch to Spending to send this.',
     arkPayTo: 'To',
     arkNoFee: 'none — instant off-chain send',
     arkSendBtn: 'Send',

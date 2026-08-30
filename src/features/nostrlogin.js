@@ -78,6 +78,11 @@ export function nostrLoginFeature(ctx) {
   const busy = (v) => { ui.nostrLoginBusy = v; render(); };
   const fail = (e) => { attaching = false; ui.nostrLoginError = e.message || String(e); busy(false); };
 
+  // A signer just went live: features holding work only a signer can do
+  // (the DM inbox's undecrypted wraps) get their cue. Deferred a tick so
+  // the `live` assignment has settled wherever this is called from.
+  const announceLive = () => { setTimeout(() => { try { ctx.hook('nostrSignerLive'); } catch {} }, 0); };
+
   // Open the wallet a signer identifies. New accounts confirm first, because
   // publishing an encrypted seed to relays deserves an explicit yes.
   async function loginWith(makeSigner) {
@@ -108,6 +113,7 @@ export function nostrLoginFeature(ctx) {
       const spendingHint = !!res.spending;
       attaching = true;
       live = selfHealing(signer);
+      announceLive();
       // hand the wizard over BEFORE the screen flips: walletScreen routes
       // back into onboarding while ui.onb is set, so clearing it afterwards
       // re-animated the welcome screen for a beat before the wallet appeared
@@ -140,6 +146,7 @@ export function nostrLoginFeature(ctx) {
       if (!existing) await publishWalletBackup(st.signer, { mnemonic });
       attaching = true;
       live = selfHealing(st.signer);
+      announceLive();
       ctx.onbNostrLogin(!!existing); // before the screen flips — see loginWith
       ui.navAnimSkip = true; // the handover swaps instantly, no fade
       await ctx.openMnemonic(mnemonic, (existing && existing.passphrase) || '', { nostrPubkey: st.signer.pubkey, spendingHint: !!(existing && existing.spending) });
@@ -165,6 +172,7 @@ export function nostrLoginFeature(ctx) {
       }
       await publishWalletBackup(signer, { mnemonic: wallet.mnemonic, passphrase: wallet.passphrase || '' });
       live = selfHealing(signer);
+      announceLive();
       save({ ...load(), pubkey: signer.pubkey, linked: Date.now(), ...sessionOf(signer) });
       ctx.hook('namesAdoptIdentity', signer, npubOf(signer.pubkey))?.catch?.(() => {});
       toast(t('nlLinked'));
@@ -392,6 +400,7 @@ export function nostrLoginFeature(ctx) {
         throw new Error(t('nlWrongAccount', { npub: npubOf(st.pubkey) || '' }));
       }
       live = selfHealing(signer);
+      announceLive();
       save({ ...load(), ...sessionOf(signer) });
       // No toast: the badge flips to "connected" and the reconnect controls
       // disappear, which says it better than a pill floating over the footer.
@@ -587,6 +596,7 @@ export function nostrLoginFeature(ctx) {
       try {
         const s = await resuming;
         if (!s) resumeFailedAt = Date.now();
+        else announceLive();
         return s;
       } finally { resuming = null; }
     },

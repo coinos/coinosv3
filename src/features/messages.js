@@ -1079,14 +1079,38 @@ export function messagesFeature(ctx) {
     scheduleRepaint();
   }
 
-  async function handleInboxWrap(wrap) {
-    if (seenWraps.has(wrap.id)) return;
-    seenWraps.add(wrap.id);
-    const decryptors = [];
-    if (wallet.nostr && wallet.nostr.sk) decryptors.push(wallet.nostr.sk);
+  // Wraps nothing could open are NOT consumed. The usual reason is the
+  // remote signer losing the race with the relay backfill on a fresh load
+  // (the login signer resumes lazily, the stored wraps arrive first), or a
+  // single bunker round-trip failing — and dropping the wrap there was how
+  // whole stretches of DM history quietly went missing, differently on every
+  // device. Keep them and retry as the decryptor set improves; a wrap that
+  // never opens (a stranger's wrap that merely p-tags us) falls out after a
+  // few full-strength passes.
+  const pendingWraps = new Map(); // wrap.id -> { wrap, tries }
+  const PENDING_MAX = 800;
+  const PENDING_TRIES = 6;
+  let drainTimer = 0;
+  let draining = false;
+
+  function dmDecryptors() {
+    const out = [];
+    if (wallet.nostr && wallet.nostr.sk) out.push(wallet.nostr.sk);
     const login = hook('nostrLoginIdentity');
-    if (login && login.signer && login.signer.decryptFrom) decryptors.push(login.signer);
-    for (const d of decryptors) {
+    if (login && login.signer && login.signer.decryptFrom) out.push(login.signer);
+    return out;
+  }
+  // A "full-strength" attempt has every key this wallet expects: retries
+  // only count against a wrap once the login signer (if one is linked) has
+  // actually had its chance — the wallet key alone can never open a wrap
+  // sealed to the login npub.
+  function decryptorsComplete() {
+    const login = hook('nostrLoginIdentity');
+    return !login || !!(login.signer && login.signer.decryptFrom);
+  }
+
+  async function openInboxWrap(wrap) {
+    for (const d of dmDecryptors()) {
       const got = await unwrapDM(wrap, d).catch(() => null);
       if (!got) continue;
       if (got.rumor.kind === 14) {
@@ -1107,8 +1131,38 @@ export function messagesFeature(ctx) {
           scheduleRepaint();
         } catch {}
       }
-      return;
+      return true;
     }
+    return false;
+  }
+
+  async function handleInboxWrap(wrap) {
+    if (seenWraps.has(wrap.id)) return;
+    seenWraps.add(wrap.id);
+    if (await openInboxWrap(wrap)) return;
+    if (pendingWraps.size >= PENDING_MAX) pendingWraps.delete(pendingWraps.keys().next().value);
+    pendingWraps.set(wrap.id, { wrap, tries: decryptorsComplete() ? 1 : 0 });
+    scheduleDrain(8000);
+  }
+
+  function scheduleDrain(ms) {
+    if (!pendingWraps.size) return;
+    clearTimeout(drainTimer);
+    drainTimer = setTimeout(() => { drainPendingWraps().catch(() => {}); }, ms);
+  }
+
+  async function drainPendingWraps() {
+    if (draining || !pendingWraps.size || !dmDecryptors().length) return;
+    draining = true;
+    const complete = decryptorsComplete();
+    try {
+      for (const [id, p] of [...pendingWraps]) {
+        if (await openInboxWrap(p.wrap)) pendingWraps.delete(id);
+        else if (complete && ++p.tries >= PENDING_TRIES) pendingWraps.delete(id);
+      }
+    } finally { draining = false; }
+    // still holding wraps: the signer may connect later — keep a slow retry
+    if (pendingWraps.size) scheduleDrain(complete ? 30_000 : 60_000);
   }
 
   function openDirectBundle(json) {
@@ -1144,6 +1198,22 @@ export function messagesFeature(ctx) {
     allUnsubs.push(subscribeOn(DM_RELAYS, { kinds: [1059], '#p': pks, limit: 400 }, (wrap) => {
       handleInboxWrap(wrap).catch(() => {});
     }));
+    // Senders deliver to the relays our kind-10050 advertises — a list other
+    // clients may have published with relays beyond our defaults. Read those
+    // too, or a compliant sender's DM lands somewhere we never look (a reply
+    // went only to damus/primal and no device ever showed it).
+    (async () => {
+      try {
+        const lists = await Promise.all(pks.map((pk) => fetchInboxRelays(pk).catch(() => [])));
+        const extras = [...new Set(lists.flat().map((r) => String(r || '').trim().replace(/\/$/, '')))]
+          .filter((r) => /^wss:\/\//i.test(r) && !DM_RELAYS.includes(r))
+          .slice(0, 3);
+        if (extras.length && dmStarted)
+          allUnsubs.push(subscribeOn(extras, { kinds: [1059], '#p': pks, limit: 400 }, (wrap) => {
+            handleInboxWrap(wrap).catch(() => {});
+          }));
+      } catch {}
+    })();
     ensureDmRelayList().catch(() => {});
   }
 
@@ -2601,6 +2671,9 @@ export function messagesFeature(ctx) {
       ui.userSearch = { q: '', rows: null };
       return true;
     },
+    // nostr-login just connected or resumed a signer: wraps the backfill
+    // couldn't open a moment ago can be opened now — drain right away.
+    nostrSignerLive() { scheduleDrain(0); },
     // Anyone (ark's history, other features) can open a profile or render a
     // small clickable identity chip.
     showProfile(pk) { openProfile(pk); return true; },
@@ -2663,6 +2736,8 @@ export function messagesFeature(ctx) {
       threads.clear();
       pendingDirect.clear();
       seenWraps.clear(); // the next account must decrypt wraps this one couldn't
+      clearTimeout(drainTimer);
+      pendingWraps.clear();
       dmStarted = false;
       listsSynced = false;
     },

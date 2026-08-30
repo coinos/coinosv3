@@ -1089,7 +1089,10 @@ export function messagesFeature(ctx) {
   // few full-strength passes.
   const pendingWraps = new Map(); // wrap.id -> { wrap, tries }
   const PENDING_MAX = 800;
-  const PENDING_TRIES = 6;
+  // Full-strength attempts before giving a wrap up. Kept low on purpose: a
+  // bunker signer pays two relay round-trips per attempt, and a wrap that a
+  // complete decryptor set failed to open twice is essentially never ours.
+  const PENDING_TRIES = 3;
   let drainTimer = 0;
   let draining = false;
 

@@ -145,17 +145,24 @@ export async function resumeBunker(session, { onAuth, timeoutMs = 8000 } = {}) {
 }
 
 function bunkerAdapter(signer, pubkey, local) {
+  // A dead transport (relay socket gone, signer app killed in the background)
+  // makes a NIP-46 call hang forever, not fail — so every operation carries
+  // its own deadline. The distinct message lets callers tell "the signer
+  // never answered" (connection is dead, reconnect) from "the signer said
+  // no" (an answered error — the connection is fine).
+  const answered = (p, ms = 20_000) => Promise.race([p,
+    new Promise((_, rej) => setTimeout(() => rej(new Error('signer did not answer')), ms))]);
   return {
     kind: 'bunker', pubkey, label: 'remote signer',
     // Everything needed to rebuild this connection later. `local` is the
     // client key the remote signer authorised — not the user's identity key,
     // which never leaves the signer.
     session: local ? { local: hex.encode(local), bp: signer.bp } : null,
-    signEvent: (e) => signer.signEvent(e),
-    encryptSelf: (txt) => signer.nip44Encrypt(pubkey, txt),
-    decryptSelf: (ct) => signer.nip44Decrypt(pubkey, ct),
-    encryptTo: (peer, txt) => signer.nip44Encrypt(peer, txt),
-    decryptFrom: (peer, ct) => signer.nip44Decrypt(peer, ct),
+    signEvent: (e) => answered(signer.signEvent(e)),
+    encryptSelf: (txt) => answered(signer.nip44Encrypt(pubkey, txt)),
+    decryptSelf: (ct) => answered(signer.nip44Decrypt(pubkey, ct)),
+    encryptTo: (peer, txt) => answered(signer.nip44Encrypt(peer, txt)),
+    decryptFrom: (peer, ct) => answered(signer.nip44Decrypt(peer, ct)),
     close: () => { try { signer.close(); } catch {} },
   };
 }

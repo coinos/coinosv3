@@ -43,10 +43,19 @@ export function nostrLoginFeature(ctx) {
   // signer object that will never answer again, and every send after that
   // fails until the page is reloaded. Notice the first failure and drop it, so
   // the next attempt resumes a fresh connection instead.
+  //
+  // But only a CONNECTION-shaped failure. A remote signer answering "can't
+  // decrypt that" is a healthy connection doing its job — the DM inbox probes
+  // it with wraps that turn out to be someone else's, and treating each
+  // refusal as a dead signer disconnected Amethyst users over and over.
+  const SIGNER_DEAD = /did not answer|timed? ?out|connect|closed|socket|relay|network/i;
   const selfHealing = (signer) => {
     if (!signer || signer.kind !== 'bunker') return signer;
     const guard = (fn) => async (...args) => {
-      try { return await fn(...args); } catch (e) { if (live === wrapped) live = null; throw e; }
+      try { return await fn(...args); } catch (e) {
+        if (live === wrapped && SIGNER_DEAD.test(e?.message || '')) live = null;
+        throw e;
+      }
     };
     const wrapped = {
       ...signer,
@@ -74,6 +83,18 @@ export function nostrLoginFeature(ctx) {
     if (!signer) return {};
     return { session: signer.session || null };
   };
+
+  // HOW this account was connected — so the reconnect surfaces can offer the
+  // matching door instead of every door. A Google or passkey flow is running
+  // when ui.nostrLoginVia says so (Google hands us a bunker, passkey a raw
+  // key, so the signer kind alone can't tell); otherwise the signer speaks
+  // for itself.
+  const viaOf = (signer) =>
+    ui.nostrLoginVia === 'google' || ui.nostrLoginVia === 'passkey'
+      ? ui.nostrLoginVia
+      : signer && signer.kind === 'bunker' ? 'bunker'
+      : signer && signer.kind === 'extension' ? 'extension'
+      : 'key';
 
   const busy = (v) => { ui.nostrLoginBusy = v; render(); };
   const fail = (e) => { attaching = false; ui.nostrLoginError = e.message || String(e); busy(false); };
@@ -125,7 +146,7 @@ export function nostrLoginFeature(ctx) {
         new Promise((r) => setTimeout(() => r(null), 1500)),
       ]);
       await ctx.openMnemonic(res.mnemonic, res.passphrase || '', { nostrPubkey: signer.pubkey, spendingHint, nameHint });
-      save({ ...load(), pubkey: signer.pubkey, linked: Date.now(), ...sessionOf(signer) });
+      save({ ...load(), pubkey: signer.pubkey, linked: Date.now(), via: viaOf(signer), ...sessionOf(signer) });
       attaching = false;
       // claim the real npub as the payment address while this signer is live
       ctx.hook('namesAdoptIdentity', signer, npubOf(signer.pubkey))?.catch?.(() => {});
@@ -150,7 +171,7 @@ export function nostrLoginFeature(ctx) {
       ctx.onbNostrLogin(!!existing); // before the screen flips — see loginWith
       ui.navAnimSkip = true; // the handover swaps instantly, no fade
       await ctx.openMnemonic(mnemonic, (existing && existing.passphrase) || '', { nostrPubkey: st.signer.pubkey, spendingHint: !!(existing && existing.spending) });
-      save({ ...load(), pubkey: st.signer.pubkey, linked: Date.now(), ...sessionOf(st.signer) });
+      save({ ...load(), pubkey: st.signer.pubkey, linked: Date.now(), via: viaOf(st.signer), ...sessionOf(st.signer) });
       attaching = false;
       ctx.hook('namesAdoptIdentity', st.signer, npubOf(st.signer.pubkey))?.catch?.(() => {});
       busy(false);
@@ -173,7 +194,7 @@ export function nostrLoginFeature(ctx) {
       await publishWalletBackup(signer, { mnemonic: wallet.mnemonic, passphrase: wallet.passphrase || '' });
       live = selfHealing(signer);
       announceLive();
-      save({ ...load(), pubkey: signer.pubkey, linked: Date.now(), ...sessionOf(signer) });
+      save({ ...load(), pubkey: signer.pubkey, linked: Date.now(), via: viaOf(signer), ...sessionOf(signer) });
       ctx.hook('namesAdoptIdentity', signer, npubOf(signer.pubkey))?.catch?.(() => {});
       toast(t('nlLinked'));
       busy(false);
@@ -323,12 +344,22 @@ export function nostrLoginFeature(ctx) {
   // The ways in, as buttons. `run` receives a signer factory. The expanded
   // "Log in with Nostr" card passes nostrOnly — Google and passkey already
   // stand on the front door, and repeating them under a Nostr heading reads
-  // as noise — while link/reconnect keep them: an account born from a Google
-  // or passkey sign-in needs the same door to get back in.
-  function signerButtons(run, { nostrOnly = false } = {}) {
+  // as noise. Linking keeps them: a different account may live behind either.
+  //
+  // RECONNECTING is narrower: the account is known, so only the door it came
+  // through belongs. `reconnectVia` says which — Google/passkey show their
+  // button, everything else (bunker, extension, key) gets the nostr surfaces
+  // only; an Amethyst user staring at a Google button was signing into the
+  // wrong identity at worst and noise at best. 'legacy' (pre-`via` state with
+  // no stored session) can't be told apart from a passkey account, so it
+  // keeps every door.
+  function signerButtons(run, { nostrOnly = false, reconnectVia = null } = {}) {
     const hasExt = typeof window !== 'undefined' && !!window.nostr;
+    const externals = nostrOnly ? []
+      : reconnectVia && !['google', 'passkey', 'legacy'].includes(reconnectVia) ? []
+      : externalButtons(run);
     return h('div', { class: 'col', style: 'gap:8px' },
-      ...(nostrOnly ? [] : externalButtons(run)),
+      ...externals,
       hasExt
         ? h('button', { class: 'btn-block', disabled: ui.nostrLoginBusy,
             onClick: () => run(() => extensionSigner()) }, t('nlExtension'))
@@ -401,7 +432,7 @@ export function nostrLoginFeature(ctx) {
       }
       live = selfHealing(signer);
       announceLive();
-      save({ ...load(), ...sessionOf(signer) });
+      save({ ...load(), via: viaOf(signer), ...sessionOf(signer) });
       // No toast: the badge flips to "connected" and the reconnect controls
       // disappear, which says it better than a pill floating over the footer.
       busy(false);
@@ -470,6 +501,52 @@ export function nostrLoginFeature(ctx) {
       signerButtons(linkOpenWallet));
   }
 
+  // The silent reattach (extension first, then a stored bunker session) —
+  // callable from anywhere that notices the signer missing. One attempt at a
+  // time, and a pause after a failure: identity() asks on every send, and a
+  // signer that isn't answering shouldn't mean a new relay connection per
+  // keystroke.
+  async function resumeLogin() {
+    if (live) return live;
+    const st = load();
+    if (!st.pubkey) return null;
+    if (resuming) return resuming;
+    if (Date.now() - resumeFailedAt < 20_000) return null;
+    resuming = (async () => {
+      if (typeof window !== 'undefined' && window.nostr) {
+        try {
+          const s = await extensionSigner();
+          if (s.pubkey === st.pubkey) return (live = s);
+        } catch {}
+      }
+      if (st.session) {
+        try {
+          const s = await resumeBunker(st.session, { onAuth: (url) => { ui.nostrLoginAuthUrl = url; render(); } });
+          if (s && s.pubkey === st.pubkey) return (live = selfHealing(s));
+        } catch {}
+      }
+      return null;
+    })();
+    try {
+      const s = await resuming;
+      if (!s) resumeFailedAt = Date.now();
+      else announceLive();
+      return s;
+    } finally { resuming = null; }
+  }
+
+  // Which door this account came through, for the reconnect surfaces. State
+  // saved before `via` existed: a stored session means a bunker; without one
+  // it could be extension, key, or passkey — offer everything.
+  const reconnectViaOf = (st) => st.via || (st.session ? 'bunker' : 'legacy');
+
+  // Fire-and-forget resume for render paths: heal the badge without anyone
+  // tapping, repaint when it lands. resumeLogin's own gating keeps this from
+  // dialing on every render.
+  function resumeQuietly() {
+    resumeLogin().then((s) => { if (s) render(); }).catch(() => {});
+  }
+
   function settingsCard() {
     if (wallet.watchOnly || !wallet.mnemonic) return null;
     const st = load();
@@ -482,10 +559,13 @@ export function nostrLoginFeature(ctx) {
         h('p', { class: 'small faint', style: 'margin:0' }, t('nlLinkedDesc')),
         // Signing needs a live signer, and a reload always drops a remote one.
         // Without this the app can tell you it isn't connected and offer you
-        // nowhere to fix it.
-        live ? null : h('div', { class: 'col', style: 'gap:8px' },
+        // nowhere to fix it. A stored session or an installed extension can
+        // usually reattach without the user doing anything — try that quietly
+        // whenever the card paints disconnected (the resume path rate-limits
+        // itself), and only the doors this account came through are offered.
+        live ? null : (resumeQuietly(), h('div', { class: 'col', style: 'gap:8px' },
           h('p', { class: 'small muted', style: 'margin:0' }, t('nlReconnectDesc')),
-          signerButtons(reconnectSigner)));
+          signerButtons(reconnectSigner, { reconnectVia: reconnectViaOf(st) }))));
     }
     // No external account linked — but the wallet still HAS a nostr account:
     // the one derived from its seed, already signing chat and holding the
@@ -516,7 +596,7 @@ export function nostrLoginFeature(ctx) {
       h('div', { class: 'card col', style: 'gap:12px' },
         h('h3', { style: 'margin:0' }, t('nlReconnectTitle')),
         h('p', { class: 'small muted', style: 'margin:0' }, t('nlReconnectBody', { npub: (npubOf(st.pubkey) || '').slice(0, 12) })),
-        signerButtons(run),
+        signerButtons(run, { reconnectVia: reconnectViaOf(st) }),
         ui.nostrLoginError ? h('div', { class: 'notice err' }, ui.nostrLoginError) : null),
       h('button', { class: 'btn-ghost btn-block', onClick: () => {
         stopNostrConnect();
@@ -568,38 +648,9 @@ export function nostrLoginFeature(ctx) {
     // A page reload loses the signer. An installed extension can usually be
     // re-attached without prompting, which is what lets the payment address
     // stay tied to the user's real identity across reloads. Returns null for
-    // signers we cannot silently reattach (pasted keys, bunkers).
-    async nostrLoginResume() {
-      if (live) return live;
-      const st = load();
-      if (!st.pubkey) return null;
-      // One attempt at a time, and a pause after a failure: identity() asks on
-      // every send, and a signer that isn't answering shouldn't mean a new
-      // relay connection per keystroke.
-      if (resuming) return resuming;
-      if (Date.now() - resumeFailedAt < 20_000) return null;
-      resuming = (async () => {
-        if (typeof window !== 'undefined' && window.nostr) {
-          try {
-            const s = await extensionSigner();
-            if (s.pubkey === st.pubkey) return (live = s);
-          } catch {}
-        }
-        if (st.session) {
-          try {
-            const s = await resumeBunker(st.session, { onAuth: (url) => { ui.nostrLoginAuthUrl = url; render(); } });
-            if (s && s.pubkey === st.pubkey) return (live = selfHealing(s));
-          } catch {}
-        }
-        return null;
-      })();
-      try {
-        const s = await resuming;
-        if (!s) resumeFailedAt = Date.now();
-        else announceLive();
-        return s;
-      } finally { resuming = null; }
-    },
+    // signers we cannot silently reattach (pasted keys, bunkers without a
+    // stored session).
+    nostrLoginResume() { return resumeLogin(); },
     unlockExtra() { return unlockExtra(); },
     // The welcome screen's sign-in block: Google and passkey act right there;
     // the Nostr button steps into the wizard's signer list.

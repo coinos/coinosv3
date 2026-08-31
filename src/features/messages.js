@@ -1739,7 +1739,7 @@ export function messagesFeature(ctx) {
         addr = want + '@' + oldAddr.split('@')[1];
       }
       const merged = { ...base };
-      for (const [k, v] of [['name', e.name], ['about', e.about], ['picture', e.picture]]) {
+      for (const [k, v] of [['name', e.name], ['about', e.about], ['picture', e.picture], ['banner', e.banner]]) {
         if (v.trim()) merged[k] = v.trim();
         else delete merged[k];
       }
@@ -1823,6 +1823,7 @@ export function messagesFeature(ctx) {
         name: (full || {}).display_name || p.name || '',
         about: p.about || '',
         picture: p.picture || '',
+        banner: (full || {}).banner || '',
       };
       ui.profEditFilled = full !== undefined;
     }
@@ -1834,6 +1835,7 @@ export function messagesFeature(ctx) {
       if (!e.name) e.name = full.display_name || full.name || '';
       if (!e.about) e.about = full.about || '';
       if (!e.picture) e.picture = full.picture || '';
+      if (!e.banner) e.banner = full.banner || '';
     }
     const name = displayName(pk);
     const npub = npubOf(pk) || pk;
@@ -1858,9 +1860,15 @@ export function messagesFeature(ctx) {
     // an about of "~" or a lone character is noise, not a bio
     const about = full && typeof full.about === 'string' ? full.about.trim() : '';
     const showAbout = about.length > 1;
+    // The cover photo: nostr's standard kind-0 `banner`. Legacy coinos.io
+    // wore these proudly — migrated accounts bring theirs along, and anyone
+    // can set one in the editor below.
+    const bannerUrl = full && typeof full.banner === 'string' && /^https?:\/\//i.test(full.banner.trim())
+      ? full.banner.trim() : null;
     return h('div', { class: 'col', style: 'gap:16px' },
       ctx.brandHeader(false),
       h('div', { class: 'card col', style: 'gap:12px' },
+        bannerUrl ? h('div', { class: 'profile-banner', style: `background-image:url(${JSON.stringify(bannerUrl)})` }) : null,
         h('div', { class: 'row gap6', style: 'align-items:center' },
           avatar(pk, 'chat-avatar profile-avatar', false),
           h('div', { class: 'col grow', style: 'min-width:0;gap:2px' },
@@ -1910,6 +1918,24 @@ export function messagesFeature(ctx) {
                     if (!f || !ctx.uploadImage) return;
                     ui.profUploading = true; render();
                     try { if (ui.profEdit) ui.profEdit.picture = await ctx.uploadImage(f); }
+                    catch (err) { toast(err.message); }
+                    ui.profUploading = false; render();
+                  },
+                })),
+              field(t('profBanner'), 'banner', 'https://…'),
+              h('div', { class: 'row gap6' },
+                h('button', {
+                  class: 'btn-sm', type: 'button', disabled: !!ui.profUploading,
+                  onClick: () => document.getElementById('prof-banner-file')?.click(),
+                }, ui.profUploading ? h('span', { class: 'spinner sm' }) : t('profUploadBanner')),
+                h('input', {
+                  id: 'prof-banner-file', type: 'file', accept: 'image/*', style: 'display:none',
+                  onChange: async (e) => {
+                    const f = e.target.files && e.target.files[0];
+                    e.target.value = '';
+                    if (!f || !ctx.uploadImage) return;
+                    ui.profUploading = true; render();
+                    try { if (ui.profEdit) ui.profEdit.banner = await ctx.uploadImage(f); }
                     catch (err) { toast(err.message); }
                     ui.profUploading = false; render();
                   },
@@ -2708,6 +2734,34 @@ export function messagesFeature(ctx) {
     // Publish (merge) kind-0 fields for the current identity — the onboarding
     // wizard sets name + picture through this.
     publishProfile(fields, opts = {}) { return publishProfileFields(fields, opts); },
+    // A migrated coinos.io account brings its face with it: fetch the legacy
+    // avatar and cover art and fill our kind 0's EMPTY slots — fill, never
+    // overwrite, so an existing nostr identity keeps its own look. The light
+    // cache is pre-warmed so the wizard's punk-picker skip sees the picture
+    // before the publish round-trips.
+    async adoptLegacyProfile(username) {
+      try {
+        const u = await fetch(`https://coinos.io/api/users/${encodeURIComponent(username)}`).then((r) => r.json());
+        if (!u) return true;
+        const hosted = (v) => `https://coinos.io/api/public/${v}.webp`;
+        const picture = u.profile ? hosted(u.profile)
+          : typeof u.picture === 'string' && /^https?:\/\//i.test(u.picture) ? u.picture : null;
+        const banner = !u.banner ? null
+          : /^https?:\/\//i.test(String(u.banner)) ? String(u.banner) : hosted(u.banner);
+        if (!picture && !banner) return true;
+        const pk = myPubkeys()[0];
+        if (pk && picture) {
+          const cur = profiles.get(pk);
+          if (!(cur && cur.picture)) {
+            profiles.set(pk, { ...(cur || {}), picture, t: Date.now() });
+            preloadPicture({ picture });
+            scheduleRepaint();
+          }
+        }
+        await publishProfileFields({ picture, banner }, { fillOnly: ['picture', 'banner'] });
+      } catch {}
+      return true;
+    },
     // A payment-address rename released the old name: repoint the kind 0's
     // lud16 and nip05 — but only where they pointed at the released address
     // (or were empty). Deliberately different values are not ours to touch.

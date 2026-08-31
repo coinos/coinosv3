@@ -437,6 +437,15 @@ hr.divider { margin: 16px 0; }
 .send-suggest { max-height: 260px; overflow-y: auto; }
 .clickable { cursor: pointer; }
 .profile-avatar { width: 64px; height: 64px; font-size: 18px; }
+/* profile cover: full-bleed across the top of the profile card; the avatar
+   row overlaps it so the face sits half on the cover, half on paper */
+.profile-banner {
+  height: 118px; margin: -20px -20px 0; background-size: cover; background-position: center;
+  border-radius: var(--radius) var(--radius) 0 0;
+}
+.profile-banner + .row .profile-avatar {
+  margin-top: -26px; border: 3px solid var(--paper); box-sizing: content-box;
+}
 .zap-chip { display: inline-flex; gap: 5px; align-items: center; cursor: pointer; background: var(--surface2); border: 1px solid var(--line); border-radius: 999px; padding: 1px 8px 1px 2px; }
 .chat-avatar.mini { width: 18px; height: 18px; font-size: 8px; flex-shrink: 0; }
 .chat-avatar.fallback { position: relative; overflow: hidden; }
@@ -656,6 +665,7 @@ body::after {
 @media (max-height: 620px) {
   #app { padding-top: 12px; padding-bottom: 12px; }
   .card { padding: 16px; }
+  .profile-banner { margin: -16px -16px 0; }
   .footer { padding-top: 14px; padding-bottom: 0; }
   .tabs { margin: 10px 0; }
 }

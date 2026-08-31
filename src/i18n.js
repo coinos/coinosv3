@@ -259,6 +259,8 @@ const STR = {
     profName: 'Name',
     profAbout: 'About',
     profPicture: 'Picture URL',
+    profBanner: 'Cover photo URL',
+    profUploadBanner: 'Upload cover',
     profSaved: 'Profile published',
     hats: 'Hats',
     hatShopSupport: 'Support Coinos, Buy a Hat!',

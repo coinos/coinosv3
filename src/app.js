@@ -3019,8 +3019,16 @@ function claimMigratedName() {
   const attempt = () => {
     const p = featureHook('namesClaimName', name);
     if (!p || !p.then) { if (++tries < 12) return setTimeout(attempt, 5000); ui.migrating = null; return; }
-    p.then(() => {
+    p.then(async () => {
       try { localStorage.removeItem(MIGRATED_KEY); } catch {}
+      // Bring the old account's face and cover along — filled into empty
+      // kind-0 slots only. Bounded wait: the wizard's punk-picker skip
+      // checks the cached picture right after this, and losing the race
+      // would ask a migrated user to restyle the profile they already have.
+      await Promise.race([
+        Promise.resolve(featureHook('adoptLegacyProfile', name)).catch(() => {}),
+        new Promise((r) => setTimeout(r, 5000)),
+      ]);
       ui.migrating = null;
       // Mid-onboarding: the migrate step's job is done — move the wizard
       // along instead of re-offering the page that was just completed. A

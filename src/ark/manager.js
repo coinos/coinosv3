@@ -276,7 +276,14 @@ export class ArkManager {
     const mailbox = this._mailboxKey();
     const { messages } = await readMailbox(this.arkUrl, mailbox, this.state.mailboxCheckpoint);
     let changed = false;
-    for (const m of messages) changed = (await this._processMailboxMessage(m)) || changed;
+    for (const m of messages) {
+      // A transiently-failing message stops the batch: processing the ones
+      // behind it would advance the cursor past it (see the hold logic in
+      // _processMailboxMessage) — the next poll re-reads from where it
+      // stands, so nothing behind the failure is lost either.
+      try { changed = (await this._processMailboxMessage(m)) || changed; }
+      catch (e) { console.warn('ark: mailbox message deferred —', e.message); break; }
+    }
     // Everything the first catch-up found is history, not news.
     if (baselining) {
       this.state.receiveAckTs = Date.now();
@@ -298,9 +305,31 @@ export class ArkManager {
   // Handle one mailbox message (from a poll or the live stream). Returns
   // whether state changed; the caller saves. Duplicate-safe: vtxos dedupe by
   // id and the checkpoint only moves forward.
+  //
+  // The cursor moves only AFTER the message's work is done — a final
+  // rejection counts as done, a transient failure does not. Advancing first
+  // meant one esplora hiccup mid-validation skipped a coin forever: the
+  // throw aborted adoption, the cursor had already moved in memory, any
+  // later save persisted it, and every future read started past the
+  // message (monogram's 204-sat receive sat invisible for two days). And a
+  // stuck message is never leapt: later messages may process fine, but the
+  // cursor holds at the lowest failed checkpoint until it clears — else a
+  // healthy message right behind the sick one would skip it just the same.
   async _processMailboxMessage(m) {
+    try {
+      const changed = await this._handleMailboxMessage(m);
+      if (this._mailboxStuckAt === m.checkpoint) this._mailboxStuckAt = null;
+      if (this._mailboxStuckAt != null && m.checkpoint > this._mailboxStuckAt) return changed;
+      if (m.checkpoint > this.state.mailboxCheckpoint) { this.state.mailboxCheckpoint = m.checkpoint; return true; }
+      return changed;
+    } catch (e) {
+      if (this._mailboxStuckAt == null || m.checkpoint < this._mailboxStuckAt) this._mailboxStuckAt = m.checkpoint;
+      throw e;
+    }
+  }
+
+  async _handleMailboxMessage(m) {
     let changed = false;
-    if (m.checkpoint > this.state.mailboxCheckpoint) { this.state.mailboxCheckpoint = m.checkpoint; changed = true; }
     if (m.kind === 'lnSendFinished') {
       const a = this.state.actions.find((x) =>
         x.type === 'ln-pay' && x.paymentHash === m.paymentHash && !['done', 'failed'].includes(x.step));

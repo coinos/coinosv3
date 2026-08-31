@@ -158,12 +158,18 @@ async function inboxRelaysOf(pubkey) {
   return [];
 }
 
-async function sendWelcome(pubkey) {
+async function sendWelcome(pubkey, linkedKeys = []) {
   if (!WELCOME) return;
   state.welcomed ||= {};
-  if (state.welcomed[pubkey]) return;
-  state.welcomed[pubkey] = Date.now();
+  // One welcome per PERSON, not per key: a Google sign-up claims twice —
+  // the wallet key takes the placeholder name, then the real npub takes
+  // its own with the wallet key as manager — and greeting each pubkey put
+  // two identical DMs in the same inbox.
+  const keys = [pubkey, ...linkedKeys].filter((k) => /^[0-9a-f]{64}$/.test(k || ''));
+  const seen = keys.some((k) => state.welcomed[k]);
+  for (const k of keys) state.welcomed[k] ||= Date.now();
   persist();
+  if (seen) return;
   try {
     // wrapManyEvents returns [sender-copy, recipient] — publish ONLY the
     // recipient's wrap. A sender copy per registrant flooded Adam's own
@@ -1220,7 +1226,7 @@ Bun.serve({
       };
       persist();
       log(`${existing ? 'updated' : 'registered'} ${key} for ${auth.pubkey.slice(0, 12)}`);
-      if (!existing) sendWelcome(state.names[key].pubkey).catch(() => {});
+      if (!existing) sendWelcome(state.names[key].pubkey, [state.names[key].manager]).catch(() => {});
       return json({ ok: true, name, address: key, record: recordName(name, domain) });
     }
 

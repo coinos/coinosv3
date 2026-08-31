@@ -33,7 +33,14 @@ export async function wrapDM(skOrSigner, receiverPk, rumor, extraTags = []) {
     kind: 13,
     content: await signer.encryptTo(receiverPk, JSON.stringify(rumor)),
     tags: [],
-    created_at: tweaked(),
+    // NIP-59 backdates the seal too, but only the recipient ever sees it
+    // (it rides encrypted inside the wrap) — and some remote signers, the
+    // pomegranate FROST operators among them, refuse to sign anything dated
+    // in the past ("can't sign event in past" killed every Google-account
+    // DM). A local key keeps the spec's letter; a remote signer signs now.
+    // The wrap below keeps its tweak either way — the ephemeral key that
+    // signs it is ours and local, and that's the layer the public sees.
+    created_at: skOrSigner instanceof Uint8Array ? tweaked() : now(),
   });
   const eph = generateSecretKey();
   return finalizeEvent(

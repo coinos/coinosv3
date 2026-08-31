@@ -2331,7 +2331,8 @@ export function arkFeature(ctx) {
     try {
       const feeRate = (wallet.feeRates && wallet.feeRates.halfHourFee) || 5;
       const hrp = { bitcoin: 'bc', regtest: 'bcrt' }[ark && ark.info && ark.info.network] || 'tb';
-      const dest = ark ? p2trAddress(ark._key(0).pubkey, hrp) : wallet.freshChange().address;
+      // _key() hands back a compressed point; the witness program is x-only
+      const dest = ark ? p2trAddress(ark._key(0).pubkey.slice(1), hrp) : wallet.freshChange().address;
       const draft = wallet.buildTx({ recipients: [{ address: dest, amount: 0 }], feeRate, sendMax: true });
       return Math.max(0, (draft.outputs[0]?.amount || 0));
     } catch {

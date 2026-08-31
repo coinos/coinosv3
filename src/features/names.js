@@ -753,7 +753,18 @@ export function namesFeature(ctx) {
           h('h3', {}, t('namesCustom')),
           addr ? h('div', { class: 'addr-box break', style: 'font-size:14px' }, addr) : null,
           h('p', { class: 'small muted', style: 'margin:0' }, t('namesCustomHow')),
-          claimForm(true)),
+          claimForm(true),
+          // The same door the onboarding wizard offers — a coinos.io veteran
+          // who skipped it there shouldn't have to make a new account to find
+          // it again. Round trip: coinos.io sweeps + releases, the ?migrated=
+          // return claims the name into this wallet. Mainnet only — staging
+          // names have no legacy counterpart.
+          addr && DOMAIN() === 'coinos.io' ? h('button', {
+            class: 'linklike small', style: 'align-self:center;margin-top:6px',
+            onClick: () => {
+              location.href = `https://coinos.io/migrate?to=${encodeURIComponent(addr)}&back=${encodeURIComponent(location.origin + '/')}`;
+            },
+          }, t('onbHaveCoinos')) : null),
         h('button', { class: 'btn-ghost btn-block', onClick: () => goBack(() => { ui.nameEditOpen = null; ui.nameClaimError = null; }) }, t('back')));
     },
     namesAdoptIdentity(signer, npub) { return adoptIdentity(signer, npub); },

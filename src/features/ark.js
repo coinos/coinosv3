@@ -8,7 +8,7 @@ import { hex, base32nopad, bech32 } from '@scure/base';
 import { sha256 } from '@noble/hashes/sha256';
 import { ArkManager } from '../ark/manager.js';
 import { loadBg, saveBg, buildBg, disarmSiblingRecords } from '../nwc-bg.js';
-import { boardFee } from '../ark/board.js';
+import { boardFee, p2trAddress } from '../ark/board.js';
 import { maybeBolt11, maybeLnInvoice, lnSendFee } from '../ark/lightning.js';
 import { decodeVtxo, getVtxoStatus, VTXO_STATE_SPENT, concatBytes } from '../ark/proto.js';
 import { signedExitTxs, buildBumpChild, buildExitClaim, submitPackage } from '../ark/exit.js';
@@ -2321,11 +2321,18 @@ export function arkFeature(ctx) {
   }
 
   // Boarding drains an on-chain balance, so Max must leave room for the
-  // mining fee: ask the tx builder what a sweep would actually deliver.
+  // mining fee: ask the tx builder what a sweep would actually deliver — TO
+  // THE REAL OUTPUT SHAPE. The board funding address is P2TR, 12 vbytes
+  // bigger than this wallet's P2WPKH change; drafting the sweep against
+  // change priced Max a dozen sats past what the funding transaction could
+  // carry, and tapping Max earned "insufficient funds". The manager's own
+  // key stands in for the funding key — same size, always a valid point.
   function maxBoardSat() {
     try {
       const feeRate = (wallet.feeRates && wallet.feeRates.halfHourFee) || 5;
-      const draft = wallet.buildTx({ recipients: [{ address: wallet.freshChange().address, amount: 0 }], feeRate, sendMax: true });
+      const hrp = { bitcoin: 'bc', regtest: 'bcrt' }[ark && ark.info && ark.info.network] || 'tb';
+      const dest = ark ? p2trAddress(ark._key(0).pubkey, hrp) : wallet.freshChange().address;
+      const draft = wallet.buildTx({ recipients: [{ address: dest, amount: 0 }], feeRate, sendMax: true });
       return Math.max(0, (draft.outputs[0]?.amount || 0));
     } catch {
       return 0;

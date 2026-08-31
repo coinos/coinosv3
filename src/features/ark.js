@@ -2340,6 +2340,13 @@ export function arkFeature(ctx) {
     }
   }
 
+  // The ASP decides how many confirmations a board needs — say that number,
+  // not a hardcoded one that contradicts the n/need counter under the balance.
+  const boardedNote = () => {
+    const n = (ark && ark.info && ark.info.requiredBoardConfirmations) || 1;
+    return n === 1 ? t('arkBoardedNoteOne') : t('arkBoardedNote', { n });
+  };
+
   function boardForm() {
     const minBoard = (ark && ark.info && ark.info.minBoardAmountSat) || 0;
     const canBoard = wallet.spendable >= minBoard;
@@ -2471,7 +2478,7 @@ export function arkFeature(ctx) {
         h('div', { class: 'check-badge' }, '✓'),
         h('h2', { style: 'margin:0' }, t('arkBoardedTitle')),
         h('div', { class: 'amount-pos', style: 'font-size:18px' }, '+' + fmtAmount(b.netSat) + ' ' + unitLabel()),
-        h('p', { class: 'small muted', style: 'margin:0' }, t('arkBoardedNote')),
+        h('p', { class: 'small muted', style: 'margin:0' }, boardedNote()),
         h('div', { class: 'addr-box', style: 'width:100%' }, b.txid),
         h('div', { class: 'row gap6' },
           copyBtn(b.txid, t('copyTxid')),
@@ -2953,7 +2960,7 @@ export function arkFeature(ctx) {
               h('span', { class: 'k' }, t('arkBoardFeeLabel')),
               h('span', { class: 'v' }, fmtAmount(a.feeSat) + ' ' + unitLabel()))
           : null,
-        done ? null : h('div', { class: 'small muted', style: 'margin-top:2px' }, t('arkBoardedNote')));
+        done ? null : h('div', { class: 'small muted', style: 'margin-top:2px' }, boardedNote()));
     },
 
     // ---- ark-gift hooks (called by the gifts feature via ctx.hook) ----

@@ -443,8 +443,13 @@ hr.divider { margin: 16px 0; }
   height: 118px; margin: -20px -20px 0; background-size: cover; background-position: center;
   border-radius: var(--radius) var(--radius) 0 0;
 }
+/* The overlap must move the row's DIRECT child: when a hat is worn that's
+   the .hat-wrap — pulling the avatar up inside the wrap left the hat
+   behind, planted on the face. */
+.profile-banner + .row > .profile-avatar,
+.profile-banner + .row > .hat-wrap { margin-top: -26px; }
 .profile-banner + .row .profile-avatar {
-  margin-top: -26px; border: 3px solid var(--paper); box-sizing: content-box;
+  border: 3px solid var(--paper); box-sizing: content-box;
 }
 .zap-chip { display: inline-flex; gap: 5px; align-items: center; cursor: pointer; background: var(--surface2); border: 1px solid var(--line); border-radius: 999px; padding: 1px 8px 1px 2px; }
 .chat-avatar.mini { width: 18px; height: 18px; font-size: 8px; flex-shrink: 0; }

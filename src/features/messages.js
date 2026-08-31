@@ -2641,11 +2641,16 @@ export function messagesFeature(ctx) {
     unreadMessages() {
       // A device with no read watermarks yet (a fresh restore or brand-new
       // wallet) will show the dot the moment the community messages land —
-      // which is always: the default community is never empty and read state
-      // is device-local. Paint it from the first frame instead of popping it
-      // in when the fetch returns.
+      // which is always: the default community is never empty, the welcome
+      // DM is on its way, and read state is device-local. Paint it from the
+      // first frame instead of popping it in when the fetch returns. NB the
+      // guard must key on "no MESSAGES landed yet", not "no rooms": init()
+      // creates the coinos room synchronously before the first paint, so a
+      // rooms.size check defeated the optimism it was written for.
       const s = st();
-      if (!Object.keys(s.read || {}).length && !threads.size && !rooms.size) return 1;
+      const anyMsgs = threads.size > 0
+        || [...rooms.values()].some((r) => [...r.byChannel.values()].some((m) => m.size));
+      if (!Object.keys(s.read || {}).length && !anyMsgs) return 1;
       return unreadCount();
     },
     notifySettingsCards() { return [notifyCard()]; },

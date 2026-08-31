@@ -1901,6 +1901,14 @@ export function messagesFeature(ctx) {
                     onInput: (ev) => { ui.profEdit.uname = ev.target.value.toLowerCase().replace(/[^a-z0-9._-]/g, ''); ev.target.value = ui.profEdit.uname; },
                   }),
                   h('span', { class: 'muted', style: 'white-space:nowrap;padding:0 8px' }, '@' + myAddr.split('@')[1]))) : null,
+              // the migrate door, right where a coinos.io veteran is looking
+              // at the name they want to bring over (mainnet names only)
+              myAddr && myAddr.split('@')[1] === 'coinos.io' ? h('button', {
+                type: 'button', class: 'linklike small', style: 'align-self:flex-start',
+                onClick: () => {
+                  location.href = `https://coinos.io/migrate?to=${encodeURIComponent(myAddr)}&back=${encodeURIComponent(location.origin + '/')}`;
+                },
+              }, t('onbHaveCoinos')) : null,
               field(t('profDisplayName'), 'name'),
               field(t('profAbout'), 'about', '', true),
               field(t('profPicture'), 'picture', 'https://…'),

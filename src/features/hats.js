@@ -242,8 +242,11 @@ export function hatsFeature(ctx) {
     if (!['mainnet', 'mutinynet'].includes(getNetwork())) { toast(t('hatMainnetOnly')); return; }
     if (!hook('arkReady')) { toast(t('hatNeedSpending')); return; }
     const spendable = hook('arkSpendableSat') || 0;
-    // routing fee headroom: the ASP charges the quoted route fee (~1%)
-    if (spendable < price + Math.ceil(price * 0.02) + 2) {
+    // Routing headroom, honestly sized: the hat invoice lives on the ASP's
+    // own node, so the quoted route fee is ~0–2 sats. The old 2% guard
+    // demanded 42k sats of phantom headroom on the wizard hat and told a
+    // wallet holding 2,133,786 that it couldn't afford 2,100,000.
+    if (spendable < price + Math.max(10, Math.ceil(price * 0.002))) {
       toast(t('hatNoFunds', { sats: fmtSats(price) }));
       return;
     }

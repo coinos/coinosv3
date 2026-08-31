@@ -185,16 +185,27 @@ export function hatsFeature(ctx) {
     return pk ? { pubkey: pk, signer: { signEvent: (e) => wallet.nostrSign(e) } } : null;
   }
 
-  async function post(path, payload, signer) {
+  // Safari reports a dropped request as the bare "Load failed", and a fresh
+  // PWA's first tap is prime territory for exactly one of those. Retry a
+  // NETWORK-shaped failure once, transparently (a fresh NIP-98 header each
+  // attempt); a real refusal from the registrar never re-posts. Safe for
+  // both posts: /hats/invoice mints anew, /hats/claim is idempotent.
+  const NETWORKISH = /load failed|failed to fetch|network|timed? ?out/i;
+  async function post(path, payload, signer, attempt = 0) {
     const url = `${REGISTRAR}${path}`;
     const body = JSON.stringify(payload);
-    const auth = await withTimeout(nip98Header(signer, url, 'POST', body), 12000, 'signing');
-    const r = await withTimeout(fetch(url, {
-      method: 'POST', headers: { 'content-type': 'application/json', authorization: auth }, body,
-    }), 12000, 'registrar');
-    const j = await r.json().catch(() => ({}));
-    if (!r.ok || j.error) throw new Error(j.error || `registrar refused (${r.status})`);
-    return j;
+    try {
+      const auth = await withTimeout(nip98Header(signer, url, 'POST', body), 12000, 'signing');
+      const r = await withTimeout(fetch(url, {
+        method: 'POST', headers: { 'content-type': 'application/json', authorization: auth }, body,
+      }), 12000, 'registrar');
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || j.error) throw new Error(j.error || `registrar refused (${r.status})`);
+      return j;
+    } catch (e) {
+      if (attempt < 1 && NETWORKISH.test(e.message || '')) return post(path, payload, signer, attempt + 1);
+      throw e;
+    }
   }
 
   // ---- the shop -----------------------------------------------------------
@@ -210,7 +221,7 @@ export function hatsFeature(ctx) {
     render();
     const me = ctx.shownPubkey();
     if (!me) { ui.hatShopData = { owned: [], equipped: null }; render(); return; }
-    fetch(`${REGISTRAR}/hats/${me}?net=${hatNet()}`).then((r) => r.json()).then((j) => {
+    const attempt = (retriesLeft) => fetch(`${REGISTRAR}/hats/${me}?net=${hatNet()}`).then((r) => r.json()).then((j) => {
       if (!ui.hatShop) return;
       ui.hatShopData = { owned: j.owned || [], equipped: j.equipped || null, prices: j.prices || null };
       const now = Date.now();
@@ -218,8 +229,11 @@ export function hatsFeature(ctx) {
       saveStore();
       render();
     }).catch(() => {
+      // one quiet retry before showing the offline shop — see post()
+      if (retriesLeft > 0) return new Promise((r) => setTimeout(r, 1200)).then(() => attempt(retriesLeft - 1));
       if (ui.hatShop && !ui.hatShopData) { ui.hatShopData = { owned: [], equipped: null, offline: true }; render(); }
     });
+    attempt(1);
   }
   const closeShop = () => { ui.hatShop = null; ui.hatShopData = null; ui.hatConfirm = null; render(); };
 

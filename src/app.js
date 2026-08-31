@@ -2729,7 +2729,12 @@ function onboardScreen() {
     try { saved = localStorage.getItem(ONB_STEP_KEY); } catch {}
     // a saved step past wallet creation only makes sense if the wallet is here
     if (saved && !['welcome', 'signin', 'seed'].includes(saved) && !activeAccount()) saved = 'welcome';
-    ui.onb = { step: saved || 'welcome' };
+    // 'legacy-went' survives the coinos.io round trip: the user left for the
+    // migrate page, so coming back must offer "I'm done, continue" — the
+    // in-memory flag died with the navigation and left them looping.
+    ui.onb = saved === 'legacy-went'
+      ? { step: 'legacy', wentToLegacy: true }
+      : { step: saved || 'welcome' };
     if (saved === 'signin') ui.nostrLoginOpen = true; // reopen the login card
   }
   const o = ui.onb;
@@ -2763,7 +2768,7 @@ function onboardScreen() {
       o.step = prof && prof.picture ? nextAfterAvatar() : 'avatar';
     }
   }
-  try { localStorage.setItem(ONB_STEP_KEY, o.step); } catch {}
+  try { localStorage.setItem(ONB_STEP_KEY, o.step === 'legacy' && o.wentToLegacy ? 'legacy-went' : o.step); } catch {}
   const page = (kids) => h('div', { class: 'col onb', style: 'gap:20px' }, ...kids);
   const title = (txt) => h('h2', { class: 'onb-title' }, txt);
   // After the identity niceties: offer a first top-up when Savings can fund
@@ -2792,17 +2797,25 @@ function onboardScreen() {
         if (!addr) { ui.onbError = t('onbLegacyNoAddr'); render(); return; }
       }
       o.wentToLegacy = true;
+      // persist NOW — location.href never comes back through a render
+      try { localStorage.setItem(ONB_STEP_KEY, 'legacy-went'); } catch {}
       location.href = `https://coinos.io/migrate?to=${encodeURIComponent(addr)}&back=${encodeURIComponent(location.origin + '/')}`;
     };
+    // A migrated name mid-claim (the ?migrated= return) paints as progress
+    // here, not as the pristine ask the user just finished answering.
+    const claiming = ui.migrating || pendingMigratedName();
     return page([
       title(t('onbLegacyTitle')),
-      h('p', { class: 'muted', style: 'margin:0' }, t('onbLegacyBody')),
-      h('button', {
-        class: 'btn-primary btn-block', style: 'padding:14px',
-        disabled: !!o.legacyBusy, onClick: goLegacy,
-      }, o.legacyBusy ? h('span', { class: 'spinner sm' }) : t('onbLegacyGo')),
+      h('p', { class: 'muted', style: 'margin:0' },
+        claiming ? t('migrateWorking', { name: claiming }) : t('onbLegacyBody')),
+      claiming
+        ? h('div', { class: 'row gap6', style: 'justify-content:center;padding:8px 0' }, h('span', { class: 'spinner' }))
+        : h('button', {
+            class: 'btn-primary btn-block', style: 'padding:14px',
+            disabled: !!o.legacyBusy, onClick: goLegacy,
+          }, o.legacyBusy ? h('span', { class: 'spinner sm' }) : t('onbLegacyGo')),
       h('button', { class: 'btn-block', style: 'padding:14px', onClick: () => { o.step = 'spend'; render(); } },
-        o.wentToLegacy ? t('onbLegacyDone') : t('back')),
+        o.wentToLegacy || claiming ? t('onbLegacyDone') : t('back')),
       ui.onbError ? h('div', { class: 'notice err' }, ui.onbError) : null,
     ]);
   }
@@ -2978,25 +2991,49 @@ function onboardScreen() {
 }
 
 // Returning from the legacy migration: coinos.io sends ?migrated=<username>
-// once it has swept the balance and released the name. Claim it here — the
-// registrar's "is this a legacy user?" guard now passes.
+// once it has swept the balance and released the name. The param is stashed
+// SYNCHRONOUSLY at boot (module init below) because the claim itself needs
+// an open wallet — which can arrive well after any single post-load timer.
+// The old one-shot ("1.5s after load, if a wallet is active") silently
+// dropped the whole hand-off whenever the wallet wasn't ready yet, and the
+// user came back to a migrate page that had no idea they'd just migrated.
+const MIGRATED_KEY = 'btc-wallet-migrated-name';
+try {
+  const _mu = new URL(location.href);
+  const _mn = _mu.searchParams.get('migrated');
+  if (_mn) {
+    localStorage.setItem(MIGRATED_KEY, _mn);
+    _mu.searchParams.delete('migrated');
+    history.replaceState(null, '', _mu.pathname + _mu.search + _mu.hash);
+  }
+} catch {}
+function pendingMigratedName() {
+  try { return localStorage.getItem(MIGRATED_KEY); } catch { return null; }
+}
 function claimMigratedName() {
-  let name = null;
-  try {
-    const u = new URL(location.href);
-    name = u.searchParams.get('migrated');
-    if (name) { u.searchParams.delete('migrated'); history.replaceState(null, '', u.pathname + u.search); }
-  } catch {}
-  if (!name) return;
+  const name = pendingMigratedName();
+  if (!name || ui.migrating) return;
   ui.migrating = name;
   render();
   let tries = 0;
   const attempt = () => {
-    featureHook('namesClaimName', name)
-      .then(() => { ui.migrating = null; toast(t('migrateClaimed', { name })); render(); })
+    const p = featureHook('namesClaimName', name);
+    if (!p || !p.then) { if (++tries < 12) return setTimeout(attempt, 5000); ui.migrating = null; return; }
+    p.then(() => {
+      try { localStorage.removeItem(MIGRATED_KEY); } catch {}
+      ui.migrating = null;
+      // Mid-onboarding: the migrate step's job is done — move the wizard
+      // along instead of re-offering the page that was just completed. A
+      // null enterAddr lets the spend step see the claimed name as change
+      // and advance on its own.
+      if (ui.onb && ui.onb.step === 'legacy') { ui.onb.step = 'spend'; ui.onb.enterAddr = null; }
+      toast(t('migrateClaimed', { name }));
+      render();
+    })
       .catch(() => {
         // DNS/registrar caches the legacy lookup briefly; give it a minute
         if (++tries < 12) return setTimeout(attempt, 5000);
+        try { localStorage.removeItem(MIGRATED_KEY); } catch {}
         ui.migrating = null;
         toast(t('migrateClaimFailed', { name }));
         render();
@@ -4534,7 +4571,17 @@ document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden') onAppHidden();
   else onAppVisible();
 });
-window.addEventListener('load', () => setTimeout(() => { if (activeAccount()) claimMigratedName(); }, 1500));
+// Claim a stashed migrated name as soon as a wallet is actually open — a
+// vault unlock or slow boot can put that minutes after 'load'. The stash
+// survives reloads, so an unfinished claim resumes on the next visit too.
+window.addEventListener('load', () => {
+  if (!pendingMigratedName()) return;
+  const started = Date.now();
+  const tick = setInterval(() => {
+    if (!pendingMigratedName() || Date.now() - started > 10 * 60_000) return clearInterval(tick);
+    if (activeAccount()) { clearInterval(tick); claimMigratedName(); }
+  }, 1000);
+});
 loadLocale(getLang()).finally(async () => {
   applyBootAutoLogout(); // clear an overdue session before we read it for claim targets
   // A gift link's feature is deferred — wait for it before asking who owns

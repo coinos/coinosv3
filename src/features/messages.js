@@ -2620,13 +2620,15 @@ export function messagesFeature(ctx) {
     // A seed minted seconds ago has no kind-0 anywhere — don't make the
     // avatar sit white while a relay lookup confirms that; paint the punk now.
     identityGenerated() {
-      identity().then((id) => {
-        if (!id) return;
-        const entry = { name: null, picture: null, t: Date.now() };
-        profiles.set(id.pubkey, entry);
-        persistProfile(id.pubkey, entry);
-        scheduleRepaint();
-      }).catch(() => {});
+      // Synchronous on purpose: identity() can await a signer resume, and
+      // the header sat avatar-less for that beat. A generated seed's pubkey
+      // is right here — paint the punk before the next frame.
+      const pk = (hook('nostrLoginIdentity') || {}).pubkey || (wallet.nostr && wallet.nostr.pk);
+      if (!pk) return;
+      const entry = { name: null, picture: null, t: Date.now() };
+      profiles.set(pk, entry);
+      persistProfile(pk, entry);
+      scheduleRepaint();
     },
     headerAvatar(pk) {
       // A fresh node every render: the morph keeps the live element (and its

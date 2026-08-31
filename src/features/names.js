@@ -771,6 +771,10 @@ export function namesFeature(ctx) {
     // 'pending' while the restore/claim pass is still running — the wallet
     // screen holds spending-setup prompts until the name question is settled.
     namesSettled() { return checked ? 'yes' : 'pending'; },
+    // A seed minted seconds ago has nothing to restore anywhere: don't make
+    // the spending-setup ask wait out registrar round trips that only exist
+    // for wallets with a history. The background claim still runs.
+    identityGenerated() { checked = true; },
     // the onboarding wizard renders the same claim form on its username step
     namesClaimForm() { return claimForm(true); },
     // claim a specific name (the migration flow, after coinos.io released it)

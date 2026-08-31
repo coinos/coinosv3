@@ -1645,7 +1645,9 @@ export function arkFeature(ctx) {
       h('div', { class: 'card col', style: 'gap:8px' },
         h('h3', { style: 'margin:0' }, t('arkCoinsTitle')),
         h('p', { class: 'small muted', style: 'margin:0' },
-          t('arkCoinsIntro', { n: spend.length, total: fmtAmount(totalSat) + ' ' + unitLabel() })),
+          spend.length === 1
+            ? t('arkCoinsIntroOne', { total: fmtAmount(totalSat) + ' ' + unitLabel() })
+            : t('arkCoinsIntro', { n: spend.length, total: fmtAmount(totalSat) + ' ' + unitLabel() })),
         // One coin per row, two lines: the amount (with its renewal price on
         // the right — the number this page's action spends), then a faint
         // meta line. Five flexed columns fit a laptop but wrapped into

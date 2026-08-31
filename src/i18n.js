@@ -210,6 +210,7 @@ const STR = {
     arkSpentElsewhereN: '{n} coins',
     arkCoinsTitle: 'Spending coins',
     arkCoinsIntro: 'Your Spending balance lives in {n} coins totalling {total}. Each can be pulled on-chain without the server’s help — at a cost that grows with the coin’s history.',
+    arkCoinsIntroOne: 'Your Spending balance lives in a single coin of {total}. It can be pulled on-chain without the server’s help — at a cost that grows with the coin’s history.',
     arkCoinsRowMeta: '{exp} · depth {d} · exit fee {exit}',
     arkCoinsRowRenew: 'renew {fee}',
     arkCoinsExpIn: 'expires in {when}',

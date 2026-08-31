@@ -28,7 +28,7 @@ const ADMIN_PK = '98ae4da926c471c23fd12d1ebdd5839ba82917baa618e184e0c9916d93dcf4
 const svg = (inner) => `<svg viewBox="0 0 64 44" xmlns="http://www.w3.org/2000/svg">${inner}</svg>`;
 const HATS = [
   {
-    id: 'beanie', nameKey: 'hatBeanie', sat: 21, w: 92, b: 98, r: -8,
+    id: 'beanie', nameKey: 'hatBeanie', sat: 21, w: 92, b: 88, r: -8,
     art: svg(`<circle cx="32" cy="9" r="6" fill="#f3e6c9" stroke="#c9a96e" stroke-width="0.9"/><path d="M29 7 q3 -2 6 0 M29.5 11 q2.5 2 5 0" stroke="#d9c49a" stroke-width="1" fill="none" stroke-linecap="round"/>
       <path d="M11 34 Q11 12 32 12 Q53 12 53 34 Z" fill="#e0554a"/>
       <path d="M20 14.5 Q26 25 25 32 M32 12.5 Q32 23 32 32 M44 14.5 Q38 25 39 32" stroke="#c9443b" stroke-width="2" fill="none"/>
@@ -36,7 +36,7 @@ const HATS = [
       <path d="M15 33 V39.5 M23 32.5 V40.5 M31 32.5 V40.5 M39 32.5 V40.5 M47 33 V39.5" stroke="#b23a32" stroke-width="2"/>`),
   },
   {
-    id: 'trucker', nameKey: 'hatTrucker', sat: 2100, w: 106, b: 88, r: -6,
+    id: 'trucker', nameKey: 'hatTrucker', sat: 2100, w: 106, b: 78, r: -6,
     art: svg(`<path d="M9 33 Q9 10 29 10 Q49 10 49 33 Z" fill="#3579c2"/>
       <path d="M17 33 Q17 14 29 14 Q41 14 41 33 Z" fill="#f2f5f8"/>
       <text x="29" y="28" font-size="14" font-weight="700" text-anchor="middle" fill="#f7931a" font-family="system-ui,sans-serif">₿</text>
@@ -45,7 +45,7 @@ const HATS = [
       <rect x="9" y="32" width="39" height="5" rx="2.5" fill="#2a5f9c"/>`),
   },
   {
-    id: 'cowboy', nameKey: 'hatCowboy', sat: 21000, w: 122, b: 88, r: -7,
+    id: 'cowboy', nameKey: 'hatCowboy', sat: 21000, w: 122, b: 78, r: -7,
     art: svg(`<path d="M21 26 Q21 5 32 5 Q43 5 43 26 Z" fill="#a97844"/>
       <path d="M32 5.5 Q29.5 14 31 24" stroke="#8a5f33" stroke-width="1.8" fill="none"/>
       <rect x="20" y="20.5" width="24" height="5" rx="2" fill="#6f4a26"/>
@@ -53,21 +53,21 @@ const HATS = [
       <path d="M8 28 Q17 32.5 32 32.5 Q47 32.5 56 28" stroke="#8a5f33" stroke-width="1.5" fill="none"/>`),
   },
   {
-    id: 'fedora', nameKey: 'hatFedora', sat: 21000, w: 118, b: 90, r: -8,
+    id: 'fedora', nameKey: 'hatFedora', sat: 21000, w: 118, b: 80, r: -8,
     art: svg(`<path d="M18 29 L20 11 Q32 6 44 11 L46 29 Z" fill="#4c525b" stroke="rgba(255,255,255,.1)" stroke-width="0.8"/>
       <path d="M20 11 Q32 15.5 44 11" stroke="#3a3f47" stroke-width="2" fill="none"/>
       <path d="M17.4 23 L46.6 23 L47 29 L17 29 Z" fill="#23262c"/>
       <path d="M6 31 Q32 25 58 31 Q58 37 32 37.5 Q6 37 6 31 Z" fill="#3a3f47" stroke="rgba(255,255,255,.1)" stroke-width="0.8"/>`),
   },
   {
-    id: 'bowler', nameKey: 'hatBowler', sat: 210000, w: 104, b: 90, r: -7,
+    id: 'bowler', nameKey: 'hatBowler', sat: 210000, w: 104, b: 80, r: -7,
     art: svg(`<path d="M15 29 Q15 7 32 7 Q49 7 49 29 Z" fill="#2b2e35" stroke="rgba(255,255,255,.14)" stroke-width="0.8"/>
       <path d="M22 11 Q27 8.5 33 9.5" stroke="#464b55" stroke-width="2" fill="none" stroke-linecap="round"/>
       <path d="M14.6 24 L49.4 24 L49.6 29 L14.4 29 Z" fill="#17191d"/>
       <path d="M7 31 Q7 26.5 13 29 L51 29 Q57 26.5 57 31 Q57 36 32 36 Q7 36 7 31 Z" fill="#17191d" stroke="rgba(255,255,255,.14)" stroke-width="0.8"/>`),
   },
   {
-    id: 'top', nameKey: 'hatTop', sat: 210000, w: 96, b: 92, r: -7,
+    id: 'top', nameKey: 'hatTop', sat: 210000, w: 96, b: 82, r: -7,
     art: svg(`<path d="M17 5 Q32 1.5 47 5 L45.5 28 L18.5 28 Z" fill="#26282f" stroke="rgba(255,255,255,.14)" stroke-width="0.8"/>
       <path d="M18.7 22 L45.3 22 L45.6 28 L18.4 28 Z" fill="#b6382e"/>
       <path d="M7 30.5 Q7 26.5 14 29 L50 29 Q57 26.5 57 30.5 Q57 36 32 36 Q7 36 7 30.5 Z" fill="#17191d" stroke="rgba(255,255,255,.14)" stroke-width="0.8"/>`),
@@ -89,7 +89,9 @@ const HATS = [
   },
 ];
 const hatById = (id) => HATS.find((x) => x.id === id) || null;
-const posStyle = (hat) => `width:${hat.w}%;bottom:${hat.b}%;transform:translateX(${-50 + (hat.dx || 0)}%) rotate(${hat.r}deg)`;
+// -55, not -50: every hat rides a couple of pixels left of center —
+// the art leans right and dead-center read as drifting off the head.
+const posStyle = (hat) => `width:${hat.w}%;bottom:${hat.b}%;transform:translateX(${-55 + (hat.dx || 0)}%) rotate(${hat.r}deg)`;
 
 export function hatsFeature(ctx) {
   const { h, ui, render, wallet, hook, toast, brandHeader } = ctx;

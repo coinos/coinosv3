@@ -137,10 +137,24 @@ export function slimArkForSync(s) {
         .map((v) => ({ id: v.id, amountSat: v.amountSat, state: 'spent', keyIndex: v.keyIndex, expiryHeight: v.expiryHeight }));
       return [...live, ...stubs];
     })(),
-    actions: (s.actions || [])
-      .filter((a) => a.step === 'done' && ['board', 'offboard', 'exit'].includes(a.type))
-      .slice(-50)
-      .map((a) => { const c = { ...a }; for (const k of HEAVY) delete c[k]; return c; }),
+    actions: (() => {
+      const done = (s.actions || []).filter((a) => a.step === 'done');
+      const core = done.filter((a) => ['board', 'offboard', 'exit'].includes(a.type))
+        .slice(-50)
+        .map((a) => { const c = { ...a }; for (const k of HEAVY) delete c[k]; return c; });
+      // Spends travel as SLIVERS — id, net amount, and which coins they
+      // consumed. That last field is what lets ANOTHER device recognize a
+      // vanished coin as this send rather than painting a red "spent on
+      // another device" row beside the synced Sent movement (one spend was
+      // showing twice, at input magnitude the second time).
+      const spends = done.filter((a) => ['send', 'ln-pay'].includes(a.type))
+        .slice(-100)
+        .map((a) => ({
+          id: a.id, type: a.type, step: 'done', amountSat: a.amountSat,
+          inputIds: (a.parts || []).map((p) => p.inputId).concat(a.inputId ? [a.inputId] : []).filter(Boolean),
+        }));
+      return [...core, ...spends];
+    })(),
     movements: (s.movements || []).slice(-200).map((m, i, arr) =>
       // Older rows only need to render a history line; the bolt11 (~400 chars
       // each) and preimage are what pushed snapshots past relay size limits.
@@ -2841,17 +2855,23 @@ export function arkFeature(ctx) {
       // history stops summing to the balance (cooney's looked 29k sats rich).
       // One reconcile pass marks many coins in the same instant — fold each
       // pass (and re-imported duplicates, deduped by coin) into one row.
-      // Coins a renewal is known to have consumed are excluded outright: the
-      // reconcile that noticed them gone was pre-empting the claim, and the
-      // renewed coin already balances the books invisibly.
-      const renewed = new Set();
-      for (const a of s.actions || []) if (a.type === 'refresh') for (const id of a.inputIds || []) renewed.add(id);
-      for (const m of s.movements || []) if (m.type === 'refresh') for (const id of m.inputIds || []) renewed.add(id);
+      // A coin whose spend is ACCOUNTED FOR is excluded outright — a
+      // renewal's inputs (the renewed coin balances the books invisibly),
+      // and equally a send's, an offboard's, an exit's: those movements and
+      // actions sync, so painting the vanished input beside the real Sent
+      // row showed one spend twice, at input magnitude the second time.
+      // The red row survives only for spends nothing anywhere explains.
+      const accounted = new Set();
+      for (const a of s.actions || []) {
+        for (const id of a.inputIds || []) accounted.add(id);
+        for (const part of a.parts || []) if (part.inputId) accounted.add(part.inputId);
+      }
+      for (const m of s.movements || []) for (const id of m.inputIds || []) accounted.add(id);
       const out = [];
       const seenCoin = new Set();
       for (const m of moves) {
         if (m.type !== 'reconcile') { out.push(m); continue; }
-        if (m.vtxoId && (seenCoin.has(m.vtxoId) || renewed.has(m.vtxoId))) continue;
+        if (m.vtxoId && (seenCoin.has(m.vtxoId) || accounted.has(m.vtxoId))) continue;
         if (m.vtxoId) seenCoin.add(m.vtxoId);
         const last = out[out.length - 1];
         if (last && last.type === 'reconcile' && last.ts === m.ts) {

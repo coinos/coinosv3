@@ -755,6 +755,9 @@ export class ArkManager {
       this._movement({
         type: 'send', amountSat: action.amountSat, status: 'complete',
         to: action.destAddress, vtxoId: decodeVtxo(hex.decode(destList()[0])).id,
+        // which coins this spend consumed — synced, so other devices can
+        // skip the "spent on another device" row these inputs would earn
+        inputIds: (action.parts || []).map((p2) => p2.inputId).filter(Boolean),
       });
       this._save();
     }
@@ -1055,6 +1058,7 @@ export class ArkManager {
       type: 'ln-send', amountSat: action.amountSat, status: 'complete',
       detail: action.feeSat ? `fee ${action.feeSat} sat` : undefined,
       invoice: action.invoice, preimage: preimageHex, paymentHash: action.paymentHash,
+      inputIds: (action.parts || []).map((p2) => p2.inputId).concat(action.inputId ? [action.inputId] : []).filter(Boolean),
     });
     this._save();
   }

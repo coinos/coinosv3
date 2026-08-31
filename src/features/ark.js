@@ -227,6 +227,24 @@ export function mergeArkStates(a, b) {
     else { lg.claimed = lg.claimed || rg.claimed; lg.revoked = lg.revoked || rg.revoked; }
   }
   out.gifts = [...gifts.values()];
+  // Targeted spend knowledge beats waiting for a reconcile: a completed
+  // movement or done action that names its consumed inputs is direct
+  // evidence those coins are gone. A device waking cold used to merge in
+  // another device's renewal/send OUTPUT while still counting the consumed
+  // inputs as spendable — the balance visibly ticked high, then dropped
+  // when the reconcile caught up. (This is narrow, evidence-based state —
+  // not the blanket remote-state adoption the rule above forbids.)
+  const consumed = new Set();
+  for (const x of out.actions || []) {
+    if (x.step !== 'done') continue;
+    for (const id of x.inputIds || []) consumed.add(id);
+    for (const part of x.parts || []) if (part.inputId) consumed.add(part.inputId);
+  }
+  for (const m of out.movements || []) {
+    if (m.status !== 'complete') continue;
+    for (const id of m.inputIds || []) consumed.add(id);
+  }
+  for (const v of out.vtxos) if (v.state === 'spendable' && consumed.has(v.id)) v.state = 'spent';
   // The checkpoint is READING PROGRESS, not state: adopting a remote one
   // skips every message this device never processed — balance appears (the
   // vtxo unions in) but its receive movement and celebration never happen.

@@ -263,12 +263,20 @@ export function messagesFeature(ctx) {
     if (cur !== undefined && (cur === null || Date.now() - (cur.t || 0) < PROFILE_TTL)) return cur;
     profiles.set(pk, cur || null); // null = loading, no fallback art yet
     fetchNostrProfile(pk).then((p) => {
-      const entry = { ...(p || {}), t: Date.now() };
+      // An empty answer on a cold boot (relays still dialing, the 5s query
+      // came back with nothing) must never clobber a remembered face with a
+      // punk — keep the stale fields and just refresh the clock, so the
+      // known avatar holds while the full-profile fetch does its rounds.
+      const prev = profiles.get(pk);
+      const entry = p ? { ...p, t: Date.now() } : { ...(prev || {}), t: Date.now() };
       profiles.set(pk, entry);
       persistProfile(pk, entry);
       preloadPicture(entry);
       scheduleRepaint();
-    }).catch(() => profiles.set(pk, { t: Date.now() }));
+    }).catch(() => {
+      const prev = profiles.get(pk);
+      profiles.set(pk, { ...(prev || {}), t: Date.now() });
+    });
     return cur || null;
   }
   const displayName = (pk) => {

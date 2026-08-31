@@ -81,6 +81,15 @@ const HATS = [
       <path d="M41.5 26 l0.9 2 2 0.9 -2 0.9 -0.9 2 -0.9 -2 -2 -0.9 2 -0.9 Z" fill="#ffe08a"/>`),
   },
   {
+    // Not for sale: gifted by the operator to beta testers (see the
+    // registrar's /hats/grant). Appears in the shop only once owned.
+    id: 'construction', nameKey: 'hatConstruction', sat: null, w: 108, b: 71, r: -6,
+    art: svg(`<path d="M14 30 Q14 9 32 9 Q50 9 50 30 Z" fill="#f2b32a"/>
+      <path d="M28.5 9.6 h7 q1.6 0 1.6 1.6 v7.8 h-10.2 v-7.8 q0-1.6 1.6-1.6 Z" fill="#ffd35c"/>
+      <path d="M20.5 13.5 Q18 20 18 30 M43.5 13.5 Q46 20 46 30" stroke="#d9930f" stroke-width="1.6" fill="none"/>
+      <path d="M7 32 Q7 27.5 13 29.5 L51 29.5 Q57 27.5 57 32 Q57 36.5 32 36.5 Q7 36.5 7 32 Z" fill="#e8a715" stroke="rgba(0,0,0,.1)" stroke-width="0.8"/>`),
+  },
+  {
     id: 'crown', nameKey: 'hatCrown', sat: null, w: 86, b: 83, r: -7,
     art: svg(`<path d="M10 38 L7 13 L20 25 L32 6 L44 25 L57 13 L54 38 Z" fill="#f2b32a"/>
       <circle cx="7" cy="12" r="3" fill="#ffd97a"/><circle cx="32" cy="6" r="3" fill="#ffd97a"/><circle cx="57" cy="12" r="3" fill="#ffd97a"/>
@@ -348,9 +357,10 @@ export function hatsFeature(ctx) {
         d == null
           ? h('div', { style: 'text-align:center;padding:16px' }, h('span', { class: 'spinner' }))
           : h('div', { class: 'col', style: 'gap:2px' },
-              // the crown is not merchandise — it appears only in the
-              // collection of the head that owns it, never as a listing
-              ...HATS.filter((hat) => hat.id !== 'crown' || ((d && d.owned) || []).includes('crown'))
+              // unpriced hats (the crown, the beta hard hat) are not
+              // merchandise — they appear only in the collection of a head
+              // that owns them, never as a listing
+              ...HATS.filter((hat) => (priceOf(hat) || 0) > 0 || ((d && d.owned) || []).includes(hat.id))
                 .map((hat) => shopRow(hat, d, me))),
         d && d.offline ? h('div', { class: 'small faint', style: 'text-align:center' }, t('hatShopOffline')) : null),
       h('button', { class: 'btn-ghost btn-block', onClick: closeShop }, t('back')));

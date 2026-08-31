@@ -275,6 +275,7 @@ const STR = {
     hatBowler: 'Bowler',
     hatWizard: 'Wizard hat',
     hatTop: 'Top hat',
+    hatConstruction: 'Hard hat',
     hatCrown: 'The Crown',
     hatCrownWho: "Adam's. Sorry.",
     hatCrownTaken: 'not for sale',

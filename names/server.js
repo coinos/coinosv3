@@ -21,7 +21,7 @@ import { verifyEvent, finalizeEvent, generateSecretKey, getPublicKey } from 'nos
 import * as nip44 from 'nostr-tools/nip44';
 import { wrapManyEvents } from 'nostr-tools/nip17';
 import { SimplePool } from 'nostr-tools/pool';
-import { npubEncode } from 'nostr-tools/nip19';
+import { npubEncode, decode as nip19Decode } from 'nostr-tools/nip19';
 import { createHash } from 'node:crypto';
 import { HDKey } from '@scure/bip32';
 import { mnemonicToSeedSync } from '@scure/bip39';
@@ -391,10 +391,12 @@ function hatRec(pk, net = 'mainnet') {
   return { owned, equipped };
 }
 
-function grantHat(pk, hat, net = 'mainnet') {
+function grantHat(pk, hat, net = 'mainnet', { equip = true } = {}) {
   const r = hatStore(net)[pk] ||= { owned: [], equipped: null };
   if (!r.owned.includes(hat)) r.owned.push(hat);
-  r.equipped = hat; // a fresh purchase goes straight on the head
+  // a fresh purchase goes straight on the head; a GIFT only crowns a bare
+  // one — knocking off a hat someone paid for is no way to say thanks
+  if (equip || !r.equipped) r.equipped = hat;
 }
 
 async function settleLoop() {
@@ -857,6 +859,29 @@ Bun.serve({
     const hm = url.pathname.match(/^\/hats\/([0-9a-f]{64})$/);
     if (hm && req.method === 'GET') {
       return json({ ...hatRec(hm[1], hatNetOf(url.searchParams.get('net'))), prices: HAT_PRICES });
+    }
+
+    // Operator gift: drop a hat into someone's rack (x-admin-token). Takes
+    // hex or npub; giftable ids only — the crown stays singular. The gift
+    // sits in the rack rather than force-equipping over a paid hat.
+    if (url.pathname === '/hats/grant' && req.method === 'POST') {
+      if (!CFG.adminToken || req.headers.get('x-admin-token') !== CFG.adminToken) {
+        return json({ error: 'unauthorized' }, 401);
+      }
+      let b;
+      try { b = await req.json(); } catch { return json({ error: 'bad body' }, 400); }
+      let pk = String(b.pubkey || '');
+      if (/^npub1/.test(pk)) {
+        try { pk = nip19Decode(pk).data; } catch { return json({ error: 'bad npub' }, 400); }
+      }
+      if (!/^[0-9a-f]{64}$/.test(pk)) return json({ error: 'bad pubkey' }, 400);
+      const hat = String(b.hat || '');
+      if (!(hat in HAT_PRICES) && hat !== 'construction') return json({ error: 'no such hat' }, 400);
+      const net = hatNetOf(b.net);
+      grantHat(pk, hat, net, { equip: false });
+      persist();
+      log(`hat gifted: ${hat} (${net}) to ${pk.slice(0, 12)}`);
+      return json(hatRec(pk, net));
     }
 
     if (url.pathname === '/hats/invoice' && req.method === 'POST') {

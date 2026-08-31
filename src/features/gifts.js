@@ -739,7 +739,7 @@ export function giftsFeature(ctx) {
     const created = (wallet.loaded && (wallet.giftRecords()[g.id] || {}).created) || g.created;
     const rec = g.claimed ? null : wallet.giftLink(g.id);
     const line = (k, v) => h('div', { class: 'line' }, h('span', { class: 'k' }, k), h('span', { class: 'v' }, v));
-    const back = () => { ui.giftDetail = null; ui.revokeId = null; render(); };
+    const back = () => { ui.revokeId = null; ctx.goBack(() => { ui.giftDetail = null; }); };
     return h(
       'div',
       { class: 'card col' },

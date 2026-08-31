@@ -1006,7 +1006,7 @@ export function arkFeature(ctx) {
         ui.arkExitDetail = null;
         render();
       } }, t('arkExitCancel')) : null,
-      h('button', { class: 'btn-ghost btn-block', onClick: () => { ui.arkExitDetail = null; render(); } }, t('back')));
+      h('button', { class: 'btn-ghost btn-block', onClick: () => ctx.goBack(() => { ui.arkExitDetail = null; }) }, t('back')));
   }
 
   function arkMoveDetailView(m) {
@@ -1081,7 +1081,7 @@ export function arkFeature(ctx) {
               h('a', { class: 'btn btn-sm', href: url, target: '_blank', rel: 'noopener', onClick: (e) => { e.preventDefault(); openExternal(url); } }, t('viewOnMempool'))))
         : null,
       m.to ? copyBtn(m.to, t('copyAddress')) : null,
-      h('button', { class: 'btn-ghost btn-block', onClick: () => { ui.arkMoveDetail = null; render(); } }, t('back'))
+      h('button', { class: 'btn-ghost btn-block', onClick: () => ctx.goBack(() => { ui.arkMoveDetail = null; }) }, t('back'))
     );
   }
 

@@ -534,7 +534,11 @@ wallet.subscribe(scheduleRender);
 // buttons (and Android/system back) move between screens we've actually viewed.
 // We snapshot only the navigation-relevant `ui` fields, so incidental re-renders
 // (typing, polling, balance updates) don't create history entries.
-const NAV_FIELDS = ['screen', 'tab', 'txDetail', 'bump', 'giftMode', 'claimStep', 'chatOpen', 'msgView', 'msgCommunity', 'msgPeer', 'profilePk', 'settingsPage', 'nameEditOpen', 'noteThread', 'userSearch', 'zapSetup', 'hatShop'];
+// arkMoveDetail/arkExitDetail/giftDetail are the ark and gift rows' detail
+// views — most Spending payments open one of these, and leaving them out
+// meant the phone's native Back skipped past the history list entirely
+// (it landed on whatever tab minted the previous entry).
+const NAV_FIELDS = ['screen', 'tab', 'txDetail', 'arkMoveDetail', 'arkExitDetail', 'giftDetail', 'bump', 'giftMode', 'claimStep', 'chatOpen', 'msgView', 'msgCommunity', 'msgPeer', 'profilePk', 'settingsPage', 'nameEditOpen', 'noteThread', 'userSearch', 'zapSetup', 'hatShop'];
 function navSnapshot() {
   const s = {};
   for (const f of NAV_FIELDS) s[f] = ui[f] ?? null;

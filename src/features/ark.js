@@ -2638,10 +2638,18 @@ export function arkFeature(ctx) {
     isSendDest(a) { return isArkAddress(a) && arkAvailable(); },
     hideSendControls(a) { return isArkAddress(a); },
     // Max for an ark recipient: arkoor sends are free, so the whole
-    // spendable Spending balance is the honest maximum.
+    // spendable Spending balance is the honest maximum — WHEN Spending is
+    // the selected rail. From Savings this destination is either a board
+    // (your own address — review routes it to the board panel) or a
+    // wrong-rail send review will bounce; either way the honest maximum is
+    // what Savings can actually fund. Filling Spending's number here handed
+    // the board panel an amount Savings couldn't cover, and the user read
+    // the resulting 'insufficient funds' as a fee miscalculation.
     sendMaxFill(a) {
       if (!isArkAddress(a)) return null;
-      const sat = arkBalance()?.spendableSat || 0;
+      const sat = ctx.getAccount() === 'spending'
+        ? (arkBalance()?.spendableSat || 0)
+        : maxBoardSat();
       if (!sat) return null;
       return ctx.getUnit() === 'sats' ? String(sat) : (sat / 1e8).toFixed(8);
     },

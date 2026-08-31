@@ -175,11 +175,29 @@ export function mergeArkStates(a, b) {
     return [...x, ...y.filter((i) => !ids.has(i.id))];
   };
   out.actions = unionById(a.actions, b.actions);
+  // Union keeps the local copy of a movement forever — but a movement can be
+  // ENRICHED after other devices synced it (the cooney rescue stamped
+  // inputIds/unlockHash/fee onto its renewal movement post-hoc, and those
+  // fields are what lets history exclude the matching "spent on another
+  // device" rows). Adopt fields the local copy lacks; never overwrite ones
+  // it has.
+  const bM = new Map((b.movements || []).map((m) => [m.id, m]));
+  const enriched = (a.movements || []).map((lm) => {
+    const rm = bM.get(lm.id);
+    if (!rm) return lm;
+    const take = {};
+    if (rm.inputIds != null && lm.inputIds == null) take.inputIds = rm.inputIds;
+    if (rm.unlockHash != null && lm.unlockHash == null) take.unlockHash = rm.unlockHash;
+    // a fee learned late (the rescue computed it from inputs − outputs)
+    // upgrades a recorded zero — the row only renders when the fee is real
+    if ((rm.feeSat || 0) > 0 && !(lm.feeSat > 0)) take.feeSat = rm.feeSat;
+    return Object.keys(take).length ? { ...lm, ...take } : lm;
+  });
   // Two devices (or the push and the poll, pre-guard) can each record the
   // SAME lightning payment under different movement ids — same preimage is
   // the same payment, keep the earliest telling of it.
   const seenPay = new Set();
-  out.movements = unionById(a.movements, b.movements)
+  out.movements = unionById(enriched, b.movements)
     .sort((m, n) => (m.ts || 0) - (n.ts || 0))
     .filter((m) => {
       if (!m.type || !m.type.startsWith('ln-') || m.status !== 'complete') return true;

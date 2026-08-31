@@ -2206,6 +2206,30 @@ export function arkFeature(ctx) {
   // under the server's 330-sat output minimum) AND a vtxo is inside the
   // renewal window: { deadlineMs, sat }. The wallet-screen notice reads this.
   let arkRenewWarn = null;
+  // Pasting your OWN ark address — or a coinos name that resolves to it —
+  // is never a payment: it means "top up Spending". Route to the board
+  // panel, funded from on-chain Savings; prefill an amount when the caller
+  // has one (the review path carries the typed amount, paste-time has none
+  // and the panel's own field takes over).
+  async function boardOwnAddress(addr, { connect = false, amountSat = 0 } = {}) {
+    if (!arkAvailable() || wallet.watchOnly) return false;
+    let mgr = ark;
+    if (!mgr) {
+      if (!connect) return false;
+      try { mgr = await connectArk(); } catch { return false; }
+    }
+    try { if (addr !== mgr.address()) return false; } catch { return false; }
+    ctx.goHome();
+    ui.arkMoveOpen = true;
+    ui.arkMoveDir = 'toSpending';
+    ui.arkBoardAmt = amountSat > 0 ? String(amountSat) : '';
+    ui.send = blankSend();
+    ui.sendError = '';
+    toast(t('arkOwnAddrBoard'));
+    render();
+    return true;
+  }
+
   async function maybeAutoRefresh(mgr) {
     if (wallet.watchOnly || !mgr || !mgr.state) return;
     if (Date.now() - arkAutoRefreshAt < 30 * 60_000) return;
@@ -2587,22 +2611,12 @@ export function arkFeature(ctx) {
         const fromSavings = ctx.getAccount() !== 'spending';
         (async () => {
           // Whose address is this? The manager may still be connecting, so
-          // resolve async before painting a review.
-          let own = false;
-          try { const mgr = await connectArk(); own = dest === mgr.address(); }
+          // resolve async before painting a review. Our own address routes
+          // to the board panel with the typed amount riding along.
+          try { await connectArk(); }
           catch (e) { ui.sendError = e.message; render(); return; }
-          if (own) {
-            // Your OWN ark address is never a payment — pasting it (or a
-            // coinos name that resolves to it) means "top up Spending", so
-            // open the board panel, funded from on-chain Savings. The old
-            // path made a silent Spending→Spending self-send.
-            ctx.goHome();
-            ui.arkMoveOpen = true;
-            ui.arkMoveDir = 'toSpending';
-            ui.arkBoardAmt = String(sats);
-            ui.send = blankSend();
-            toast(t('arkOwnAddrBoard'));
-          } else if (fromSavings) {
+          if (await boardOwnAddress(dest, { amountSat: sats })) return;
+          if (fromSavings) {
             // An ark payment spends the Spending balance — never silently
             // spend a different balance than the one selected.
             ui.sendError = t('arkPayFromSpending');
@@ -2698,12 +2712,21 @@ export function arkFeature(ctx) {
       }
       mgr._save();
     },
+    // A name that resolved to OUR OWN ark address: the names feature asks
+    // before filling the send form, so the board panel opens at paste time —
+    // nobody should have to type an amount into a payment form just to be
+    // told they were topping themselves up.
+    arkBoardIfOwn(addr) { return boardOwnAddress(addr, { connect: true }); },
     // An npub pasted into Send becomes an ark zap (needs the nostr seam from
     // the sync feature and a connected-able ark). A bolt11 is handled here
     // only in builds without the swaps feature (whose matcher runs first and
     // delegates back via the startArkLnPay hook).
     matchSendText(text) {
       const inv = (text || '').trim().replace(/^lightning:/i, '');
+      // A raw paste of our own ark address means the same thing — start the
+      // check now (the manager may need to connect); if it's ours the board
+      // panel replaces the filled form a beat later.
+      if (isArkAddress(inv) && arkAvailable()) boardOwnAddress(inv, { connect: true }).catch(() => {});
       // In a Spending wallet an on-chain address means "exit ark to there":
       // the offboard happens right in the send flow, no Move money ceremony.
       if (ctx.getAccount() === 'spending' && wallet.isOnchainAddress(inv) && arkAvailable()) {

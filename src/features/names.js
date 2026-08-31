@@ -320,6 +320,10 @@ export function namesFeature(ctx) {
         const dec = parseBip21(uri);
         const ark = dec?.params?.ark;
         if (ark && isArkAddress(ark) && hook('arkReady')) {
+          // Your own name is a top-up, not a payment: the ark feature routes
+          // it straight to the board panel instead of filling a send form
+          // whose review would only send it back there.
+          if (await Promise.resolve(hook('arkBoardIfOwn', ark)).catch(() => false)) return;
           ui.send.recipients[0].address = ark;
           render();
           return;

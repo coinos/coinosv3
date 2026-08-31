@@ -98,7 +98,11 @@ export function hatsFeature(ctx) {
 
   // ---- who wears what: batched lookup + persistent cache ------------------
 
-  const TTL = 6 * 3600_000;
+  // Serve from cache instantly, but ask the registrar again after a couple
+  // of minutes — six hours of staleness meant a hat swapped on one device
+  // kept its old look on every other for the rest of the day. One batched
+  // request per quiet period is what the /hats endpoint is for.
+  const REVALIDATE = 2 * 60_000;
   const worn = new Map(); // pk -> { hat: id|null, t }
   let loaded = false;
   const loadStore = () => {
@@ -138,9 +142,17 @@ export function hatsFeature(ctx) {
       const j = await r.json();
       if (!r.ok) throw new Error('hats lookup failed');
       const now = Date.now();
-      for (const pk of pks) worn.set(net + ':' + pk, { hat: (j.hats || {})[pk] || null, t: now });
+      let changed = false;
+      for (const pk of pks) {
+        const key = net + ':' + pk;
+        const next = (j.hats || {})[pk] || null;
+        // a hat coming OFF is a change too — the old check only repainted
+        // when a fresh entry had a hat, so removals lingered on screen
+        if ((worn.get(key) || {}).hat !== next) changed = true;
+        worn.set(key, { hat: next, t: now });
+      }
       saveStore();
-      if ([...worn.entries()].some(([pk, v]) => v.hat && v.t === now)) render();
+      if (changed) render();
     } catch {
       failedAt = Date.now();
     }
@@ -151,7 +163,7 @@ export function hatsFeature(ctx) {
     if (!pk || !/^[0-9a-f]{64}$/.test(pk)) return null;
     loadStore();
     const v = worn.get(hatNet() + ':' + pk);
-    if (!v || Date.now() - v.t > TTL) queueFetch(pk);
+    if (!v || Date.now() - v.t > REVALIDATE) queueFetch(pk);
     return v ? v.hat : null;
   }
 

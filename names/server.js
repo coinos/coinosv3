@@ -1020,6 +1020,37 @@ Bun.serve({
     // Top up the float over Lightning: it mints an invoice against its own
     // ark balance, which anyone (in practice, the operator's node) can pay.
     // Guarded by a token from the config file — this endpoint is public.
+    // Legacy migration hand-off. coinos.io's migrate action (running with
+    // the OLD account's authenticated session — that session IS the proof of
+    // ownership) tells us which v3 identity may claim the released name.
+    // Without this the claim guard has nothing to go on: identity-only proof
+    // (the old account's npub signing the claim) never matches a v3 wallet's
+    // key, so every migrated claim 409'd forever. The grant names either the
+    // destination address (we look up its record) or a pubkey directly (the
+    // operator-rescue form).
+    if (url.pathname === '/migrate-grant' && req.method === 'POST') {
+      const tok = (req.headers.get('authorization') || '').replace(/^Bearer\s+/i, '');
+      if (!CFG.migrateToken || tok !== CFG.migrateToken) return json({ error: 'unauthorized' }, 401);
+      let b;
+      try { b = await req.json(); } catch { return json({ error: 'bad body' }, 400); }
+      const name = String(b.name || '').toLowerCase();
+      if (!NAME_RE.test(name)) return json({ error: 'bad name' }, 400);
+      let pubkey = /^[0-9a-f]{64}$/.test(String(b.pubkey || '')) ? b.pubkey : null;
+      let manager = null;
+      if (!pubkey && b.to) {
+        const [tn, td] = String(b.to).toLowerCase().split('@');
+        const rec = state.names[`${tn}@${td}`];
+        if (!rec) return json({ error: 'destination is not registered here' }, 404);
+        pubkey = rec.pubkey;
+        manager = rec.manager || null;
+      }
+      if (!pubkey) return json({ error: 'no destination' }, 400);
+      (state.migrations ||= {})[`${name}@coinos.io`] = { pubkey, manager, ts: Date.now() };
+      persist();
+      log(`migrate-grant: ${name}@coinos.io -> ${pubkey.slice(0, 8)}`);
+      return json({ ok: true });
+    }
+
     if (url.pathname === '/admin/topup' && req.method === 'POST') {
       if (!CFG.adminToken || req.headers.get('x-admin-token') !== CFG.adminToken) {
         return json({ error: 'unauthorized' }, 401);
@@ -1106,7 +1137,13 @@ Bun.serve({
       if (existing && existing.pubkey !== auth.pubkey && existing.manager !== auth.pubkey) {
         return json({ error: 'name is taken' }, 409);
       }
-      if (!existing && await takenByCoinosUser(domain, name, auth.pubkey)) return json({ error: 'name is taken' }, 409);
+      // A migration grant (the legacy account's authenticated session told
+      // us where the name is going) trumps the legacy reservation — the
+      // identity check below it can never pass for a v3 wallet key.
+      const grant = (state.migrations || {})[`${name}@coinos.io`];
+      const granted = domain === 'coinos.io' && grant
+        && (grant.pubkey === auth.pubkey || (grant.manager && grant.manager === auth.pubkey));
+      if (!existing && !granted && await takenByCoinosUser(domain, name, auth.pubkey)) return json({ error: 'name is taken' }, 409);
       // an npub-shaped name belongs to that identity alone
       if (npubPrefixOwner(name)) {
         const managerOk = existing && existing.manager === auth.pubkey;

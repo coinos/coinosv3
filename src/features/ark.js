@@ -719,8 +719,18 @@ export function arkFeature(ctx) {
     ui.arkLnPay = { invoice, meta: meta || null, amountSat: dec.amountSat, amount: '', feeSat: null, status: 'quote' };
     ui.sendError = '';
     render();
-    quoteArkLnPay(invoice, meta).catch((e) => {
-      if (ui.arkLnPay && ui.arkLnPay.invoice === invoice) { ui.sendError = e.message; render(); }
+    quoteArkLnPay(invoice, meta).catch(() => {
+      // The quote is a nicety — a dead esplora or quote service must not
+      // wedge the form at an eternal spinner (it did: "Getting a quote…"
+      // above a Failed-to-fetch, Pay unreachable). Price it like the outage
+      // fallback and let Pay proceed; the payment path quotes again with
+      // its own fallbacks and locks only what the route actually needs.
+      const p2 = ui.arkLnPay;
+      if (!p2 || p2.invoice !== invoice) return;
+      p2.feeSat = p2.amountSat ? Math.max(3, Math.ceil(p2.amountSat / 1000)) : null;
+      p2.status = 'ready';
+      ui.sendError = '';
+      render();
     });
     return true;
   }

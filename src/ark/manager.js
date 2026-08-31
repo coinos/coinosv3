@@ -190,21 +190,45 @@ export class ArkManager {
   _decoded(v) { return decodeVtxo(hex.decode(v.bytes)); }
 
   // ---- chain adapter (esplora REST, same API the wallet already speaks) ----
+  //
+  // With FAILOVER on mainnet: some networks simply can't reach mempool.space
+  // (one tester's laptop failed every chain call for days — stranded mailbox
+  // receives, quotes that never arrived), and a single host made every one
+  // of those a dead end. A request tries the last host that worked, then the
+  // rest; rate limits and 5xx rotate too. Non-mainnet keeps its lone host —
+  // there is no public twin of a regtest or mutinynet esplora.
+  async _esplora(path, init) {
+    const hosts = (this._esploraHosts ||= [
+      this.esploraUrl,
+      ...(this.network === 'mainnet' ? ['https://blockstream.info/api', 'https://mempool.space/api'] : []),
+    ].filter((h, i, a) => h && a.indexOf(h) === i));
+    const start = this._esploraIdx || 0;
+    let lastErr;
+    for (let i = 0; i < hosts.length; i++) {
+      const idx = (start + i) % hosts.length;
+      try {
+        const r = await fetch(hosts[idx] + path, init);
+        if (r.status === 429 || r.status >= 500) { lastErr = new Error(`chain status ${r.status}`); continue; }
+        this._esploraIdx = idx;
+        return r;
+      } catch (e) { lastErr = e; }
+    }
+    throw lastErr;
+  }
   get chain() {
-    const base = this.esploraUrl;
     return {
       // no-store: a CDN-cached tip lags a 30s-block network by many blocks,
       // and a stale tip under-shoots HTLC expiries the server then rejects
-      tipHeight: async () => Number(await fetch(`${base}/blocks/tip/height`, { cache: 'no-store' }).then((r) => r.text())),
+      tipHeight: async () => Number(await this._esplora('/blocks/tip/height', { cache: 'no-store' }).then((r) => r.text())),
       getTxStatus: async (txid) => {
-        const r = await fetch(`${base}/tx/${txid}/status`);
+        const r = await this._esplora(`/tx/${txid}/status`);
         if (r.ok) return r.json();
         if (r.status === 404) return null; // unknown tx is an answer
-        throw new Error(`chain status ${r.status}`); // rate limits etc must SURFACE
+        throw new Error(`chain status ${r.status}`); // odd refusals must SURFACE
       },
-      getTxHex: async (txid) => fetch(`${base}/tx/${txid}/hex`).then((r) => r.ok ? r.text() : null),
+      getTxHex: async (txid) => this._esplora(`/tx/${txid}/hex`).then((r) => r.ok ? r.text() : null),
       broadcastTx: async (txHex) => {
-        const r = await fetch(`${base}/tx`, { method: 'POST', body: txHex });
+        const r = await this._esplora('/tx', { method: 'POST', body: txHex });
         const body = await r.text();
         // a rebroadcast after a crash is fine — the tx being known already IS success
         if (!r.ok && !/already/i.test(body)) throw new Error(`broadcast failed: ${body.slice(0, 120)}`);

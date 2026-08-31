@@ -734,7 +734,13 @@ export function namesFeature(ctx) {
 
   return {
     id: 'names',
-    init() { checked = false; lastError = null; refresh(); },
+    init() {
+      checked = false; lastError = null;
+      // The claim field is a draft for THIS account — a name typed before a
+      // logout used to greet the next account that opened on this device.
+      ui.nameClaim = null; ui.nameClaimError = null; suggestedFor = null;
+      refresh();
+    },
     // The pencil by the address opens this: choosing a name gets a page of
     // its own — no balances, no tabs, just the name.
     screenView() {

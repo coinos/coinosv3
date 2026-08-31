@@ -386,6 +386,19 @@ export function arkFeature(ctx) {
     arkConnectPromise = mgr.init().then(() => {
       if (gen !== arkInitGen) throw new Error('superseded'); // wallet switched mid-connect
       ark = mgr;
+      // Boards that died before funding (a failed tx build, a closed tab)
+      // used to linger at 'created' forever — and an in-flight-looking
+      // action blocks auto-renewal. Anything unfunded after an hour is a
+      // stub, not a plan; the id carries its birth time.
+      {
+        let swept = false;
+        for (const a of mgr.state.actions || []) {
+          if (a.type !== 'board' || a.fundingTxid || ['done', 'failed'].includes(a.step)) continue;
+          const ts = Number((a.id || '').split('-')[1]) || 0;
+          if (ts && Date.now() - ts > 3600_000) { a.step = 'failed'; a.error = a.error || 'never funded'; swept = true; }
+        }
+        if (swept) mgr._save();
+      }
       announceArkAddress(mgr); // ark zaps: tell nostr where our mailbox lives
       startNwcFunding(mgr);    // NWC bridge: honor funding requests within the allowance
       // Publish this device's ark state to its per-device sync slot on connect.
@@ -1076,12 +1089,15 @@ export function arkFeature(ctx) {
     const sats = parseInt((ui.arkBoardAmt || '').trim(), 10);
     if (!sats) return;
     ui.arkBusy = 'board'; ui.arkError = ''; render();
+    let unfunded = null; // the action id, until the funding tx is on the wire
     try {
       const { actionId, fundingAddress, feeSat } = await ark.startBoard(sats);
+      unfunded = actionId;
       const feeRate = (wallet.feeRates && wallet.feeRates.halfHourFee) || 5;
       const draft = wallet.buildTx({ recipients: [{ address: fundingAddress, amount: sats }], feeRate, noSort: true });
       const hexTx = wallet.sign(draft.tx);
       const txid = await wallet.broadcast(hexTx);
+      unfunded = null; // money moved — this action must live on whatever happens next
       // Like the main send flow: reflect the spend locally and let the
       // poll/watcher reconcile. A scan here would race the explorer's indexing
       // and could resurrect the just-spent coin.
@@ -1090,6 +1106,13 @@ export function arkFeature(ctx) {
       ui.arkBoardAmt = '';
       ui.arkBoarded = { txid, netSat: sats - feeSat };
     } catch (e) {
+      // A board that never funded is not in flight. Leaving the stub at
+      // 'created' looked like an in-flight action forever — which silently
+      // blocked auto-renewal (it refuses to start a round beside one).
+      if (unfunded && ark && ark.state) {
+        const a = (ark.state.actions || []).find((x) => x.id === unfunded);
+        if (a && !a.fundingTxid) { a.step = 'failed'; a.error = e.message; try { ark._save(); } catch {} }
+      }
       ui.arkError = e.message;
     }
     ui.arkBusy = null; render();

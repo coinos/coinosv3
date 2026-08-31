@@ -41,7 +41,7 @@ const HATS = [
       <path d="M17 33 Q17 14 29 14 Q41 14 41 33 Z" fill="#f2f5f8"/>
       <text x="29" y="28" font-size="14" font-weight="700" text-anchor="middle" fill="#f7931a" font-family="system-ui,sans-serif">₿</text>
       <circle cx="29" cy="9.5" r="2.4" fill="#2a5f9c"/>
-      <path d="M47 28.5 Q60 27 62 32.5 Q60 37 52 36.5 L46 34.5 Z" fill="#2a5f9c"/>
+      <path d="M45 29 Q58 27.2 61.8 31.6 Q63.4 34.6 59 36.4 Q52 37.1 45 37 Z" fill="#2a5f9c"/>
       <rect x="9" y="32" width="39" height="5" rx="2.5" fill="#2a5f9c"/>`),
   },
   {
@@ -87,7 +87,7 @@ const HATS = [
     art: svg(`<path d="M12 30 Q12 9 30 9 Q48 9 48 30 Z" fill="#ef7f1a"/>
       <path d="M26.5 9.6 h7 q1.6 0 1.6 1.6 v7.8 h-10.2 v-7.8 q0-1.6 1.6-1.6 Z" fill="#ff9d47"/>
       <path d="M18.5 13.5 Q16 20 16 30 M41.5 13.5 Q44 20 44 30" stroke="#cf640c" stroke-width="1.6" fill="none"/>
-      <path d="M46 29 Q60 27.5 62 33 Q60 37.5 52 37 L46 35 Z" fill="#cf640c"/>
+      <path d="M44 29.2 Q57 27.4 61.5 31.3 Q63.4 33.9 59 35.2 Q52 35.7 44 35.5 Z" fill="#cf640c"/>
       <rect x="9" y="29" width="40" height="6.5" rx="3" fill="#cf640c" stroke="rgba(0,0,0,.1)" stroke-width="0.8"/>`),
   },
   {

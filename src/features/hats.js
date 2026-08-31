@@ -84,10 +84,11 @@ const HATS = [
     // Not for sale: gifted by the operator to beta testers (see the
     // registrar's /hats/grant). Appears in the shop only once owned.
     id: 'construction', nameKey: 'hatConstruction', sat: null, w: 108, b: 71, r: -6,
-    art: svg(`<path d="M14 30 Q14 9 32 9 Q50 9 50 30 Z" fill="#f2b32a"/>
-      <path d="M28.5 9.6 h7 q1.6 0 1.6 1.6 v7.8 h-10.2 v-7.8 q0-1.6 1.6-1.6 Z" fill="#ffd35c"/>
-      <path d="M20.5 13.5 Q18 20 18 30 M43.5 13.5 Q46 20 46 30" stroke="#d9930f" stroke-width="1.6" fill="none"/>
-      <path d="M7 32 Q7 27.5 13 29.5 L51 29.5 Q57 27.5 57 32 Q57 36.5 32 36.5 Q7 36.5 7 32 Z" fill="#e8a715" stroke="rgba(0,0,0,.1)" stroke-width="0.8"/>`),
+    art: svg(`<path d="M12 30 Q12 9 30 9 Q48 9 48 30 Z" fill="#ef7f1a"/>
+      <path d="M26.5 9.6 h7 q1.6 0 1.6 1.6 v7.8 h-10.2 v-7.8 q0-1.6 1.6-1.6 Z" fill="#ff9d47"/>
+      <path d="M18.5 13.5 Q16 20 16 30 M41.5 13.5 Q44 20 44 30" stroke="#cf640c" stroke-width="1.6" fill="none"/>
+      <path d="M46 29 Q60 27.5 62 33 Q60 37.5 52 37 L46 35 Z" fill="#cf640c"/>
+      <rect x="9" y="29" width="40" height="6.5" rx="3" fill="#cf640c" stroke="rgba(0,0,0,.1)" stroke-width="0.8"/>`),
   },
   {
     id: 'crown', nameKey: 'hatCrown', sat: null, w: 86, b: 83, r: -7,

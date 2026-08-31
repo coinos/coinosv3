@@ -1577,12 +1577,16 @@ export function arkFeature(ctx) {
     const feeRate = Math.max(1, (wallet.feeRates && wallet.feeRates.halfHourFee) || 2);
     const afterFee = Math.ceil(530 * feeRate);
     const depthOf = (v) => { try { return mgr._decoded(v).genesis.length; } catch { return null; } };
-    // relative and terse — "14d" / "13h" — a date says less than a countdown
+    // relative and terse — "expires in 14d" / "in 13h" — a date says less
+    // than a countdown, and a coin past its height says so plainly instead
+    // of the shifty "expires 0h" (the server still honors it; the wallet's
+    // next renewal round sweeps it up).
     const expiresOf = (v) => {
       if (!v.expiryHeight || !tip) return '—';
       const blocks = v.expiryHeight - tip;
-      if (blocks <= 0) return '0h';
-      return blocks >= 144 ? Math.round(blocks / 144) + 'd' : Math.max(1, Math.round(blocks / 6)) + 'h';
+      if (blocks <= 0) return t('arkCoinsExpired');
+      const c = blocks >= 144 ? Math.round(blocks / 144) + 'd' : Math.max(1, Math.round(blocks / 6)) + 'h';
+      return t('arkCoinsExpIn', { when: c });
     };
     // what pulling THIS coin on-chain alone would cost: every hop's fee
     // child plus the claim, at today's rate (the whole-balance figure below
@@ -1642,12 +1646,15 @@ export function arkFeature(ctx) {
         h('h3', { style: 'margin:0' }, t('arkCoinsTitle')),
         h('p', { class: 'small muted', style: 'margin:0' },
           t('arkCoinsIntro', { n: spend.length, total: fmtAmount(totalSat) + ' ' + unitLabel() })),
-        // One coin per row, two lines: the amount, then a terse meta line.
-        // Five flexed columns fit a laptop but wrap into confetti on a phone
-        // — labels riding inline with each value need no header row and no
-        // horizontal budget at all.
-        h('div', { class: 'col', style: 'gap:8px;margin-top:4px' },
-          h('div', { class: 'row gap6', style: 'align-items:center' },
+        // One coin per row, two lines: the amount (with its renewal price on
+        // the right — the number this page's action spends), then a faint
+        // meta line. Five flexed columns fit a laptop but wrapped into
+        // confetti on a phone; labels riding inline with each value need no
+        // header row and no horizontal budget at all. `.coin` brings the
+        // on-chain coin-control look — hairlines between rows, big accent
+        // checkboxes — so the two coin pages read as siblings.
+        h('div', { class: 'col', style: 'margin-top:4px' },
+          h('label', { class: 'coin' },
             tick(sel.size === ids.size, (e) => {
               ui.arkCoinsSel = e.target.checked ? new Set(ids) : new Set();
               render();
@@ -1657,18 +1664,21 @@ export function arkFeature(ctx) {
             const d = depthOf(v);
             const f = feeNowOf(v);
             const xf = exitFeeOf(v);
-            return h('div', { class: 'row gap6', style: 'align-items:flex-start' },
+            return h('label', { class: 'coin' },
               tick(sel.has(v.id), (e) => {
                 e.target.checked ? sel.add(v.id) : sel.delete(v.id);
                 render();
               }),
-              h('div', { class: 'col grow', style: 'gap:1px;min-width:0' },
-                h('span', { class: 'small' }, fmtAmount(v.amountSat) + ' ' + unitLabel()),
-                h('span', { class: 'small faint' }, t('arkCoinsRowMeta', {
+              h('div', { class: 'col grow', style: 'gap:3px;min-width:0' },
+                h('div', { class: 'row between', style: 'align-items:baseline;gap:8px' },
+                  h('span', {}, fmtAmount(v.amountSat),
+                    h('span', { class: 'small faint' }, ' ' + unitLabel())),
+                  h('span', { class: 'small ' + (f > 0 ? 'muted' : 'faint') },
+                    t('arkCoinsRowRenew', { fee: f > 0 ? fmtAmount(f) : t('arkDepthFree') }))),
+                h('div', { class: 'small faint' }, t('arkCoinsRowMeta', {
                   exp: expiresOf(v),
                   d: d == null ? '—' : String(d),
                   exit: xf == null ? '—' : fmtAmount(xf),
-                  renew: f > 0 ? fmtAmount(f) : t('arkDepthFree'),
                 }))));
           })),
         h('p', { class: 'small faint', style: 'margin:4px 0 0' }, t('arkCoinsExpiryNote'))),
@@ -2212,7 +2222,22 @@ export function arkFeature(ctx) {
       // Renew ONLY the coins that need it: dragging far-from-expiry coins
       // into the round would bill their (higher) fee bracket for nothing.
       // The rare fragmentation consolidation still sweeps everything.
-      await mgr.refresh(fragmented ? undefined : expiringCoins.map((v) => v.id));
+      //
+      // But the subset must clear the server's 330-sat output floor BY
+      // ITSELF — the renewable check above prices the whole balance. Two
+      // dust coins at expiry (133 sats between them) failed their renewal
+      // round silently every 30 minutes forever. Pull in the smallest
+      // healthy coins until the renewed output is mintable.
+      let renewSet = expiringCoins;
+      if (!fragmented) {
+        const extras = spendables
+          .filter((v) => !expiringCoins.includes(v))
+          .sort((a, b) => a.amountSat - b.amountSat);
+        const netSat = (set) => set.reduce((n, v) => n + v.amountSat, 0) - mgr.refreshFee(set, tip);
+        while (netSat(renewSet) < 330 && extras.length) renewSet = [...renewSet, extras.shift()];
+        if (netSat(renewSet) < 330) return; // whole balance can't clear the floor — the warn above covers it
+      }
+      await mgr.refresh(fragmented ? undefined : renewSet.map((v) => v.id));
       render();
     } catch {} // transient — the next throttled attempt retries
   }

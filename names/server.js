@@ -1051,6 +1051,39 @@ Bun.serve({
     // Top up the float over Lightning: it mints an invoice against its own
     // ark balance, which anyone (in practice, the operator's node) can pay.
     // Guarded by a token from the config file — this endpoint is public.
+    // Chain relay for wallets whose networks can't reach any public esplora
+    // (one tester's ISP blackholes mempool.space AND blockstream — every
+    // chain-touching wallet feature died for it). A narrow passthrough to
+    // mempool.space: only the four paths the ark manager speaks, the tip
+    // briefly cached so polling wallets cost one upstream call per few
+    // seconds, not one each.
+    if (url.pathname.startsWith('/esplora/')) {
+      const sub = url.pathname.slice('/esplora'.length);
+      const okPath = sub === '/blocks/tip/height'
+        || /^\/tx\/[0-9a-f]{64}\/(hex|status)$/.test(sub)
+        || (sub === '/tx' && req.method === 'POST');
+      if (!okPath) return json({ error: 'not proxied' }, 404);
+      if (!rateOk(ip, 120)) return json({ error: 'rate limited' }, 429);
+      try {
+        if (sub === '/blocks/tip/height' && globalThis._tipCache && Date.now() - globalThis._tipCache.t < 5000) {
+          return new Response(globalThis._tipCache.v, { headers: { 'access-control-allow-origin': '*' } });
+        }
+        const r = await fetch('https://mempool.space/api' + sub,
+          req.method === 'POST' ? { method: 'POST', body: await req.text() } : undefined);
+        const body = await r.text();
+        if (sub === '/blocks/tip/height' && r.ok) globalThis._tipCache = { v: body, t: Date.now() };
+        return new Response(body, {
+          status: r.status,
+          headers: {
+            'access-control-allow-origin': '*',
+            'content-type': r.headers.get('content-type') || 'text/plain',
+          },
+        });
+      } catch {
+        return json({ error: 'upstream unreachable' }, 502);
+      }
+    }
+
     // Legacy migration hand-off. coinos.io's migrate action (running with
     // the OLD account's authenticated session — that session IS the proof of
     // ownership) tells us which v3 identity may claim the released name.

@@ -200,7 +200,11 @@ export class ArkManager {
   async _esplora(path, init) {
     const hosts = (this._esploraHosts ||= [
       this.esploraUrl,
-      ...(this.network === 'mainnet' ? ['https://blockstream.info/api', 'https://mempool.space/api'] : []),
+      // last resort: our own registrar relays chain calls — the one host a
+      // wallet that can reach coinos at all provably reaches
+      ...(this.network === 'mainnet'
+        ? ['https://blockstream.info/api', 'https://mempool.space/api', 'https://names.coinos.io/esplora']
+        : []),
     ].filter((h, i, a) => h && a.indexOf(h) === i));
     const start = this._esploraIdx || 0;
     let lastErr;

@@ -852,6 +852,7 @@ const STR = {
     arkSendTitle: 'Send',
     arkSendHint: 'Ark address — sent instantly off-chain, no mining fee.',
     arkOwnAddrBoard: "That's your own Spending address — moving from Savings instead.",
+    arkLnExceedsSpending: 'That invoice asks for {need} but Spending holds {have}.',
     arkPayFromSpending: 'Ark payments come from your Spending balance — switch to Spending to send this.',
     arkPayTo: 'To',
     arkNoFee: 'none — instant off-chain send',

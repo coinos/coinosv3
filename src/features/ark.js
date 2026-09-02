@@ -728,12 +728,15 @@ export function arkFeature(ctx) {
     const dec = maybeLnInvoice(invoice);
     if (!dec || !arkAvailable() || wallet.watchOnly) return false;
     const s = arkStateNow();
-    const covers = (state, sats) =>
-      !!s && (s.vtxos || []).some((v) => v.state === state && v.amountSat >= sats);
+    // Coverage by SUM: multi-input pays gather up to 24 coins, so judging by
+    // the single largest coin declined invoices the wallet could pay — a
+    // tester holding 204+29 sats pasted a ~220-sat invoice and nothing
+    // happened at all. Fees are the quote's business, not this gate's.
+    const sum = (state) =>
+      (s ? (s.vtxos || []) : []).filter((v) => v.state === state).reduce((n, v) => n + v.amountSat, 0);
     // pending funds count for the take-over decision: an in-flight payment or
-    // revocation frees them in seconds, and the Boltz fallback can't do small
-    // amounts at all — better to wait for ark than bounce off Boltz's minimum
-    if (!covers('spendable', dec.amountSat || 1) && !covers('pending', dec.amountSat || 1)) return false;
+    // revocation frees them in seconds
+    if (sum('spendable') < (dec.amountSat || 1) && sum('pending') < (dec.amountSat || 1)) return false;
     ui.arkLnPay = { invoice, meta: meta || null, amountSat: dec.amountSat, amount: '', feeSat: null, status: 'quote' };
     ui.sendError = '';
     render();
@@ -2835,7 +2838,24 @@ export function arkFeature(ctx) {
           return true;
         }
       }
-      if (maybeLnInvoice(inv)) return startArkLnPay(inv);
+      if (maybeLnInvoice(inv)) {
+        if (startArkLnPay(inv)) return true;
+        if (arkAvailable() && !wallet.watchOnly) {
+          // An invoice Spending can't cover used to fall through SILENTLY —
+          // the bolt11 landed in the address field looking like a dead
+          // paste. Own it: offer to board the shortfall from Savings when
+          // there is one, else say plainly what's short.
+          const need = (maybeLnInvoice(inv) || {}).amountSat || 0;
+          if (need && wallet.spendable > 1000 && ctx.hook('arkOfferBoard', need)) return true;
+          ui.sendError = t('arkLnExceedsSpending', {
+            need: fmtAmount(need) + ' ' + unitLabel(),
+            have: fmtAmount(arkBalance()?.spendableSat || 0) + ' ' + unitLabel(),
+          });
+          render();
+          return true;
+        }
+        return false;
+      }
       const pk = npubToHex(text);
       if (!pk || !arkAvailable() || !wallet.nostrFetch) return false;
       startNpubPay(pk, String(text).trim());

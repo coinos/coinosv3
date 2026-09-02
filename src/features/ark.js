@@ -833,6 +833,8 @@ export function arkFeature(ctx) {
         } else if (ui.arkLnPay) {
           if (tries < 2 && lnRetryable(a)) {
             tries += 1;
+            p.retrying = tries; // the spinner narrates instead of stonewalling
+            render();
             attempt((a.routingFeeSat ?? 0) + 1).catch((e) => {
               ui.arkLnPay.status = 'ready'; ui.sendError = e.message; render();
             });
@@ -925,7 +927,9 @@ export function arkFeature(ctx) {
       ui.sendError ? h('div', { class: 'notice err' }, ui.sendError) : null,
       p.status === 'paying'
         ? h('div', { class: 'card row gap6', style: 'align-items:center' },
-            h('span', { class: 'spinner sm' }), h('span', { class: 'small muted' }, t('arkLnPaying')))
+            h('span', { class: 'spinner sm' }),
+            h('span', { class: 'small muted' },
+              p.retrying ? t('arkLnRetrying', { n: p.retrying + 1, of: 3 }) : t('arkLnPaying')))
         : h('button', { class: 'btn-primary btn-block', disabled: !!ui.busy || p.status !== 'ready', onClick: doArkLnPay },
             ui.busy ? h('span', { class: 'spinner' }) : t('lnPayConfirm')),
       p.status !== 'paying'

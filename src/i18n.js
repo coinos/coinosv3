@@ -636,6 +636,7 @@ const STR = {
     arkLnPayVia: 'Instant, from your Spending balance',
     arkLnFee: 'Fee',
     arkLnPaying: 'Paying invoice…',
+    arkLnRetrying: 'Route failed — retrying with a bigger fee budget ({n}/{of})…',
     arkLnPayFailed: 'Payment failed',
     arkLnRefunded: 'Payment failed — your money is back in Spending.',
     arkLnPaidTitle: 'Paid!',

@@ -815,15 +815,27 @@ function tabBtn(label, active, onClick) {
   // touch-down for exactly this reason. The click handler stays for
   // keyboard/AT activation; re-selecting the current tab is a no-op, so the
   // pair firing together costs nothing.
+  //
+  // And feedback comes FIRST: the full re-render can take 100ms+ on a
+  // phone, and running it synchronously meant even the button's own active
+  // state waited for the whole pane to build. Flip the strip's classes with
+  // a direct DOM write (paints this frame), then run the real render after
+  // that paint — double-rAF is the "after the next paint" idiom.
   let downAt = 0;
+  const select = (btn) => {
+    if (btn && btn.parentElement) {
+      for (const b of btn.parentElement.children) b.classList.toggle('active', b === btn);
+    }
+    requestAnimationFrame(() => requestAnimationFrame(onClick));
+  };
   return h('button', {
     class: active ? 'active' : '',
     onPointerdown: (e) => {
       if (e.button !== 0) return;
       downAt = performance.now();
-      onClick();
+      select(e.currentTarget);
     },
-    onClick: () => { if (performance.now() - downAt > 500) onClick(); },
+    onClick: (e) => { if (performance.now() - downAt > 500) select(e.currentTarget); },
   }, label);
 }
 

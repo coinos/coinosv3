@@ -264,6 +264,13 @@ export function zapsFeature(ctx) {
           h('input', { type: 'number', min: '0', inputmode: 'decimal', placeholder: t('lnPayAmount'), value: z.amount,
             disabled: !!p.fixedSat,
             onInput: (e) => { z.amount = e.target.value; render(); } }),
+          !p.fixedSat && (hook('lnMaxSendSat') || 0) > 0
+            ? h('button', { type: 'button', onClick: () => {
+                const sat = hook('lnMaxSendSat');
+                z.amount = getUnit() === 'sats' ? String(sat) : (sat / 1e8).toFixed(8);
+                render();
+              } }, t('max'))
+            : null,
           h('div', { style: 'display:flex;align-items:center' }, unitTag())),
         broke
           ? h('div', { class: 'notice info' }, t('zapNoBalance'))

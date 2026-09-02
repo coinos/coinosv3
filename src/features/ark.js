@@ -856,6 +856,27 @@ export function arkFeature(ctx) {
     return !a?.error || !/already|invalid|expired|unpayable|insufficient|consolidate|no amount|exceeds/i.test(a.error);
   }
 
+  // The most a Lightning pay can carry: the spendable sum over the 24-input
+  // cap, minus the schedule fee and the conservative routing reserve. The
+  // real quote at pay time confirms or trims — Max leaves a few sats on the
+  // table rather than promising ones the fees will eat.
+  function lnMaxSat() {
+    const s = arkStateNow();
+    const coins = (s ? (s.vtxos || []) : []).filter((v) => v.state === 'spendable')
+      .sort((a2, b2) => b2.amountSat - a2.amountSat).slice(0, 24);
+    const sum = coins.reduce((n, v) => n + v.amountSat, 0);
+    if (!sum) return 0;
+    const tip = (ark && ark._tipH) || 0;
+    const fees = (ark && ark.info && ark.info.lnSendFees) || {};
+    let amt = sum;
+    for (let i = 0; i < 3; i++) {
+      const f = lnSendFee(amt, fees, coins, tip) + Math.max(3, Math.ceil(amt / 1000));
+      amt = sum - f;
+    }
+    return Math.max(0, amt);
+  }
+  const amountFill = (sat) => (ctx.getUnit() === 'sats' ? String(sat) : (sat / 1e8).toFixed(8));
+
   function arkLnPayView() {
     const u = ' ' + unitLabel();
     if (ui.arkLnPaid) {
@@ -893,6 +914,7 @@ export function arkFeature(ctx) {
           ? h('div', { class: 'input-group' },
               h('input', { type: 'number', min: '0', inputmode: 'decimal', placeholder: t('lnPayAmount'), value: p.amount,
                 onInput: (e) => { p.amount = e.target.value; } }),
+              h('button', { type: 'button', onClick: () => { p.amount = amountFill(lnMaxSat()); render(); } }, t('max')),
               h('div', { style: 'display:flex;align-items:center' }, unitTag()))
           : null,
         p.amountSat != null ? row(t('lnPayAmount'), p.amountSat) : null,
@@ -1413,6 +1435,7 @@ export function arkFeature(ctx) {
       h('div', { class: 'input-group' },
         h('input', { type: 'number', min: '0', inputmode: 'decimal', placeholder: t('lnPayAmount'), value: z.amount,
           onInput: (e) => { z.amount = e.target.value; } }),
+        h('button', { type: 'button', onClick: () => { z.amount = amountFill(lnMaxSat()); render(); } }, t('max')),
         h('div', { style: 'display:flex;align-items:center' }, unitTag())),
       h('input', { type: 'text', class: 'mono-input', placeholder: t('arkZapCommentPh'), value: z.comment,
         onInput: (e) => { z.comment = e.target.value; } }),
@@ -2741,6 +2764,8 @@ export function arkFeature(ctx) {
       return mgr.fetchBolt12(offerStr, amountSat);
     },
     lnSpendableSat() { const b = arkBalance(); return b ? b.spendableSat : 0; },
+    // Max for any Lightning amount form: spendable minus estimated fees.
+    lnMaxSendSat() { return lnMaxSat(); },
     settingsCards() { return [autoWithdrawCard()]; },
     // The onboarding wizard's top-up step borrows the board form wholesale.
     arkBoardForm() {

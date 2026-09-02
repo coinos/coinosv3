@@ -168,6 +168,8 @@ button, .btn {
   font: inherit; font-weight: 600; cursor: pointer; border-radius: 11px;
   border: 1px solid var(--line-strong); background: var(--paper); color: var(--ink);
   padding: 11px 16px; transition: filter .12s, background .12s, border-color .12s;
+  /* no double-tap-zoom arbitration: taps commit immediately on mobile */
+  touch-action: manipulation;
 }
 button:hover { background: var(--surface2); }
 button:active { transform: translateY(1px); }
@@ -583,8 +585,11 @@ body::after {
 /* tab carousel: only the content pane moves, with a soft cross-fade */
 @keyframes tab-in-left { from { opacity: .2; transform: translateX(26px); } }
 @keyframes tab-in-right { from { opacity: .2; transform: translateX(-26px); } }
-.anim-tab-left { animation: tab-in-left .26s cubic-bezier(.25, .8, .35, 1) both; }
-.anim-tab-right { animation: tab-in-right .26s cubic-bezier(.25, .8, .35, 1) both; }
+/* will-change promotes the sliding pane to its own compositor layer BEFORE
+   the animation's first frame — without it, a slow re-render mid-slide let
+   Chrome expose unpainted tiles (gray strips) at the viewport edges */
+.anim-tab-left { animation: tab-in-left .26s cubic-bezier(.25, .8, .35, 1) both; will-change: transform, opacity; }
+.anim-tab-right { animation: tab-in-right .26s cubic-bezier(.25, .8, .35, 1) both; will-change: transform, opacity; }
 
 /* ---- onboarding wizard + tour ---- */
 /* width:100%, not just max-width: with auto margins the flex item doesn't

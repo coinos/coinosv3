@@ -809,7 +809,22 @@ function linkify(text) {
 }
 
 function tabBtn(label, active, onClick) {
-  return h('button', { class: active ? 'active' : '', onClick }, label);
+  // Act on POINTERDOWN, not click: on a phone the click event lands
+  // 100–250ms after the finger does, and a tab switch has no scroll or
+  // long-press ambiguity to wait out — native segmented controls switch on
+  // touch-down for exactly this reason. The click handler stays for
+  // keyboard/AT activation; re-selecting the current tab is a no-op, so the
+  // pair firing together costs nothing.
+  let downAt = 0;
+  return h('button', {
+    class: active ? 'active' : '',
+    onPointerdown: (e) => {
+      if (e.button !== 0) return;
+      downAt = performance.now();
+      onClick();
+    },
+    onClick: () => { if (performance.now() - downAt > 500) onClick(); },
+  }, label);
 }
 
 function createPane() {

@@ -100,6 +100,7 @@ export function messagesFeature(ctx) {
     const s = st();
     if (!ts || (s.read[key] || 0) >= ts) return;
     s.read[key] = ts;
+    bumpMsgRev();
     save(s);
     // read markers ride their own sync domain (registered below) — nudging
     // the cache is what gets the watermark onto the relays for other devices
@@ -117,7 +118,7 @@ export function messagesFeature(ctx) {
     for (const room of rooms.values())
       for (const [id, msgs] of room.byChannel)
         bump(chRead(id), newestFrom(msgs.values(), (m) => !my.includes(m.author)));
-    if (changed) { save(s); try { wallet.saveCache(); } catch {} }
+    if (changed) { bumpMsgRev(); save(s); try { wallet.saveCache(); } catch {} }
     render();
   }
 
@@ -147,7 +148,7 @@ export function messagesFeature(ctx) {
         for (const [k, v] of Object.entries(d.msgRead)) {
           if (typeof v === 'number' && (s.read[k] || 0) < v) { s.read[k] = v; changed = true; }
         }
-        if (changed) wallet.saveFeatureState('messages', s);
+        if (changed) { bumpMsgRev(); wallet.saveFeatureState('messages', s); }
       },
     });
   }
@@ -167,7 +168,20 @@ export function messagesFeature(ctx) {
   // How many conversations are waiting on us — the header only draws a dot, but
   // a count keeps the door open for a number later. Floored by the list-screen
   // watermark: once you've seen the list, the header stops repeating it.
+  //
+  // Memoized on a revision counter: the header asks on EVERY render, and the
+  // walk touches every cached message in every thread and room — a phone
+  // paid that for each toast and repaint. Message arrivals and read-marks
+  // bump the revision; everything else reuses the answer.
+  let msgRev = 0;
+  const bumpMsgRev = () => { msgRev++; };
+  let _unreadMemo = { rev: -1, val: 0 };
   function unreadCount() {
+    if (_unreadMemo.rev === msgRev) return _unreadMemo.val;
+    _unreadMemo = { rev: msgRev, val: unreadCountNow() };
+    return _unreadMemo.val;
+  }
+  function unreadCountNow() {
     const s = st();
     const my = myPubkeys();
     const seen = s.read[HOME_READ] || 0;
@@ -369,6 +383,7 @@ export function messagesFeature(ctx) {
         const msgs = room.byChannel.get(c.id) || room.byChannel.set(c.id, new Map()).get(c.id);
         if (!msgs.has(m.rumor.id)) msgs.set(m.rumor.id, m);
       }
+    bumpMsgRev();
     return room;
   }
 
@@ -406,6 +421,7 @@ export function messagesFeature(ctx) {
     if (rumor.kind === 9) {
       const msgs = room.byChannel.get(channelId) || room.byChannel.set(channelId, new Map()).get(channelId);
       msgs.set(rumor.id, { rumor, author });
+      bumpMsgRev();
       room.typing.delete(author); // the message itself ends the "typing…"
     } else if (rumor.kind === 5) {
       for (const e of rumor.tags.filter((x) => x[0] === 'e')) {
@@ -1084,6 +1100,7 @@ export function messagesFeature(ctx) {
   function noteDM(peer, rumor, mine) {
     if (!peer || !rumor.id) return;
     threadOf(peer).set(rumor.id, { rumor, mine });
+    bumpMsgRev();
     scheduleRepaint();
   }
 
@@ -1216,6 +1233,7 @@ export function messagesFeature(ctx) {
       for (const m of list)
         threadOf(peer).set(m.id, { rumor: { id: m.id, pubkey: m.from, content: m.text, created_at: m.t, kind: 14 }, mine: isMe(m.from) });
     }
+    bumpMsgRev();
     if (swept) save(s);
     allUnsubs.push(subscribeOn(DM_RELAYS, { kinds: [1059], '#p': pks, limit: 400 }, (wrap) => {
       handleInboxWrap(wrap).catch(() => {});

@@ -2913,6 +2913,19 @@ export function arkFeature(ctx) {
     historyEntries() {
       const s = arkStateNow();
       if (!s) return [];
+      // Memoized briefly: this rebuilds, sorts, and dedupes the whole
+      // movements list plus the accounted-inputs set — fine once, wasteful
+      // on every repaint. Movements only change through saves that trigger
+      // a render themselves, so a short reuse window costs nothing visible.
+      const key = `${(s.movements || []).length}:${(s.actions || []).length}`;
+      if (this._histMemo && this._histMemo.key === key && Date.now() - this._histMemo.t < 1500) {
+        return this._histMemo.val;
+      }
+      const val = this._histBuild(s);
+      this._histMemo = { key, t: Date.now(), val };
+      return val;
+    },
+    _histBuild(s) {
       // In-flight exits are payments the user made — they belong in history
       // as pending records, not on a monitoring page nobody thinks to visit.
       const exits = (s.actions || [])

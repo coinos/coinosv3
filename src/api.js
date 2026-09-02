@@ -74,6 +74,11 @@ export function setNetwork(net) {
 const DATA_SOURCES_BY_NET = {
   mainnet: [
     { id: 'coinos', label: 'coinos', type: 'electrum', url: 'wss://electrum.coinos.io' },
+    // Same Fulcrum, different apex: the coinos.io zone's edge security 403s
+    // WS clients with poor IP reputation (VPN exits), and the public
+    // fallbacks below are the usual suspects regional ISPs block wholesale.
+    // This mirror rides infra anyone who can load the app provably reaches.
+    { id: 'coinosalt', label: 'coinos (mirror)', type: 'electrum', url: 'wss://halwallet.app/electrum' },
     { id: 'mempool', label: 'mempool.space', type: 'esplora', base: 'https://mempool.space/api', web: 'https://mempool.space', kind: 'mempool' },
     { id: 'blockstream', label: 'blockstream.info', type: 'esplora', base: 'https://blockstream.info/api', web: 'https://blockstream.info', kind: 'esplora' },
     { id: 'electroncash', label: 'btc.electroncash.dk', type: 'electrum', url: 'wss://btc.electroncash.dk:60004' },

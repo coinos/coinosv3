@@ -187,7 +187,16 @@ export class ArkManager {
     });
     return true;
   }
-  _decoded(v) { return decodeVtxo(hex.decode(v.bytes)); }
+  _decoded(v) {
+    // vtxo bytes are immutable per id — parse once. The depth advisory and
+    // fee estimates decode every coin on every render without this.
+    const hit = this._decodeCache && this._decodeCache.get(v.id);
+    if (hit) return hit;
+    const d = decodeVtxo(hex.decode(v.bytes));
+    (this._decodeCache ||= new Map()).set(v.id, d);
+    if (this._decodeCache.size > 200) this._decodeCache.delete(this._decodeCache.keys().next().value);
+    return d;
+  }
 
   // ---- chain adapter (esplora REST, same API the wallet already speaks) ----
   //

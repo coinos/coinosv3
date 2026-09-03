@@ -1929,16 +1929,26 @@ export function arkFeature(ctx) {
   // What a unilateral exit will need from Savings, BEFORE it starts: every
   // chain hop is a zero-fee tx bumped by a ~130 vB CPFP child, plus the
   // final claim. Priced at today's feerate — the driver reprices per hop.
+  // Memoized on the coin set + feerate: signedExitTxs rebuilds every hop of
+  // every coin's exit chain with an elliptic-curve tweak per hop — profiled
+  // at ~200ms of secp256k1 per call on a phone with depth-13 coins — and
+  // the depth advisory asked for it on EVERY wallet render. Same coins at
+  // the same feerate price the same, so pay once per change instead.
+  let _exitFeeMemo = { key: null, val: 0 };
   function estimateExitFeeSat(mgr) {
     const feeRate = Math.max(1, (wallet.feeRates && wallet.feeRates.halfHourFee) || 2);
+    const coins = mgr.vtxos().filter((x) => x.state === 'spendable');
+    const key = feeRate + '|' + coins.map((v) => v.id).join(',');
+    if (_exitFeeMemo.key === key) return _exitFeeMemo.val;
     let total = 0;
-    for (const v of mgr.vtxos().filter((x) => x.state === 'spendable')) {
+    for (const v of coins) {
       try {
         for (const txi of signedExitTxs(mgr._decoded(v), mgr.serverPub))
           total += Math.ceil((txi.vsize + 130) * feeRate);
         total += Math.ceil(150 * feeRate); // the claim tx
       } catch {}
     }
+    _exitFeeMemo = { key, val: total };
     return total;
   }
 

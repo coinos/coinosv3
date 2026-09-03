@@ -1905,7 +1905,14 @@ export function messagesFeature(ctx) {
             mine ? hook('hatShopEntry') : null)),
         // no spinner while the kind 0 loads — prefetch keeps this rare, and
         // an empty beat reads calmer than a spinner
-        showAbout && !ui.profEdit ? h('p', { class: 'small', style: 'margin:0;white-space:pre-wrap' }, about.slice(0, 1000)) : null,
+        // The bio rides the same renderer as notes: npub mentions become
+        // @names, other nostr: refs truncate to stubs, URLs linkify — and
+        // overflow-wrap catches any remaining unbreakable token (a raw npub
+        // in a bio was punching clean through the card).
+        showAbout && !ui.profEdit
+          ? h('p', { class: 'small', style: 'margin:0;white-space:pre-wrap;overflow-wrap:anywhere' },
+              ...noteBody(about.slice(0, 1000)))
+          : null,
         // your own npub stays out of the editor — it means nothing to most
         // people, and the account settings still show it to those who care
         mine ? null : h('button', {

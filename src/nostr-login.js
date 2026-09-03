@@ -172,11 +172,33 @@ function bunkerAdapter(signer, pubkey, local) {
 // relay — no bunker URL to copy. Returns the URI (render it as a deep link
 // and a QR), a promise that resolves to a signer adapter when the app
 // answers, and a cancel.
-export async function nostrConnect({ relays = ['wss://relay.coinos.io', 'wss://nos.lol'], timeoutMs = 180_000 } = {}) {
+//
+// SURVIVAL: launching the signer app on a phone FREEZES this tab — its relay
+// sockets die exactly when the approval is being published, and a limit:0
+// subscription never replays what it slept through. Worse, a signer's
+// callbackUrl can NAVIGATE the tab home, reloading the page and discarding
+// the client key mid-handshake. So the pending handshake is persisted
+// (sessionStorage) and the wait runs two paths: the library's live
+// subscription, raced against a stored-event poller that re-queries the
+// relays (kicked on every return to visibility) — whichever sees the
+// approval first wins. `nostrConnectPending()` hands a fresh boot the
+// persisted handshake so a reloaded page resumes instead of shrugging.
+const NC_PENDING_KEY = 'nc-pending';
+export function nostrConnectPending(timeoutMs = 180_000) {
+  try {
+    const p = JSON.parse(sessionStorage.getItem(NC_PENDING_KEY) || 'null');
+    if (p && p.local && p.secret && p.uri && Date.now() - p.ts < timeoutMs) return p;
+    if (p) sessionStorage.removeItem(NC_PENDING_KEY);
+  } catch {}
+  return null;
+}
+export async function nostrConnect({ relays = ['wss://relay.coinos.io', 'wss://nos.lol'], timeoutMs = 180_000, resume = null } = {}) {
   const { BunkerSigner, createNostrConnectURI } = await loadNip46();
-  const local = generateSecretKey();
-  const secret = hex.encode(crypto.getRandomValues(new Uint8Array(16)));
-  const uri = createNostrConnectURI({
+  const local = resume ? hex.decode(resume.local) : generateSecretKey();
+  const secret = resume ? resume.secret : hex.encode(crypto.getRandomValues(new Uint8Array(16)));
+  const startedAt = resume ? resume.ts : Date.now();
+  if (resume && resume.relays) relays = resume.relays;
+  const uri = resume ? resume.uri : createNostrConnectURI({
     clientPubkey: getPublicKey(local),
     relays,
     secret,
@@ -184,15 +206,87 @@ export async function nostrConnect({ relays = ['wss://relay.coinos.io', 'wss://n
     url: 'https://v3.coinos.io',
     perms: ['get_public_key', 'sign_event', 'nip44_encrypt', 'nip44_decrypt'],
   }) + '&callbackUrl=' + encodeURIComponent('https://v3.coinos.io/');
+  try {
+    sessionStorage.setItem(NC_PENDING_KEY, JSON.stringify({
+      local: hex.encode(local), secret, relays, uri, ts: startedAt,
+    }));
+  } catch {}
+  const clientPub = getPublicKey(local);
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(new Error('signer connect timed out')), timeoutMs);
-  const ready = (async () => {
-    const signer = await BunkerSigner.fromURI(local, uri, {}, controller.signal);
-    const pubkey = await signer.getPublicKey();
-    return bunkerAdapter(signer, pubkey, local);
+  const timer = setTimeout(() => controller.abort(new Error('signer connect timed out')),
+    Math.max(5_000, timeoutMs - (Date.now() - startedAt)));
+
+  // Path 1: the library's live wait — instant while the tab stays awake.
+  const live = (async () => BunkerSigner.fromURI(local, uri, {}, controller.signal))();
+  live.catch(() => {});
+
+  // Path 2: the replay poller — finds an approval published while we slept.
+  let visKick = null;
+  const onVis = () => { if (document.visibilityState === 'visible' && visKick) visKick(); };
+  document.addEventListener('visibilitychange', onVis);
+  const replay = (async () => {
+    const seen = new Set();
+    while (!controller.signal.aborted) {
+      await new Promise((r) => {
+        visKick = r;
+        const t2 = setTimeout(r, 5000);
+        controller.signal.addEventListener('abort', () => { clearTimeout(t2); r(); }, { once: true });
+      });
+      visKick = null;
+      if (controller.signal.aborted) break;
+      const pool = new SimplePool();
+      try {
+        const evs = await Promise.any(relays.map(async (url) => {
+          await pool.ensureRelay(url, { connectionTimeout: 4000 });
+          const got = await pool.querySync([url], {
+            kinds: [24133], '#p': [clientPub], since: Math.floor(startedAt / 1000) - 120,
+          }, { maxWait: 4500 });
+          if (!got || !got.length) throw new Error('nothing yet');
+          return got;
+        })).catch(() => []);
+        for (const ev of evs || []) {
+          if (seen.has(ev.id)) continue;
+          seen.add(ev.id);
+          try {
+            const key = nip44.getConversationKey(local, ev.pubkey);
+            const resp = JSON.parse(nip44.decrypt(ev.content, key));
+            // some signers echo the secret, others answer a bare "ack"
+            if (resp.result === secret || resp.result === 'ack') {
+              return BunkerSigner.fromBunker(local, { pubkey: ev.pubkey, relays, secret });
+            }
+          } catch {}
+        }
+      } catch {} finally { try { pool.close(relays); } catch {} }
+    }
+    throw controller.signal.reason || new Error('cancelled');
   })();
-  ready.finally(() => clearTimeout(timer)).catch(() => {});
-  return { uri, ready, cancel: (reason) => controller.abort(reason || new Error('cancelled')) };
+  replay.catch(() => {});
+
+  const ready = (async () => {
+    try {
+      const signer = await Promise.any([live, replay]);
+      const pubkey = await signer.getPublicKey();
+      try { sessionStorage.removeItem(NC_PENDING_KEY); } catch {}
+      return bunkerAdapter(signer, pubkey, local);
+    } catch (e) {
+      // an aborted wait names its real cause (timeout, user cancel); a raw
+      // AggregateError from the race names nothing useful
+      throw (controller.signal.aborted && controller.signal.reason)
+        || (e && e.errors && e.errors[0]) || e;
+    } finally {
+      clearTimeout(timer);
+      document.removeEventListener('visibilitychange', onVis);
+      controller.abort(new Error('settled'));
+    }
+  })();
+  ready.catch(() => {});
+  return {
+    uri, ready,
+    cancel: (reason) => {
+      try { sessionStorage.removeItem(NC_PENDING_KEY); } catch {}
+      controller.abort(reason || new Error('cancelled'));
+    },
+  };
 }
 
 // A pasted key: signing happens locally, and the key is never persisted.

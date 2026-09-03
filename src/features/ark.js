@@ -1690,16 +1690,15 @@ export function arkFeature(ctx) {
     const feeRate = Math.max(1, (wallet.feeRates && wallet.feeRates.halfHourFee) || 2);
     const afterFee = Math.ceil(530 * feeRate);
     const depthOf = (v) => { try { return mgr._decoded(v).genesis.length; } catch { return null; } };
-    // relative and terse — "expires in 14d" / "in 13h" — a date says less
-    // than a countdown, and a coin past its height says so plainly instead
-    // of the shifty "expires 0h" (the server still honors it; the wallet's
+    // relative and terse — "14d" / "13h" beside the hourglass — a date says
+    // less than a countdown, and a coin past its height says so plainly
+    // instead of the shifty "0h" (the server still honors it; the wallet's
     // next renewal round sweeps it up).
     const expiresOf = (v) => {
       if (!v.expiryHeight || !tip) return '—';
       const blocks = v.expiryHeight - tip;
       if (blocks <= 0) return t('arkCoinsExpired');
-      const c = blocks >= 144 ? Math.round(blocks / 144) + 'd' : Math.max(1, Math.round(blocks / 6)) + 'h';
-      return t('arkCoinsExpIn', { when: c });
+      return blocks >= 144 ? Math.round(blocks / 144) + 'd' : Math.max(1, Math.round(blocks / 6)) + 'h';
     };
     // what pulling THIS coin on-chain alone would cost: every hop's fee
     // child plus the claim, at today's rate (the whole-balance figure below
@@ -1790,11 +1789,17 @@ export function arkFeature(ctx) {
                     h('span', { class: 'small faint' }, ' ' + unitLabel())),
                   h('span', { class: 'small ' + (f > 0 ? 'muted' : 'faint') },
                     t('arkCoinsRowRenew', { fee: f > 0 ? fmtAmount(f) : t('arkDepthFree') }))),
-                h('div', { class: 'small faint' }, t('arkCoinsRowMeta', {
-                  exp: expiresOf(v),
-                  d: d == null ? '—' : String(d),
-                  exit: xf == null ? '—' : fmtAmount(xf),
-                }))));
+                // little labeled chips instead of a dot-separated line: each
+                // fact wears its own pill, wrapping freely on narrow screens
+                h('div', { class: 'coin-chips' },
+                  h('span', {
+                    class: 'coin-chip' + (v.expiryHeight && tip && v.expiryHeight - tip <= 0 ? ' warn' : ''),
+                    title: t('arkCoinsChipExpTitle'),
+                  }, '⏳ ' + expiresOf(v)),
+                  h('span', { class: 'coin-chip', title: t('arkCoinsChipDepthTitle') },
+                    t('arkCoinsChipDepth', { d: d == null ? '—' : String(d) })),
+                  h('span', { class: 'coin-chip', title: t('arkCoinsChipExitTitle') },
+                    t('arkCoinsChipExit', { fee: xf == null ? '—' : fmtAmount(xf) })))));
           })),
         h('p', { class: 'small faint', style: 'margin:4px 0 0' }, t('arkCoinsExpiryNote'))),
       h('div', { class: 'card col', style: 'gap:8px' },

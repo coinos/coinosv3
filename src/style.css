@@ -259,6 +259,14 @@ textarea { resize: vertical; min-height: 84px; font-family: var(--mono); font-si
 .coin { display: flex; align-items: center; gap: 11px; padding: 11px 2px; border-top: 1px solid var(--line); }
 .coin:first-child { border-top: 0; }
 .coin input[type=checkbox] { width: 18px; height: 18px; accent-color: var(--accent); }
+/* per-coin fact pills: each datum wears its own little labeled chip */
+.coin-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.coin-chip {
+  display: inline-flex; align-items: center; gap: 4px; padding: 1px 8px;
+  border: 1px solid var(--line); border-radius: 999px;
+  font-size: 11.5px; color: var(--muted); white-space: nowrap;
+}
+.coin-chip.warn { color: var(--accent-ink); border-color: var(--accent); }
 
 /* ---- review / summary ---- */
 .summary { background: var(--surface2); border: 1px solid var(--line); border-radius: 12px; padding: 14px; }

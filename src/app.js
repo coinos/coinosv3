@@ -3385,8 +3385,38 @@ function balanceCard() {
       el._inited = true;
     }, 0);
     _accDir = null; // the drag is the animation here
+    // The settled-card check, shared by the scroll debounce and drag release.
+    // While a finger or mouse button is still DOWN nothing switches — hovering
+    // a card mid-drag is browsing, not choosing; release is the choice.
+    const settle = (el) => {
+      if (el._dragging) return;
+      const mid = el.scrollLeft + el.clientWidth / 2;
+      let best = 0, bestD = Infinity;
+      [...el.children].forEach((k, i) => {
+        const d = Math.abs(k.offsetLeft + k.offsetWidth / 2 - mid);
+        if (d < bestD) { bestD = d; best = i; }
+      });
+      const view = ORDER2[best];
+      if (view && view !== accountSel()) {
+        ui.account = view;
+        try { localStorage.setItem(ACCOUNT_KEY, view); } catch {}
+        // selecting an account lands on its history (home), any open
+        // payment detail belonged to the other account
+        ui.txDetail = null; ui.arkMoveDetail = null; ui.arkExitDetail = null; ui.giftDetail = null;
+        ui.tab = 'history';
+        render();
+      }
+    };
     return h('div', {
       class: 'bal-carousel',
+      onTouchstart: (e) => { const el = e.currentTarget; el._dragging = true; clearTimeout(el._settle); },
+      onTouchend: (e) => {
+        const el = e.currentTarget;
+        el._dragging = false;
+        // momentum/snap scroll events reschedule this; a still release needs it
+        clearTimeout(el._settle);
+        el._settle = setTimeout(() => settle(el), 150);
+      },
       // Desktop: scroll-snap has no mouse drag, so emulate one — grab the
       // strip and pull. Touch keeps the native pan (pointerType check);
       // buttons keep their clicks untouched. Mandatory snap fights raw
@@ -3411,6 +3441,7 @@ function balanceCard() {
           const dx = ev.clientX - x0;
           if (!moved && Math.abs(dx) > 4) {
             moved = true;
+            el._dragging = true;
             el.classList.add('grabbing');
             el.style.scrollSnapType = 'none';
           }
@@ -3425,6 +3456,7 @@ function balanceCard() {
           window.removeEventListener('pointermove', mv);
           window.removeEventListener('pointerup', up);
           el.classList.remove('grabbing');
+          el._dragging = false;
           if (!moved) return;
           el._dragged = Date.now(); // the release's click must not double as a card tap
           // A quick FLICK throws the card: velocity over the last ~100ms of
@@ -3443,6 +3475,10 @@ function balanceCard() {
           const k = kids[best];
           if (k) el.scrollTo({ left: k.offsetLeft + k.offsetWidth / 2 - el.clientWidth / 2, behavior: 'smooth' });
           setTimeout(() => { el.style.scrollSnapType = ''; }, 400);
+          // the glide's own scroll events reschedule this; a release already
+          // at rest on the target needs the switch to fire regardless
+          clearTimeout(el._settle);
+          el._settle = setTimeout(() => settle(el), 150);
         };
         window.addEventListener('pointermove', mv);
         window.addEventListener('pointerup', up);
@@ -3451,24 +3487,7 @@ function balanceCard() {
         const el = e.target;
         el._lastScroll = Date.now();
         clearTimeout(el._settle);
-        el._settle = setTimeout(() => {
-          const mid = el.scrollLeft + el.clientWidth / 2;
-          let best = 0, bestD = Infinity;
-          [...el.children].forEach((k, i) => {
-            const d = Math.abs(k.offsetLeft + k.offsetWidth / 2 - mid);
-            if (d < bestD) { bestD = d; best = i; }
-          });
-          const view = ORDER2[best];
-          if (view && view !== accountSel()) {
-            ui.account = view;
-            try { localStorage.setItem(ACCOUNT_KEY, view); } catch {}
-            // selecting an account lands on its history (home), any open
-            // payment detail belonged to the other account
-            ui.txDetail = null; ui.arkMoveDetail = null; ui.arkExitDetail = null; ui.giftDetail = null;
-            ui.tab = 'history';
-            render();
-          }
-        }, 120);
+        el._settle = setTimeout(() => settle(el), 120);
       },
     }, ORDER2.map((v) => h('div', {
       class: 'card balance bal-slide',

@@ -444,6 +444,19 @@ async function settleLoop() {
         body: JSON.stringify({ token: CFG.push.token, pubkey: state.names[name].pubkey, amountSat: sat }),
       }).catch(() => {});
     }
+    // ...and POST to their webhook, if they registered one
+    if (state.names[name] && state.names[name].webhook) {
+      queueWebhook(name, {
+        type: 'payment',
+        address: name,
+        amount: sat,
+        hash: inv.payment_hash,
+        ...(inv.payment_preimage ? { preimage: inv.payment_preimage } : {}),
+        ...(inv.description ? { memo: String(inv.description).slice(0, 640) } : {}),
+        ...(inv.bolt11 ? { bolt11: inv.bolt11 } : {}),
+        ts: Date.now(),
+      });
+    }
     if (pending) {
       if (pending.zap) publishZapReceipt(pending, inv).catch(() => {});
       delete state.invoices[inv.payment_hash];
@@ -630,6 +643,118 @@ async function takenByCoinosUser(domain, name, claimantPubkey = null) {
 
 const validUri = (u) => typeof u === 'string' && /^bitcoin:/i.test(u) && u.length <= 480
   && !/[\s"\\]/.test(u);
+
+// ---------------------------------------------------------------------------
+// webhooks — POST-on-payment for a name (the coinos.io-style merchant notify)
+// ---------------------------------------------------------------------------
+// A name's owner registers a URL (and optional shared secret); every Lightning
+// settlement for that name then POSTs a small JSON body there. Fires on the
+// SETTLEMENT — the money has arrived on our node for that name — independent
+// of how the onward ark delivery goes.
+//
+// The URL is attacker-supplied and we fetch it from inside our own network,
+// so it is vetted hard: https only, no credentials, and every address the
+// host resolves to must be public unicast (loopback, RFC1918, CGNAT/tailscale
+// 100.64/10, link-local, multicast and their v6 kin all refused) — checked at
+// registration AND before every delivery, since DNS can change between them.
+
+const privV4 = (ip) => {
+  const p = ip.split('.').map(Number);
+  if (p.length !== 4 || p.some((n) => Number.isNaN(n))) return true;
+  return p[0] === 0 || p[0] === 10 || p[0] === 127
+    || (p[0] === 100 && p[1] >= 64 && p[1] <= 127)
+    || (p[0] === 169 && p[1] === 254)
+    || (p[0] === 172 && p[1] >= 16 && p[1] <= 31)
+    || (p[0] === 192 && p[1] === 168) || (p[0] === 192 && p[1] === 0)
+    || (p[0] === 198 && (p[1] === 18 || p[1] === 19))
+    || p[0] >= 224;
+};
+const privAddr = (addr) => {
+  const a = addr.toLowerCase();
+  if (a.includes(':')) {
+    const v4 = a.match(/::ffff:(\d+\.\d+\.\d+\.\d+)$/);
+    if (v4) return privV4(v4[1]);
+    return a === '::1' || a === '::' || /^f[cd]/.test(a) || /^fe[89ab]/.test(a) || /^ff/.test(a);
+  }
+  return privV4(a);
+};
+async function vetWebhookUrl(raw) {
+  let u;
+  try { u = new URL(String(raw)); } catch { return 'invalid url'; }
+  if (u.protocol !== 'https:') return 'url must be https';
+  if (u.username || u.password) return 'no credentials in the url';
+  if (u.hostname.length > 253 || /^(localhost|.*\.(local|internal|lan|home|arpa))$/i.test(u.hostname)) return 'private host';
+  try {
+    const { lookup } = await import('node:dns/promises');
+    const addrs = await lookup(u.hostname, { all: true });
+    if (!addrs.length) return 'host does not resolve';
+    for (const a of addrs) if (privAddr(a.address)) return 'host resolves to a private address';
+  } catch { return 'host does not resolve'; }
+  return null;
+}
+
+// Delivery: immediate attempt, then 30s / 5min / 30min retries, then dropped.
+// The queue is persisted so a restart finishes what it owed.
+const WEBHOOK_BACKOFF = [0, 30_000, 300_000, 1_800_000];
+function queueWebhook(key, payload) {
+  const rec = state.names[key];
+  if (!rec || !rec.webhook || !rec.webhook.url) return;
+  state.webhookQueue = state.webhookQueue || [];
+  state.webhookQueue.push({ key, payload, tries: 0, nextAt: Date.now() });
+  if (state.webhookQueue.length > 500) state.webhookQueue.splice(0, state.webhookQueue.length - 500);
+  persist();
+  drainWebhooks();
+}
+let webhookDraining = false;
+async function drainWebhooks() {
+  if (webhookDraining) return;
+  webhookDraining = true;
+  try {
+    for (;;) {
+      const q = state.webhookQueue || [];
+      const now = Date.now();
+      const item = q.find((x) => x.nextAt <= now);
+      if (!item) break;
+      const rec = state.names[item.key];
+      const hook = rec && rec.webhook;
+      if (!hook || !hook.url) { q.splice(q.indexOf(item), 1); persist(); continue; }
+      let outcome;
+      const bad = await vetWebhookUrl(hook.url);
+      if (bad) outcome = 'refused: ' + bad;
+      else {
+        try {
+          const ctl = new AbortController();
+          const t = setTimeout(() => ctl.abort(), 10_000);
+          const res = await fetch(hook.url, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ ...item.payload, ...(hook.secret ? { secret: hook.secret } : {}) }),
+            redirect: 'error',
+            signal: ctl.signal,
+          });
+          clearTimeout(t);
+          outcome = res.ok ? 'ok' : `http ${res.status}`;
+        } catch (e) { outcome = 'error: ' + (e.message || 'fetch failed').slice(0, 80); }
+      }
+      rec.webhook.last = { ts: Date.now(), result: outcome, hash: item.payload.hash };
+      if (outcome === 'ok' || outcome.startsWith('refused')) {
+        q.splice(q.indexOf(item), 1);
+        log(`webhook ${item.key} ${item.payload.hash?.slice(0, 12)}: ${outcome}`);
+      } else {
+        item.tries += 1;
+        if (item.tries >= WEBHOOK_BACKOFF.length) {
+          q.splice(q.indexOf(item), 1);
+          log(`webhook ${item.key} ${item.payload.hash?.slice(0, 12)}: gave up after ${item.tries} tries (${outcome})`);
+        } else {
+          item.nextAt = Date.now() + WEBHOOK_BACKOFF[item.tries];
+          log(`webhook ${item.key}: ${outcome} — retry ${item.tries}/${WEBHOOK_BACKOFF.length - 1}`);
+        }
+      }
+      persist();
+    }
+  } finally { webhookDraining = false; }
+}
+setInterval(() => { drainWebhooks().catch(() => {}); }, 30_000);
 
 // crude per-IP limiter
 const rate = new Map();
@@ -1280,12 +1405,53 @@ Bun.serve({
         // the owner's own CLINK service / BOLT 12 offer, when they set one
         ...(noffer ? { noffer } : {}),
         ...(lno ? { lno } : {}),
+        // a registered webhook survives record updates — it's cleared only
+        // through its own endpoint
+        ...(existing?.webhook ? { webhook: existing.webhook } : {}),
         offerId: offer?.offerId, bolt12: offer?.bolt12,
       };
       persist();
       log(`${existing ? 'updated' : 'registered'} ${key} for ${auth.pubkey.slice(0, 12)}`);
       if (!existing) sendWelcome(state.names[key].pubkey, [state.names[key].manager]).catch(() => {});
       return json({ ok: true, name, address: key, record: recordName(name, domain) });
+    }
+
+    // Webhook management: the name's owner (or nominated manager) points a
+    // URL at their own system and every settled payment for the name POSTs
+    // there. GET shows the current config plus the last delivery's outcome;
+    // an empty/absent url on POST (or DELETE) clears it.
+    if (url.pathname === '/webhook' && (req.method === 'POST' || req.method === 'DELETE' || req.method === 'GET')) {
+      if (!rateOk(ip)) return json({ error: 'rate limited' }, 429);
+      const bodyText = req.method === 'GET' ? '' : await req.text();
+      const a = await checkNip98(req, url, bodyText);
+      if (a.error) return json({ error: a.error }, 401);
+      let body = {};
+      if (bodyText) { try { body = JSON.parse(bodyText); } catch { return json({ error: 'bad body' }, 400); } }
+      const name = String((req.method === 'GET' ? url.searchParams.get('name') : body.name) || '').toLowerCase();
+      const domain = String((req.method === 'GET' ? url.searchParams.get('domain') : body.domain) || 'coinos.io').toLowerCase();
+      const key = `${name}@${domain}`;
+      const rec = state.names[key];
+      if (!rec) return json({ error: 'unknown name' }, 404);
+      if (rec.pubkey !== a.pubkey && rec.manager !== a.pubkey) return json({ error: 'not your name' }, 403);
+      if (req.method === 'GET') {
+        return json({ ok: true, name, domain, webhook: rec.webhook
+          ? { url: rec.webhook.url, secret: rec.webhook.secret || null, set: rec.webhook.set, last: rec.webhook.last || null }
+          : null });
+      }
+      if (req.method === 'DELETE' || !body.url) {
+        delete rec.webhook;
+        persist();
+        log(`webhook cleared for ${key}`);
+        return json({ ok: true, webhook: null });
+      }
+      const rawUrl = String(body.url).slice(0, 512);
+      const bad = await vetWebhookUrl(rawUrl);
+      if (bad) return json({ error: bad }, 400);
+      const secret = body.secret != null ? String(body.secret).slice(0, 128) : undefined;
+      rec.webhook = { url: rawUrl, ...(secret ? { secret } : {}), set: Date.now() };
+      persist();
+      log(`webhook set for ${key} → ${new URL(rawUrl).hostname}`);
+      return json({ ok: true, webhook: { url: rawUrl, secret: secret || null } });
     }
 
     if (url.pathname === '/register' && req.method === 'DELETE') {

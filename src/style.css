@@ -444,13 +444,18 @@ hr.divider { margin: 16px 0; }
 /* balance carousel: the other face peeks at the card's edge and drags into
    place — native scroll-snap does the physics. Full-bleed inside the card
    so the peeking neighbor touches the card wall. */
+/* A page-level strip of whole balance CARDS: full-bleed past the app column
+   so the neighbor card peeks in from the screen edge. The negative margins +
+   matching padding enlarge the clip box so card shadows aren't cropped. */
 .bal-carousel {
-  display: flex; gap: 14px; overflow-x: auto; scroll-snap-type: x mandatory;
-  margin: -20px; padding: 20px; scrollbar-width: none; -ms-overflow-style: none;
+  position: relative; /* offsetParent for the slides: offsetLeft math stays container-relative */
+  display: flex; gap: 12px; overflow-x: auto; scroll-snap-type: x mandatory;
+  margin: -16px; padding: 16px; scrollbar-width: none; -ms-overflow-style: none;
   touch-action: pan-x pan-y;
 }
 .bal-carousel::-webkit-scrollbar { display: none; }
-.bal-slide { flex: 0 0 calc(100% - 34px); scroll-snap-align: center; min-width: 0; }
+.bal-slide { flex: 0 0 calc(100% - 40px); scroll-snap-align: center; min-width: 0; }
+.bal-carousel .card + .card { margin-top: 0; }
 .balance-move .seg { display: flex; width: 100%; }
 .balance-move .seg button { flex: 1; }
 .send-suggest { max-height: 260px; overflow-y: auto; }

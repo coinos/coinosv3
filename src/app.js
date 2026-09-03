@@ -3313,58 +3313,10 @@ function balanceCard() {
               h('div', {}, h('div', { class: 'k' }, l.label), h('div', { class: 'v' }, fmtAmount(l.sat), ' ', unitTag()))))
         : null);
   };
-  const carouselMode = hasSpending && !kindLocked;
-  let heroEl;
-  if (carouselMode) {
-    const ORDER2 = ['spending', 'savings'];
-    heroEl = h('div', {
-      class: 'bal-carousel',
-      onScroll: (e) => {
-        const el = e.target;
-        el._lastScroll = Date.now();
-        clearTimeout(el._settle);
-        el._settle = setTimeout(() => {
-          const mid = el.scrollLeft + el.clientWidth / 2;
-          let best = 0, bestD = Infinity;
-          [...el.children].forEach((k, i) => {
-            const d = Math.abs(k.offsetLeft + k.offsetWidth / 2 - mid);
-            if (d < bestD) { bestD = d; best = i; }
-          });
-          const view = ORDER2[best];
-          if (view && view !== accountSel()) {
-            ui.account = view;
-            try { localStorage.setItem(ACCOUNT_KEY, view); } catch {}
-            render();
-          }
-        }, 120);
-      },
-    }, ORDER2.map((v) => h('div', { class: 'bal-slide' }, faceFor(v))));
-    // Align the carousel to the selected face after this render lands — but
-    // never fight a finger or live momentum.
-    setTimeout(() => {
-      const el = document.querySelector('.bal-carousel');
-      if (!el || Date.now() - (el._lastScroll || 0) < 350) return;
-      const k = el.children[ORDER2.indexOf(sel)];
-      if (!k) return;
-      const target = k.offsetLeft + k.offsetWidth / 2 - el.clientWidth / 2;
-      if (Math.abs(el.scrollLeft - target) > 6) el.scrollTo({ left: target, behavior: el._inited ? 'smooth' : 'auto' });
-      el._inited = true;
-    }, 0);
-  } else {
-    const dtRaw = animWindow('acct', sel, 300);
-    // Decide AT the change whether this face switch animates: only deliberate
-    // switches (tap/swipe set _accDir) slide — a background flip (arkReady
-    // arriving and revealing Spending right after sign-in) must not.
-    if (dtRaw >= 0 && dtRaw < 16.7) _accAnim = !!_accDir && !ui.navAnimSkip;
-    const dtAcc = _accAnim ? dtRaw : -1;
-    heroEl = faceFor(sel);
-    applyAnim(heroEl, 'anim-tab-' + (_accDir || 'left'), dtAcc);
-  }
-  _accDir = null;
-  return h(
-    'div',
-    { class: 'card balance' },
-    heroEl,
+  // Everything below the balance figure — the move button, top-up offer,
+  // spend-setup offer and the inline unfold panel — rides on whichever card
+  // is ACTIVE, so the peeking neighbor stays a clean balance preview.
+  const cardExtras = () => [
     // "Move money" and friends: the only door between the two balances —
     // pointless (and confusing) while there's only one.
     ...(hasSpending ? featureAll('balanceActions') : []).map((a2) =>
@@ -3403,8 +3355,59 @@ function balanceCard() {
       const w = h('div', {}, extra);
       applyAnim(w, 'anim-unfold', dt);
       return w;
-    })()
-  );
+    })(),
+  ];
+  const carouselMode = hasSpending && !kindLocked;
+  if (carouselMode) {
+    // Two SEPARATE cards side by side — the neighbor card peeks past the
+    // active one's edge and drags/snaps into place, BlueWallet-style.
+    const ORDER2 = ['spending', 'savings'];
+    // Align the carousel to the selected card after this render lands — but
+    // never fight a finger or live momentum.
+    setTimeout(() => {
+      const el = document.querySelector('.bal-carousel');
+      if (!el || Date.now() - (el._lastScroll || 0) < 350) return;
+      const k = el.children[ORDER2.indexOf(sel)];
+      if (!k) return;
+      const target = k.offsetLeft + k.offsetWidth / 2 - el.clientWidth / 2;
+      if (Math.abs(el.scrollLeft - target) > 6) el.scrollTo({ left: target, behavior: el._inited ? 'smooth' : 'auto' });
+      el._inited = true;
+    }, 0);
+    _accDir = null; // the drag is the animation here
+    return h('div', {
+      class: 'bal-carousel',
+      onScroll: (e) => {
+        const el = e.target;
+        el._lastScroll = Date.now();
+        clearTimeout(el._settle);
+        el._settle = setTimeout(() => {
+          const mid = el.scrollLeft + el.clientWidth / 2;
+          let best = 0, bestD = Infinity;
+          [...el.children].forEach((k, i) => {
+            const d = Math.abs(k.offsetLeft + k.offsetWidth / 2 - mid);
+            if (d < bestD) { bestD = d; best = i; }
+          });
+          const view = ORDER2[best];
+          if (view && view !== accountSel()) {
+            ui.account = view;
+            try { localStorage.setItem(ACCOUNT_KEY, view); } catch {}
+            render();
+          }
+        }, 120);
+      },
+    }, ORDER2.map((v) => h('div', { class: 'card balance bal-slide' },
+      faceFor(v), ...(v === sel ? cardExtras() : []))));
+  }
+  const dtRaw = animWindow('acct', sel, 300);
+  // Decide AT the change whether this face switch animates: only deliberate
+  // switches (tap/swipe set _accDir) slide — a background flip (arkReady
+  // arriving and revealing Spending right after sign-in) must not.
+  if (dtRaw >= 0 && dtRaw < 16.7) _accAnim = !!_accDir && !ui.navAnimSkip;
+  const dtAcc = _accAnim ? dtRaw : -1;
+  const heroEl = faceFor(sel);
+  applyAnim(heroEl, 'anim-tab-' + (_accDir || 'left'), dtAcc);
+  _accDir = null;
+  return h('div', { class: 'card balance' }, heroEl, ...cardExtras());
 }
 
 

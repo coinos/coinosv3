@@ -24,7 +24,7 @@ import {
 } from '../concord.js';
 import { makeDMRumor, unwrapDM, wrapDM } from '../dm.js';
 import { saveInbox } from '../dm-inbox.js';
-import { makeSearcher, resultRows, fallbackAvatar } from '../recipient-search.js';
+import { makeSearcher, resultRows, fallbackAvatar, warmSearch } from '../recipient-search.js';
 import { getNetwork } from '../api.js';
 import { hexToBytes, bytesToHex } from '@noble/hashes/utils';
 import { t } from '../i18n.js';
@@ -2299,7 +2299,7 @@ export function messagesFeature(ctx) {
     // ---- DMs
     kids.push(h('div', { class: 'row between', style: 'align-items:baseline' },
       h('h3', { style: 'margin:0' }, t('msgDmsTitle')),
-      h('button', { class: 'btn-sm', onClick: () => { ui.msgHomePanel = ui.msgHomePanel === 'newdm' ? null : 'newdm'; render(); } }, t('msgNewDm'))));
+      h('button', { class: 'btn-sm', onClick: () => { ui.msgHomePanel = ui.msgHomePanel === 'newdm' ? null : 'newdm'; if (ui.msgHomePanel === 'newdm') warmSearch(); render(); } }, t('msgNewDm'))));
     if (ui.msgHomePanel === 'newdm') {
       const openThread = (pk) => {
         dmSearcher.clear();
@@ -2750,6 +2750,7 @@ export function messagesFeature(ctx) {
       ui.chatOpen = false;
       ui.profilePk = null;
       ui.userSearch = { q: '', rows: null };
+      warmSearch(); // the field is about to be typed into — open the pipes
       return true;
     },
     // nostr-login just connected or resumed a signer: wraps the backfill

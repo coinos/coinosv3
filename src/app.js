@@ -6,7 +6,7 @@
 
 import { Wallet, newMnemonic, isValidMnemonic, accountXpubFor, cacheKeyFor, utxoId, parseExtendedKey, xpubToZpub, encryptVault, decryptVault } from './wallet.js';
 import { qrSvg } from './qr.js';
-import { makeSearcher, resultRows, searchable, punkUrl } from './recipient-search.js';
+import { makeSearcher, resultRows, searchable, punkUrl, warmSearch } from './recipient-search.js';
 import { npubOf } from './nostr.js';
 import { nip98Header } from './nip98.js';
 import { NOSTR_MARK } from './features/nostrlogin.js';
@@ -3870,8 +3870,10 @@ function recipientRow(s, r, i) {
     type: 'text', class: 'mono-input grow', placeholder: i === 0 ? t('destPlaceholder') : 'bc1q…',
     autocapitalize: 'none', autocomplete: 'off', spellcheck: 'false', value: r.address,
     // the delay lets the keyboard start opening (and any render() swap of
-    // this input) before parkSendField measures the live activeElement
-    onFocus: () => setTimeout(parkSendField, 300),
+    // this input) before parkSendField measures the live activeElement.
+    // warmSearch pre-opens the search transports so the first keystroke's
+    // results don't pay three cold handshakes.
+    onFocus: () => { warmSearch(); setTimeout(parkSendField, 300); },
     onInput: (e) => {
       const v = e.target.value;
       r.address = v; syncCheck();

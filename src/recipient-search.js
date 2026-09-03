@@ -46,26 +46,47 @@ function primalSearch(q, limit = MAX_RESULTS) {
     pwsIdle = setTimeout(() => { try { pws?.close(); } catch {} pws = null; }, 60_000);
     const send = () => { try { pws.send(JSON.stringify(['REQ', sid, { cache: ['user_search', { query: q, limit }] }])); } catch { finish(); } };
     if (pws && pws.readyState === 1) return send();
-    if (!pws || pws.readyState > 1) {
-      try { pws = new WebSocket(PRIMAL_CACHE); } catch { pws = null; return finish(); }
-      pws.onmessage = (ev) => {
-        try {
-          const m = JSON.parse(ev.data);
-          const sub = pwsSubs.get(m[1]);
-          if (!sub) return;
-          if (m[0] === 'EVENT' && m[2] && m[2].kind === 0) sub.rows.push(m[2]);
-          if (m[0] === 'EOSE') sub.finish();
-        } catch {}
-      };
-      pws.onerror = pws.onclose = () => {
-        pws = null;
-        const waiting = [...pwsSubs.values()];
-        pwsSubs.clear();
-        for (const s of waiting) s.finish();
-      };
-    }
+    if (!ensurePws()) return finish();
     pws.addEventListener('open', send, { once: true });
   });
+}
+
+function ensurePws() {
+  if (pws && pws.readyState <= 1) return true;
+  try { pws = new WebSocket(PRIMAL_CACHE); } catch { pws = null; return false; }
+  pws.onmessage = (ev) => {
+    try {
+      const m = JSON.parse(ev.data);
+      const sub = pwsSubs.get(m[1]);
+      if (!sub) return;
+      if (m[0] === 'EVENT' && m[2] && m[2].kind === 0) sub.rows.push(m[2]);
+      if (m[0] === 'EOSE') sub.finish();
+    } catch {}
+  };
+  pws.onerror = pws.onclose = () => {
+    pws = null;
+    const waiting = [...pwsSubs.values()];
+    pwsSubs.clear();
+    for (const s of waiting) s.finish();
+  };
+  return true;
+}
+
+// Pre-open every search transport BEFORE the first keystroke: the Primal
+// socket, the registrar's TLS session, and the NIP-50 relay connections
+// each cost a handshake that otherwise lands ON the first query — the
+// "cold" second of dead air after typing begins. Call on focus of any
+// search-capable field; throttled, and the idle timer still reclaims the
+// socket a minute after the last real use.
+let warmedAt = 0;
+export function warmSearch() {
+  if (Date.now() - warmedAt < 15_000) return;
+  warmedAt = Date.now();
+  ensurePws();
+  clearTimeout(pwsIdle);
+  pwsIdle = setTimeout(() => { try { pws?.close(); } catch {} pws = null; }, 60_000);
+  fetch(`${REGISTRAR}/health`).catch(() => {});
+  queryOn(SEARCH_RELAYS, { kinds: [0], limit: 1 }, 800).catch(() => {});
 }
 
 // Caches survive reloads: a name searched yesterday paints instantly today.

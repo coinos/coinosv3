@@ -258,11 +258,20 @@ export function messagesFeature(ctx) {
     for (const [pk, p] of Object.entries(cached)) if (!profiles.has(pk)) profiles.set(pk, p);
   }
   function persistProfile(pk, p) {
+    // A faceless answer is not a fact worth writing down — persisting
+    // {name:null, picture:null} rows only evicts real faces from the cap and
+    // spreads a cold-relay miss across sessions.
+    if (!p || (!p.name && !p.picture)) return;
     const s = wallet.loadFeatureState('profiles', {});
     s[pk] = { name: p.name || null, picture: p.picture || null, nip05: p.nip05 || null, lud16: p.lud16 || null, t: Date.now() };
     const keys = Object.keys(s);
     if (keys.length > 150) {
-      for (const k of keys.sort((a, b) => (s[a].t || 0) - (s[b].t || 0)).slice(0, keys.length - 150)) delete s[k];
+      // the user's own faces never churn out — their avatar going punk over
+      // a busy community room is the one eviction people actually notice
+      const keep = new Set([(hook('nostrLoginIdentity') || {}).pubkey,
+        wallet.nostrPubkey && wallet.nostrPubkey()].filter(Boolean));
+      const evictable = keys.filter((k) => !keep.has(k));
+      for (const k of evictable.sort((a, b) => (s[a].t || 0) - (s[b].t || 0)).slice(0, keys.length - 150)) delete s[k];
     }
     wallet.saveFeatureState('profiles', s);
   }
@@ -271,10 +280,16 @@ export function messagesFeature(ctx) {
   // while the image downloads.
   const preloadPicture = (p) => { try { if (p && p.picture) new Image().src = p.picture; } catch {} };
 
+  // A profile that came back EMPTY is usually a cold boot's 5s query racing
+  // relays that were still dialing — not proof there's no kind 0. Trusting it
+  // for the full TTL once dressed a real account in a punk and an npub for a
+  // whole day; an empty answer is retried in minutes instead.
+  const EMPTY_RETRY = 10 * 60_000;
   function profileOf(pk) {
     warmProfiles();
     const cur = profiles.get(pk);
-    if (cur !== undefined && (cur === null || Date.now() - (cur.t || 0) < PROFILE_TTL)) return cur;
+    if (cur !== undefined && (cur === null
+      || Date.now() - (cur.t || 0) < (!cur.name && !cur.picture ? EMPTY_RETRY : PROFILE_TTL))) return cur;
     profiles.set(pk, cur || null); // null = loading, no fallback art yet
     fetchNostrProfile(pk).then((p) => {
       // An empty answer on a cold boot (relays still dialing, the 5s query

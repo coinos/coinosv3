@@ -205,6 +205,8 @@ export function mergeArkStates(a, b) {
     // a fee learned late (the rescue computed it from inputs − outputs)
     // upgrades a recorded zero — the row only renders when the fee is real
     if ((rm.feeSat || 0) > 0 && !(lm.feeSat > 0)) take.feeSat = rm.feeSat;
+    if (rm.chainFeeSat != null && lm.chainFeeSat == null) take.chainFeeSat = rm.chainFeeSat;
+    if (rm.serviceFeeSat != null && lm.serviceFeeSat == null) take.serviceFeeSat = rm.serviceFeeSat;
     return Object.keys(take).length ? { ...lm, ...take } : lm;
   });
   // Two devices (or the push and the poll, pre-guard) can each record the
@@ -1115,7 +1117,14 @@ export function arkFeature(ctx) {
       })(),
       m.to ? row(t('arkPayTo'), shortAddr(m.to, 16, 12)) : null,
       m.vtxoId ? row(t('arkVtxoId'), shortTxid(m.vtxoId)) : null,
-      m.detail ? row(t('detailsLabel'), m.detail) : null,
+      // An offboard's fee is two different pockets — the miners' cut for the
+      // on-chain weight and the ASP's service charge (base + lifetime ppm) —
+      // shown apart so neither reads as the other being overpriced.
+      m.chainFeeSat != null && m.serviceFeeSat != null
+        ? h('div', { class: 'col', style: 'gap:10px' },
+            row(t('arkFeeChain'), fmtAmount(m.chainFeeSat) + ' ' + unitLabel()),
+            row(t('arkFeeService'), fmtAmount(m.serviceFeeSat) + ' ' + unitLabel()))
+        : m.detail ? row(t('detailsLabel'), m.detail) : null,
       // proof of payment: the preimage is what a merchant asks for
       m.preimage ? row(t('preimageLabel'), shortTxid(m.preimage)) : null,
       m.preimage ? h('button', { class: 'btn-block', onClick: () => ctx.copy(m.preimage) }, t('copyPreimage')) : null,

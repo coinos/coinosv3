@@ -2029,7 +2029,13 @@ export function messagesFeature(ctx) {
                 } }, t('msgDmsTitle')),
                 h('button', { class: 'grow', onClick: () => {
                   const npubStr = npubOf(pk);
+                  // leave the whole messaging surface, not just the profile —
+                  // a lingering search or thread would win the screen router
+                  // and the Send tab would never appear
                   ui.profilePk = null;
+                  ui.profOverThread = false;
+                  ui.noteThread = null;
+                  ui.userSearch = null;
                   ui.chatOpen = false;
                   ui.tab = 'send';
                   render();
@@ -2418,10 +2424,14 @@ export function messagesFeature(ctx) {
     kids.push(h('div', { class: 'list' }, communities().map((jm) => {
       const room = rooms.get(jm.community_id);
       const name = room?.folded?.metadata?.name || jm.name;
-      // until the guestbook fold lands, last session's settled count beats
-      // a placeholder that flips a moment later
+      // Last session's settled count anchors the number: while the guestbook
+      // replay is still streaming in (multiple relays, bursts past the fold
+      // debounce), the live tally climbs through intermediate values — take
+      // the max so the count doesn't visibly tick upward on every refresh.
+      // Once the replay settles, the cache is rewritten to the live figure,
+      // so a genuine departure still shows (one quiet step down, not a climb).
       const live = room ? [...room.members.values()].filter((m) => m.state === 'join').length : 0;
-      const memberCount = live || (st().memberCounts || {})[jm.community_id] || 0;
+      const memberCount = Math.max(live, (st().memberCounts || {})[jm.community_id] || 0);
       const unread = room ? roomUnread(room) : false;
       return h('div', {
         class: 'item chat-thread-row' + (unread ? ' unread' : ''),

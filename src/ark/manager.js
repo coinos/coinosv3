@@ -45,7 +45,7 @@ import {
   encodeVtxoFromDecoded,
 } from './refresh.js';
 import {
-  getOffboardFeeRate, feeRateKwu, offboardFee, offboardAttestation,
+  getOffboardFeeRate, feeRateKwu, offboardFeeParts, offboardAttestation,
   prepareOffboard, validateOffboardTx, signOffboardForfeits, finishOffboard,
   P2TR_DUST,
 } from './offboard.js';
@@ -564,16 +564,18 @@ export class ArkManager {
     const tip = await this.chain.tipHeight();
     const satVkb = await getOffboardFeeRate(this.arkUrl);
     const grossSat = inputs.reduce((n, v) => n + v.amountSat, 0);
-    const feeSat = offboardFee({
+    const feeParts = offboardFeeParts({
       spkLen: spk.length, satVkb, fees: this.info.offboardFees, tip,
       inputs: inputs.map((v) => ({ amountSat: v.amountSat, expiryHeight: v.expiryHeight })),
     });
+    const feeSat = feeParts.totalSat;
     const netSat = grossSat - feeSat;
     if (netSat < P2TR_DUST) throw new Error('ark balance too small to offboard after fees');
     const action = {
       id: `offboard-${Date.now()}`, type: 'offboard', step: 'created',
       inputIds: inputs.map((v) => v.id), address, spkHex: hex.encode(spk),
-      grossSat, feeSat, netSat, rateKwu: feeRateKwu(satVkb),
+      grossSat, feeSat, chainFeeSat: feeParts.chainSat, serviceFeeSat: feeParts.serviceSat,
+      netSat, rateKwu: feeRateKwu(satVkb),
     };
     for (const v of inputs) v.state = 'pending';
     this.state.actions.push(action);
@@ -626,6 +628,8 @@ export class ArkManager {
         this._movement({
           type: 'offboard', amountSat: action.netSat, status: 'complete',
           txid: action.txid, detail: `fee ${action.feeSat} sat`, to: action.address,
+          feeSat: action.feeSat, chainFeeSat: action.chainFeeSat, serviceFeeSat: action.serviceFeeSat,
+          inputIds: action.inputIds,
         });
         this._save();
       } else {
@@ -640,6 +644,8 @@ export class ArkManager {
       this._movement({
         type: 'offboard', amountSat: action.netSat, status: 'complete',
         txid: action.txid, detail: `fee ${action.feeSat} sat`, to: action.address,
+        feeSat: action.feeSat, chainFeeSat: action.chainFeeSat, serviceFeeSat: action.serviceFeeSat,
+        inputIds: action.inputIds,
       });
       this._save();
     }

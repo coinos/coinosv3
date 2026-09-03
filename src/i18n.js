@@ -223,6 +223,8 @@ const STR = {
     arkCoinsChipExpTitle: 'Time until this coin needs renewal',
     arkCoinsChipDepthTitle: 'How many off-chain hops this coin carries',
     arkCoinsChipExitTitle: 'What pulling this coin on-chain by itself would cost',
+    arkFeeChain: 'On-chain fee',
+    arkFeeService: 'Service fee',
     arkCoinsExpired: 'expired',
     arkCoinsExpiryNote: 'Past its expiry a coin can be reclaimed by the server — the wallet renews on its own well before that.',
     arkCoinsExitTitle: 'Uncooperative exit',

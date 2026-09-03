@@ -60,9 +60,13 @@ export const feeRateKwu = (satVkb) => Math.floor(satVkb / 4);
 
 // OffboardFees::calculate — base + ceil(rate * weight) + per-vtxo ppm-by-expiry.
 // inputs: [{ amountSat, expiryHeight }]; fees: info.offboardFees.
-export function offboardFee({ spkLen, satVkb, fees, tip, inputs }) {
+// The fee splits into what the MINERS take (this offboard's weight in the
+// shared tx, at the current rate) and what the ASP charges for the service
+// (base fee + the per-coin lifetime ppm, same bracket table as renewals) —
+// kept separate so the wallet can show them apart.
+export function offboardFeeParts({ spkLen, satVkb, fees, tip, inputs }) {
   const wu = (fees.fixedAdditionalVb + spkLen) * 4;
-  const weightFee = Math.floor((feeRateKwu(satVkb) * wu + 999) / 1000);
+  const chainSat = Math.floor((feeRateKwu(satVkb) * wu + 999) / 1000);
   // pver >= 4: sub-satoshi ppm accumulates across vtxos, one round-up at the end
   let ppmUnits = 0;
   for (const v of inputs) {
@@ -70,7 +74,11 @@ export function offboardFee({ spkLen, satVkb, fees, tip, inputs }) {
     const entry = [...fees.ppmExpiryTable].reverse().find((e) => blocks >= e.thresholdBlocks);
     if (entry) ppmUnits += v.amountSat * entry.ppm;
   }
-  return fees.baseFeeSat + weightFee + Math.ceil(ppmUnits / 1_000_000);
+  const serviceSat = fees.baseFeeSat + Math.ceil(ppmUnits / 1_000_000);
+  return { chainSat, serviceSat, totalSat: chainSat + serviceSat };
+}
+export function offboardFee(args) {
+  return offboardFeeParts(args).totalSat;
 }
 
 // OffboardRequestAttestation: BIP340 signature over

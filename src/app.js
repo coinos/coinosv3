@@ -169,8 +169,18 @@ function morph(a, b) {
     return;
   }
   // attributes (className and style strings ride along as attributes)
+  // A reused BUTTON whose class changes is a different control wearing the
+  // same node (screens lining up positionally) — its `transition: background`
+  // would visibly crossfade the old style into the new one (a dark filled
+  // button melting into a text link read as a black flash). Repaints aren't
+  // style animations: snap it, restore the transition after the paint.
+  const snap = a.nodeName === 'BUTTON' && a.getAttribute('class') !== b.getAttribute('class');
   for (const at of [...a.attributes]) if (!b.hasAttribute(at.name)) a.removeAttribute(at.name);
   for (const at of [...b.attributes]) if (a.getAttribute(at.name) !== at.value) a.setAttribute(at.name, at.value);
+  if (snap) {
+    a.style.transition = 'none';
+    requestAnimationFrame(() => requestAnimationFrame(() => { a.style.transition = ''; }));
+  }
   // event handler slots claimed via h()
   if (a._evs) for (const n of a._evs) if (!(b._evs && b._evs.has(n))) a[n] = null;
   if (b._evs) for (const n of b._evs) a[n] = b[n];

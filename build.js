@@ -413,6 +413,12 @@ if (import.meta.main) {
     if (/^(app|chunk)-[A-Za-z0-9]+\.js$/.test(f) && !keep.has(f)) await Bun.file('dist/' + f).delete();
   }
 
+  // The standalone single-file wallet: everything inlined (deferred features
+  // included), no PWA plumbing — meant to be downloaded from /standalone.html
+  // and opened straight from a disk. Network features still reach out when
+  // online; the wallet itself needs no server.
+  await Bun.write('dist/standalone.html', await buildHtml({ minify: true, pwa: false }));
+
   // Lazy-loaded QR decoder — kept out of index.html, fetched only when a
   // browser without BarcodeDetector opens the scanner.
   await Bun.write('dist/jsqr.js', await buildJsQr());
@@ -447,6 +453,8 @@ if (import.meta.main) {
   const kb = (Buffer.byteLength(html) / 1024).toFixed(0);
   const jkb = (Buffer.byteLength(rawJs) / 1024).toFixed(0);
   const ckb = (chunks.reduce((n, c) => n + Buffer.byteLength(c.text), 0) / 1024).toFixed(0);
+  const skb = ((await Bun.file('dist/standalone.html').arrayBuffer()).byteLength / 1024).toFixed(0);
   console.log(`✓ dist/index.html (${kb} KB) + app-${version}.js (${jkb} KB) + ${chunks.length} deferred chunk(s) (${ckb} KB) — offline use: install the PWA`);
+  console.log(`✓ dist/standalone.html (${skb} KB) — the single-file save-and-run wallet`);
   console.log(`✓ PWA: manifest.webmanifest, sw.js (cold-${version}), ${STATIC.length} icons, jsqr.js, nip46.js, ${locales.length} locales`);
 }

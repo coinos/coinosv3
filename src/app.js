@@ -783,6 +783,15 @@ function howItWorksScreen() {
     h('div', { class: 'card col', style: 'gap:14px' },
       h('h3', {}, '🎁 ' + t('hiwGiftsTitle')),
       para('hiwGifts1')),
+    // The standalone file: the whole app inlined into one HTML — the
+    // save-and-open-offline story the split build gave up. Only offered when
+    // there's a server to download it from (on file:// you already have it).
+    location.protocol.startsWith('http')
+      ? h('div', { class: 'card col', style: 'gap:14px' },
+          h('h3', {}, '💾 ' + t('hiwStandaloneTitle')),
+          para('hiwStandalone1'),
+          h('a', { href: '/standalone.html', download: 'coinos.html' }, t('hiwStandaloneLink')))
+      : null,
     h('button', { class: 'btn-block', onClick: back }, t('back'))
   );
 }
@@ -821,7 +830,10 @@ function tabBtn(label, active, onClick) {
   // state waited for the whole pane to build. Flip the strip's classes with
   // a direct DOM write (paints this frame), then run the real render after
   // that paint — double-rAF is the "after the next paint" idiom.
-  let downAt = 0;
+  // The down-timestamp lives ON THE NODE, not in this closure: the
+  // pointerdown's own render replaces these handlers (fresh closure, zero
+  // timestamp) before the browser delivers the paired click, and with tabs
+  // that TOGGLE, letting that click through un-did the tap it belonged to.
   const select = (btn) => {
     if (btn && btn.parentElement) {
       for (const b of btn.parentElement.children) b.classList.toggle('active', b === btn);
@@ -832,10 +844,10 @@ function tabBtn(label, active, onClick) {
     class: active ? 'active' : '',
     onPointerdown: (e) => {
       if (e.button !== 0) return;
-      downAt = performance.now();
+      e.currentTarget._downAt = performance.now();
       select(e.currentTarget);
     },
-    onClick: (e) => { if (performance.now() - downAt > 500) select(e.currentTarget); },
+    onClick: (e) => { if (performance.now() - (e.currentTarget._downAt || 0) > 500) select(e.currentTarget); },
   }, label);
 }
 

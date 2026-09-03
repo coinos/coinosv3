@@ -120,6 +120,18 @@ export function parseNostrPubkey(input) {
 }
 // An npub or 64-hex nostr pubkey → hex, or null if it isn't one.
 export function npubOf(pkHex) { try { return npubEncode(pkHex); } catch { return null; } }
+// Any nostr entity reference → something renderable: npub/nprofile land as a
+// pubkey (with relay hints when carried), note/nevent as an event id.
+export function parseNostrRef(input) {
+  try {
+    const d = nip19decode(String(input || '').trim());
+    if (d.type === 'npub') return { type: 'pubkey', pk: d.data };
+    if (d.type === 'nprofile') return { type: 'pubkey', pk: d.data.pubkey, relays: d.data.relays || [] };
+    if (d.type === 'note') return { type: 'event', id: d.data, relays: [] };
+    if (d.type === 'nevent') return { type: 'event', id: d.data.id, relays: d.data.relays || [], author: d.data.author || null };
+  } catch {}
+  return null;
+}
 // A raw secret key → nsec, for the one place that deliberately exports it.
 export function nsecOf(sk) { try { return nsecEncode(sk); } catch { return null; } }
 

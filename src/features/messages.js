@@ -14,7 +14,7 @@
 
 import {
   subscribeOn, publishOn, queryOn, fetchNostrProfile, fetchInboxRelays,
-  npubOf, parseNostrPubkey, generateSecretKey, getPublicKey, finalizeEvent, nip44,
+  npubOf, parseNostrPubkey, parseNostrRef, generateSecretKey, getPublicKey, finalizeEvent, nip44,
   PROFILE_RELAYS,
 } from '../nostr.js';
 import {
@@ -1517,10 +1517,18 @@ export function messagesFeature(ctx) {
           out.push(h('a', { href: part, target: '_blank', rel: 'noopener noreferrer' },
             part.length > 64 ? part.slice(0, 61) + '…' : part));
         }
-      } else if (/^nostr:npub1/i.test(part)) {
-        const mpk = parseNostrPubkey(part.slice(6));
-        if (mpk) out.push(h('a', { href: '#', onClick: (e) => { e.preventDefault(); openProfile(mpk); } }, '@' + displayName(mpk)));
-        else out.push(part);
+      } else if (/^nostr:(npub|nprofile)1/i.test(part)) {
+        const ref = parseNostrRef(part.slice(6));
+        if (ref && ref.type === 'pubkey') out.push(h('a', { href: '#', onClick: (e) => { e.preventDefault(); openProfile(ref.pk); } }, '@' + displayName(ref.pk)));
+        else out.push(h('span', { class: 'faint' }, part.slice(6, 18) + '…'));
+      } else if (/^nostr:(note|nevent)1/i.test(part)) {
+        // a referenced note opens right here as a thread — fetched by id
+        // (with the reference's relay hints) when tapped
+        const ref = parseNostrRef(part.slice(6));
+        if (ref && ref.type === 'event') out.push(h('a', {
+          href: '#', onClick: (e) => { e.preventDefault(); openNoteRef(ref); },
+        }, t('noteRefLink')));
+        else out.push(h('span', { class: 'faint' }, part.slice(6, 18) + '…'));
       } else if (/^nostr:/i.test(part)) {
         out.push(h('span', { class: 'faint' }, part.slice(6, 18) + '…'));
       } else out.push(part);
@@ -1636,6 +1644,17 @@ export function messagesFeature(ctx) {
   function openNoteThread(ev) {
     ui.noteThread = { rootId: rootIdOf(ev), focusId: ev.id, seed: ev };
     render();
+  }
+  // A nostr:nevent / nostr:note reference: the thread loader needs the real
+  // event (its tags name the root, its author names the home relays), so
+  // fetch it by id — the reference's relay hints first — then open.
+  async function openNoteRef(ref) {
+    toast(t('noteRefLoading'));
+    const relays = [...new Set([...(ref.relays || []), ...NOTE_RELAYS])];
+    const evs = await queryOn(relays, { ids: [ref.id] }, 4000).catch(() => []);
+    const ev = (evs || [])[0];
+    if (ev) openNoteThread(ev);
+    else toast(t('noteRefNotFound'));
   }
   // Publish a kind-1 reply to the focused note (NIP-10 markers), addressed to
   // the conversation's own relays plus ours, and shown optimistically.

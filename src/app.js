@@ -3386,7 +3386,15 @@ function balanceCard() {
         e.preventDefault(); // no text selection while pulling
         const el = e.currentTarget;
         const x0 = e.clientX, s0 = el.scrollLeft;
+        const kids0 = [...el.children];
+        // the card the drag started on — a flick throws relative to it
+        let fromIdx = 0, fromD = Infinity;
+        kids0.forEach((k, i) => {
+          const d = Math.abs(k.offsetLeft + k.offsetWidth / 2 - (s0 + el.clientWidth / 2));
+          if (d < fromD) { fromD = d; fromIdx = i; }
+        });
         let moved = false;
+        const samples = []; // recent pointer positions for release velocity
         const mv = (ev) => {
           const dx = ev.clientX - x0;
           if (!moved && Math.abs(dx) > 4) {
@@ -3394,7 +3402,12 @@ function balanceCard() {
             el.classList.add('grabbing');
             el.style.scrollSnapType = 'none';
           }
-          if (moved) { el.scrollLeft = s0 - dx; el._lastScroll = Date.now(); }
+          if (moved) {
+            el.scrollLeft = s0 - dx;
+            el._lastScroll = Date.now();
+            samples.push({ t: performance.now(), x: ev.clientX });
+            while (samples.length > 8 || (samples.length && samples[0].t < performance.now() - 140)) samples.shift();
+          }
         };
         const up = () => {
           window.removeEventListener('pointermove', mv);
@@ -3402,13 +3415,21 @@ function balanceCard() {
           el.classList.remove('grabbing');
           if (!moved) return;
           el._dragged = Date.now(); // the release's click must not double as a card tap
-          const mid = el.scrollLeft + el.clientWidth / 2;
-          let best = null, bestD = Infinity;
-          [...el.children].forEach((k) => {
-            const d = Math.abs(k.offsetLeft + k.offsetWidth / 2 - mid);
-            if (d < bestD) { bestD = d; best = k; }
+          // A quick FLICK throws the card: velocity over the last ~100ms of
+          // the drag decides the direction outright; a slow release just
+          // settles on whichever card is nearest.
+          const last = samples[samples.length - 1];
+          const past = samples[0];
+          const vel = last && past && last.t > past.t ? (last.x - past.x) / (last.t - past.t) : 0;
+          const kids = [...el.children];
+          let best = 0, bestD = Infinity;
+          kids.forEach((k, i) => {
+            const d = Math.abs(k.offsetLeft + k.offsetWidth / 2 - (el.scrollLeft + el.clientWidth / 2));
+            if (d < bestD) { bestD = d; best = i; }
           });
-          if (best) el.scrollTo({ left: best.offsetLeft + best.offsetWidth / 2 - el.clientWidth / 2, behavior: 'smooth' });
+          if (Math.abs(vel) > 0.25) best = Math.max(0, Math.min(kids.length - 1, fromIdx + (vel < 0 ? 1 : -1)));
+          const k = kids[best];
+          if (k) el.scrollTo({ left: k.offsetLeft + k.offsetWidth / 2 - el.clientWidth / 2, behavior: 'smooth' });
           setTimeout(() => { el.style.scrollSnapType = ''; }, 400);
         };
         window.addEventListener('pointermove', mv);

@@ -3281,48 +3281,90 @@ function balanceCard() {
     ? accounts.find((x) => x.id !== acc0.id && x.mnemonic && x.mnemonic === acc0.mnemonic
         && (x.passphrase || '') === (acc0.passphrase || '') && viewsOf(x).includes(opp))
     : null;
-  // One balance at a time, full size: the card IS the account you're in, and
-  // everything (receive, gifts) follows it. Swipe or tap the dots to flip.
-  const dtRaw = animWindow('acct', sel, 300);
-  // Decide AT the change whether this face switch animates: only deliberate
-  // switches (tap/swipe set _accDir) slide — a background flip (arkReady
-  // arriving and revealing Spending right after sign-in) must not.
-  if (dtRaw >= 0 && dtRaw < 16.7) _accAnim = !!_accDir && !ui.navAnimSkip;
-  const dtAcc = _accAnim ? dtRaw : -1;
-  const face = h('div', { class: 'balance-face' },
-    h('div', { class: 'row between', style: 'align-items:center' },
-      h('div', { class: 'small faint', style: 'text-transform:uppercase;letter-spacing:.06em' },
-        kindLocked ? viewLabel(acc0, sel)
-          : hasSpending ? (isSpending ? t('spendingLabel') : t('savingLabel')) : t('balance')),
-      // Swiping only helps on touch, and dots are an indicator rather than a
-      // target — so the switch is a real button that names where it goes.
-      // Before Spending exists, its spot offers to set it up — the one
-      // doorway into the optional spending-account flow.
-      h('button', {
-        class: 'balance-switch',
-        onClick: () => { ui.screen = 'accounts'; render(); },
+  // The balance area: with both views live it's a CAROUSEL — the other face
+  // peeks at the edge and drags/snaps into place (native scroll-snap), the
+  // way wallet cards behave in BlueWallet. Snapping IS the account switch.
+  // Single-purpose and savings-only wallets keep the lone face.
+  const manageBtn = () => h('button', {
+    class: 'balance-switch',
+    onClick: () => { ui.screen = 'accounts'; render(); },
+  },
+    h('span', { html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:block"><rect x="2" y="6" width="20" height="14" rx="2"/><path d="M2 10h20"/><circle cx="17" cy="15" r="1.3"/></svg>' }),
+    h('span', { class: 'bsw-label' }, t('manageAccounts')));
+  const faceFor = (view) => {
+    const viewSpending = view === 'spending';
+    return h('div', { class: 'balance-face' },
+      h('div', { class: 'row between', style: 'align-items:center' },
+        h('div', { class: 'small faint', style: 'text-transform:uppercase;letter-spacing:.06em' },
+          kindLocked ? viewLabel(acc0, view)
+            : hasSpending ? (viewSpending ? t('spendingLabel') : t('savingLabel')) : t('balance')),
+        manageBtn()),
+      h('div', { class: 'amt', style: firstLoad ? 'opacity:.3' : '' },
+        firstLoad ? h('span', { class: 'spinner sm', style: 'margin-right:8px' }) : null,
+        animatedAmount('bal:' + view, viewSpending ? spending : saving), ' ', unitTag('unit')),
+      (pending > 0 && !viewSpending) || (viewSpending && featLines.length)
+        ? h('div', { class: 'split' },
+            // Pending incoming is an on-chain fact — it belongs to the Saving
+            // face; the feature lines (ark's Moving…) belong to Spending.
+            pending > 0 && !viewSpending
+              ? h('div', {}, h('div', { class: 'k' }, t('pending')), h('div', { class: 'v pending' }, fmtAmount(pending), ' ', unitTag()))
+              : null,
+            ...(viewSpending ? featLines : []).map((l) =>
+              h('div', {}, h('div', { class: 'k' }, l.label), h('div', { class: 'v' }, fmtAmount(l.sat), ' ', unitTag()))))
+        : null);
+  };
+  const carouselMode = hasSpending && !kindLocked;
+  let heroEl;
+  if (carouselMode) {
+    const ORDER2 = ['spending', 'savings'];
+    heroEl = h('div', {
+      class: 'bal-carousel',
+      onScroll: (e) => {
+        const el = e.target;
+        el._lastScroll = Date.now();
+        clearTimeout(el._settle);
+        el._settle = setTimeout(() => {
+          const mid = el.scrollLeft + el.clientWidth / 2;
+          let best = 0, bestD = Infinity;
+          [...el.children].forEach((k, i) => {
+            const d = Math.abs(k.offsetLeft + k.offsetWidth / 2 - mid);
+            if (d < bestD) { bestD = d; best = i; }
+          });
+          const view = ORDER2[best];
+          if (view && view !== accountSel()) {
+            ui.account = view;
+            try { localStorage.setItem(ACCOUNT_KEY, view); } catch {}
+            render();
+          }
+        }, 120);
       },
-        h('span', { html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:block"><rect x="2" y="6" width="20" height="14" rx="2"/><path d="M2 10h20"/><circle cx="17" cy="15" r="1.3"/></svg>' }),
-        h('span', { class: 'bsw-label' }, t('manageAccounts')))),
-    h('div', { class: 'amt', style: firstLoad ? 'opacity:.3' : '' },
-      firstLoad ? h('span', { class: 'spinner sm', style: 'margin-right:8px' }) : null,
-      animatedAmount('bal:' + sel, isSpending ? spending : saving), ' ', unitTag('unit')),
-    (pending > 0 && !isSpending) || featLines.length
-      ? h('div', { class: 'split' },
-          // Pending incoming is an on-chain fact — it belongs to the Saving
-          // face, not to whichever account happens to be showing.
-          pending > 0 && !isSpending
-            ? h('div', {}, h('div', { class: 'k' }, t('pending')), h('div', { class: 'v pending' }, fmtAmount(pending), ' ', unitTag()))
-            : null,
-          ...featLines.map((l) =>
-            h('div', {}, h('div', { class: 'k' }, l.label), h('div', { class: 'v' }, fmtAmount(l.sat), ' ', unitTag()))))
-      : null);
-  applyAnim(face, 'anim-tab-' + (_accDir || 'left'), dtAcc);
+    }, ORDER2.map((v) => h('div', { class: 'bal-slide' }, faceFor(v))));
+    // Align the carousel to the selected face after this render lands — but
+    // never fight a finger or live momentum.
+    setTimeout(() => {
+      const el = document.querySelector('.bal-carousel');
+      if (!el || Date.now() - (el._lastScroll || 0) < 350) return;
+      const k = el.children[ORDER2.indexOf(sel)];
+      if (!k) return;
+      const target = k.offsetLeft + k.offsetWidth / 2 - el.clientWidth / 2;
+      if (Math.abs(el.scrollLeft - target) > 6) el.scrollTo({ left: target, behavior: el._inited ? 'smooth' : 'auto' });
+      el._inited = true;
+    }, 0);
+  } else {
+    const dtRaw = animWindow('acct', sel, 300);
+    // Decide AT the change whether this face switch animates: only deliberate
+    // switches (tap/swipe set _accDir) slide — a background flip (arkReady
+    // arriving and revealing Spending right after sign-in) must not.
+    if (dtRaw >= 0 && dtRaw < 16.7) _accAnim = !!_accDir && !ui.navAnimSkip;
+    const dtAcc = _accAnim ? dtRaw : -1;
+    heroEl = faceFor(sel);
+    applyAnim(heroEl, 'anim-tab-' + (_accDir || 'left'), dtAcc);
+  }
   _accDir = null;
   return h(
     'div',
     { class: 'card balance' },
-    face,
+    heroEl,
     // "Move money" and friends: the only door between the two balances —
     // pointless (and confusing) while there's only one.
     ...(hasSpending ? featureAll('balanceActions') : []).map((a2) =>
@@ -4566,6 +4608,9 @@ applyDir();
     live = e.touches.length === 1 && ui.screen === 'wallet' && !ui.chatOpen && !ui.profilePk
       && !ui.arkExitPage && ORDER.includes(ui.tab);
     if (!live) return;
+    // the carousel owns its own drag — the flip gesture only serves the
+    // single-face balance (kind-locked / savings-only wallets)
+    if (e.target.closest && e.target.closest('.bal-carousel')) { live = false; return; }
     onBalance = !!(e.target.closest && e.target.closest('.balance'));
     sx = e.touches[0].clientX;
     sy = e.touches[0].clientY;

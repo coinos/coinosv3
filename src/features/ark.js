@@ -1118,7 +1118,7 @@ export function arkFeature(ctx) {
       m.detail ? row(t('detailsLabel'), m.detail) : null,
       // proof of payment: the preimage is what a merchant asks for
       m.preimage ? row(t('preimageLabel'), shortTxid(m.preimage)) : null,
-      m.preimage ? copyBtn(m.preimage, t('copyPreimage')) : null,
+      m.preimage ? h('button', { class: 'btn-block', onClick: () => ctx.copy(m.preimage) }, t('copyPreimage')) : null,
       // A send that funded a bearer gift: show its fate, and while unclaimed
       // offer the link again plus the sweep-back — same powers the gift card
       // has, where the sender will actually go looking for them: history.

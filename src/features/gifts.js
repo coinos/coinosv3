@@ -895,7 +895,10 @@ export function giftsFeature(ctx) {
       const locked = wallet.giftLockedValue();
       return locked > 0 ? [{ label: t('lockedInGifts'), sat: locked }] : [];
     },
-    historyEntries(txs) {
+    historyEntries(txs, sel) {
+    // These are ON-CHAIN gift reservations — Savings timeline. Ark gifts show
+    // up as ark send movements on the Spending side.
+    if (sel === 'spending') return [];
     // Outstanding sent gifts (reserved/reclaimed but unclaimed) sit above the
     // on-chain history; they aren't transactions until claimed or revoked.
     // A claimed gift merges into its claim transaction's row once we know which

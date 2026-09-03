@@ -456,6 +456,8 @@ hr.divider { margin: 16px 0; }
 .bal-carousel::-webkit-scrollbar { display: none; }
 .bal-slide { flex: 0 0 calc(100% - 40px); scroll-snap-align: center; min-width: 0; }
 .bal-carousel .card + .card { margin-top: 0; }
+.bal-carousel { cursor: grab; } /* touch never shows a cursor — no media-query hedging */
+.bal-carousel.grabbing, .bal-carousel.grabbing * { cursor: grabbing; user-select: none; }
 .balance-move .seg { display: flex; width: 100%; }
 .balance-move .seg button { flex: 1; }
 .send-suggest { max-height: 260px; overflow-y: auto; }

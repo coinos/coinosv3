@@ -2920,7 +2920,8 @@ export function arkFeature(ctx) {
         render();
       } }, t('arkExitInFlightLink', { n: fmtAmount(acts.reduce((s2, a) => s2 + a.amountSat, 0)) }));
     },
-    historyEntries() {
+    historyEntries(_txs, sel) {
+      if (sel && sel !== 'spending') return []; // ark movements are the Spending timeline
       const s = arkStateNow();
       if (!s) return [];
       // Memoized briefly: this rebuilds, sorts, and dedupes the whole

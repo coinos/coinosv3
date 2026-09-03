@@ -1444,6 +1444,11 @@ export function messagesFeature(ctx) {
 
   function openProfile(pk) {
     ui.profilePk = pk;
+    // Opened from inside a thread (an author's avatar/name), the profile
+    // stacks ON TOP of it — back returns to the conversation. The screen
+    // router otherwise keeps a thread above the profile, which is the order
+    // for the other direction (a note row tapped on a profile page).
+    ui.profOverThread = !!ui.noteThread;
     ui.profEdit = null; ui.profEditFilled = false; ui.logoutConfirm = null;
     render();
     fetchFullProfile(pk);
@@ -1599,7 +1604,11 @@ export function messagesFeature(ctx) {
       h('div', { class: 'col grow', style: 'min-width:0;gap:3px' },
         h('div', { class: 'row between', style: 'align-items:center;gap:8px' },
           h('div', { class: 'row', style: 'gap:7px;align-items:baseline;min-width:0' },
-            h('span', { style: 'font-weight:600;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis' }, name),
+            h('span', {
+              // the name, like the avatar, is its own tap-target (profile)
+              style: 'font-weight:600;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer',
+              onClick: (e) => { e.stopPropagation(); openProfile(pk); },
+            }, name),
             h('span', { class: 'small faint', style: 'white-space:nowrap' },
               (isReply ? '↩ ' + t('profReplyTag') + ' · ' : '') + timeLabel(ev.created_at * 1000))),
           canZap ? h('button', { class: 'btn-sm', title: t('zapTitle'), onClick: (e) => { e.stopPropagation(); zapNote(pk, ev); } }, '⚡') : null),
@@ -1643,6 +1652,7 @@ export function messagesFeature(ctx) {
   }
   function openNoteThread(ev) {
     ui.noteThread = { rootId: rootIdOf(ev), focusId: ev.id, seed: ev };
+    ui.profOverThread = false; // a freshly opened thread goes on top
     render();
   }
   // A nostr:nevent / nostr:note reference: the thread loader needs the real
@@ -2042,7 +2052,7 @@ export function messagesFeature(ctx) {
               noteRow(pk, ev, name),
             ])));
       })(),
-      h('button', { class: 'btn-ghost btn-block', onClick: () => { ui.profilePk = null; ui.pubProf = null; ui.profEdit = null; ui.profEditFilled = false; render(); } }, t('back')),
+      h('button', { class: 'btn-ghost btn-block', onClick: () => { ui.profilePk = null; ui.profOverThread = false; ui.pubProf = null; ui.profEdit = null; ui.profEditFilled = false; render(); } }, t('back')),
       mine ? logoutPop() : null);
   }
 
@@ -2756,12 +2766,14 @@ export function messagesFeature(ctx) {
         // threads reachable from it, are public nostr content — shown
         // without an account. Back falls through to the app's own screens.
         if (ui.pubProf) {
+          if (ui.profOverThread && ui.profilePk) return profileScreen();
           if (ui.noteThread) return threadScreen();
           if (ui.profilePk) return profileScreen();
         }
         return null;
       }
       if (ui.zapSetup) return zapSetupScreen();
+      if (ui.profOverThread && ui.profilePk) return profileScreen();
       if (ui.noteThread) return threadScreen();
       if (ui.profilePk) return profileScreen();
       if (ui.userSearch && !ui.chatOpen) return userSearchScreen();

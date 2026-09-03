@@ -538,7 +538,7 @@ wallet.subscribe(scheduleRender);
 // views — most Spending payments open one of these, and leaving them out
 // meant the phone's native Back skipped past the history list entirely
 // (it landed on whatever tab minted the previous entry).
-const NAV_FIELDS = ['screen', 'tab', 'txDetail', 'arkMoveDetail', 'arkExitDetail', 'giftDetail', 'bump', 'giftMode', 'claimStep', 'chatOpen', 'msgView', 'msgCommunity', 'msgPeer', 'profilePk', 'settingsPage', 'nameEditOpen', 'noteThread', 'userSearch', 'zapSetup', 'hatShop'];
+const NAV_FIELDS = ['screen', 'tab', 'txDetail', 'arkMoveDetail', 'arkExitDetail', 'giftDetail', 'bump', 'giftMode', 'claimStep', 'chatOpen', 'msgView', 'msgCommunity', 'msgPeer', 'profilePk', 'profOverThread', 'settingsPage', 'nameEditOpen', 'noteThread', 'userSearch', 'zapSetup', 'hatShop'];
 function navSnapshot() {
   const s = {};
   for (const f of NAV_FIELDS) s[f] = ui[f] ?? null;
@@ -1181,7 +1181,7 @@ async function activateAccount(acc, opts = {}) {
   // Restore the tab / open tx from the last session so a refresh keeps the
   // user's place. A gift link always opens the claim screen instead.
   const nav = (() => { try { return JSON.parse(sessionStorage.getItem(NAV_KEY) || 'null'); } catch { return null; } })();
-  ui.tab = (!opts.gift && nav && nav.tab) || 'receive';
+  ui.tab = (!opts.gift && nav && nav.tab) || 'history';
   ui.txDetail = (!opts.gift && nav && nav.txDetail) || null;
   // Not baselined yet — stays null until the scan + ack logic below sets it,
   // so the celebration never fires for payments that were already there at
@@ -1707,7 +1707,7 @@ function enterOfflineFallback() {
 async function retryOnline() {
   ui.offlineFallback = false;
   wallet.setOffline(false);
-  ui.tab = 'receive';
+  ui.tab = 'history';
   render();
   try {
     await wallet.scan();
@@ -2150,7 +2150,7 @@ function settingsTab() {
       tile('notifications', t('settingsNotifications'), t('settingsNotifDesc')),
       tile('advanced', t('advancedSettings'), t('settingsAdvancedDesc')),
     ]),
-    h('button', { class: 'btn-ghost btn-block', style: 'margin-top:6px', onClick: () => { ui.tab = wallet.offline ? 'settings' : 'receive'; render(); } }, t('back'))
+    h('button', { class: 'btn-ghost btn-block', style: 'margin-top:6px', onClick: () => { ui.tab = wallet.offline ? 'settings' : 'history'; render(); } }, t('back'))
   );
 }
 
@@ -2328,7 +2328,7 @@ function goHome() {
     ui.addrScan = false;
     ui.arkMoveOpen = false;
     ui.nameEditOpen = null;
-    ui.tab = wallet.offline ? 'settings' : 'receive';
+    ui.tab = wallet.offline ? 'settings' : 'history';
     ui.draft = null;
     ui.sendResult = null;
     ui.sendError = '';
@@ -2782,7 +2782,7 @@ function onboardScreen() {
     // Spending stays out of sight until the user sets it up.
     ui.account = 'savings';
     try { localStorage.setItem(ACCOUNT_KEY, 'savings'); } catch {}
-    ui.tab = 'receive';
+    ui.tab = 'history';
     return null; // the caller falls through to the wallet itself
   }
   if (o.step === 'spend') {
@@ -3014,7 +3014,7 @@ function onboardScreen() {
         ui.account = 'spending';
         try { localStorage.setItem(ACCOUNT_KEY, 'spending'); } catch {}
       }
-      ui.tab = 'receive';
+      ui.tab = 'history';
       render();
     } }, t('onbEnter')),
     h('button', { class: 'btn-ghost btn-block', onClick: () => { o.step = 'avatar'; render(); } }, t('back')),
@@ -3113,7 +3113,7 @@ function walletScreen() {
   // Tab changes slide the content pane sideways like a carousel — swipe
   // direction when a gesture caused it, index order for taps. The balance
   // card and tab strip stay planted.
-  const TAB_ORDER = ['receive', 'send', 'history'];
+  const TAB_ORDER = ['history', 'receive', 'send'];
   if (uiChanged('tabnav', ui.tab)) {
     const idx = TAB_ORDER.indexOf(ui.tab);
     // The pane slides only BETWEEN tabs the user has seen: the first
@@ -3219,7 +3219,7 @@ function viewLabel(a, view) {
 function switchToView(id, view) {
   ui.account = view;
   try { localStorage.setItem(ACCOUNT_KEY, view); } catch {}
-  if (id === activeId) { ui.screen = 'wallet'; render(); }
+  if (id === activeId) { ui.screen = 'wallet'; ui.tab = 'history'; render(); }
   else {
     const acc = accounts.find((a) => a.id === id);
     if (acc) switchAccount(id);
@@ -3244,12 +3244,11 @@ function setAccountSel(a, dir) {
   _accDir = dir || (a === 'savings' ? 'left' : 'right');
   ui.account = a;
   try { localStorage.setItem(ACCOUNT_KEY, a); } catch {}
-  // A payment's detail page belongs to the account it was opened from —
-  // switching accounts closes it and lands on Receive.
-  if (ui.txDetail || ui.arkMoveDetail || ui.arkExitDetail || ui.giftDetail) {
-    ui.txDetail = null; ui.arkMoveDetail = null; ui.arkExitDetail = null; ui.giftDetail = null;
-    ui.tab = 'receive';
-  }
+  // Selecting an account shows its history right away — home base — and any
+  // open payment detail (which belongs to the account it was opened from)
+  // closes with it.
+  ui.txDetail = null; ui.arkMoveDetail = null; ui.arkExitDetail = null; ui.giftDetail = null;
+  ui.tab = 'history';
   render();
 }
 
@@ -3376,6 +3375,45 @@ function balanceCard() {
     _accDir = null; // the drag is the animation here
     return h('div', {
       class: 'bal-carousel',
+      // Desktop: scroll-snap has no mouse drag, so emulate one — grab the
+      // strip and pull. Touch keeps the native pan (pointerType check);
+      // buttons keep their clicks untouched. Mandatory snap fights raw
+      // scrollLeft writes, so it's lifted for the drag and restored once the
+      // release glide lands on a card.
+      onPointerDown: (e) => {
+        if (e.pointerType !== 'mouse' || e.button !== 0) return;
+        if (e.target.closest && e.target.closest('button, a, input')) return;
+        e.preventDefault(); // no text selection while pulling
+        const el = e.currentTarget;
+        const x0 = e.clientX, s0 = el.scrollLeft;
+        let moved = false;
+        const mv = (ev) => {
+          const dx = ev.clientX - x0;
+          if (!moved && Math.abs(dx) > 4) {
+            moved = true;
+            el.classList.add('grabbing');
+            el.style.scrollSnapType = 'none';
+          }
+          if (moved) { el.scrollLeft = s0 - dx; el._lastScroll = Date.now(); }
+        };
+        const up = () => {
+          window.removeEventListener('pointermove', mv);
+          window.removeEventListener('pointerup', up);
+          el.classList.remove('grabbing');
+          if (!moved) return;
+          el._dragged = Date.now(); // the release's click must not double as a card tap
+          const mid = el.scrollLeft + el.clientWidth / 2;
+          let best = null, bestD = Infinity;
+          [...el.children].forEach((k) => {
+            const d = Math.abs(k.offsetLeft + k.offsetWidth / 2 - mid);
+            if (d < bestD) { bestD = d; best = k; }
+          });
+          if (best) el.scrollTo({ left: best.offsetLeft + best.offsetWidth / 2 - el.clientWidth / 2, behavior: 'smooth' });
+          setTimeout(() => { el.style.scrollSnapType = ''; }, 400);
+        };
+        window.addEventListener('pointermove', mv);
+        window.addEventListener('pointerup', up);
+      },
       onScroll: (e) => {
         const el = e.target;
         el._lastScroll = Date.now();
@@ -3391,12 +3429,30 @@ function balanceCard() {
           if (view && view !== accountSel()) {
             ui.account = view;
             try { localStorage.setItem(ACCOUNT_KEY, view); } catch {}
+            // selecting an account lands on its history (home), any open
+            // payment detail belonged to the other account
+            ui.txDetail = null; ui.arkMoveDetail = null; ui.arkExitDetail = null; ui.giftDetail = null;
+            ui.tab = 'history';
             render();
           }
         }, 120);
       },
-    }, ORDER2.map((v) => h('div', { class: 'card balance bal-slide' },
-      faceFor(v), ...(v === sel ? cardExtras() : []))));
+    }, ORDER2.map((v) => h('div', {
+      class: 'card balance bal-slide',
+      // Tapping the peeking neighbor switches to it outright — the post-render
+      // alignment then glides it into place. Guarded against a desktop drag's
+      // release click and against buttons riding on the card.
+      onClick: v === sel ? undefined : (e) => {
+        if (e.target.closest && e.target.closest('button, a, input')) return;
+        const strip = e.currentTarget.parentNode;
+        if (strip && Date.now() - (strip._dragged || 0) < 300) return;
+        ui.account = v;
+        try { localStorage.setItem(ACCOUNT_KEY, v); } catch {}
+        ui.txDetail = null; ui.arkMoveDetail = null; ui.arkExitDetail = null; ui.giftDetail = null;
+        ui.tab = 'history';
+        render();
+      },
+    }, faceFor(v), ...(v === sel ? cardExtras() : []))));
   }
   const dtRaw = animWindow('acct', sel, 300);
   // Decide AT the change whether this face switch animates: only deliberate
@@ -3413,19 +3469,20 @@ function balanceCard() {
 
 
 function tabsBar() {
-  // Settings lives in the avatar menu, not the tab strip.
+  // Settings lives in the avatar menu, not the tab strip. History isn't a tab
+  // at all any more — it's the wallet's HOME, under the two tabs: tapping the
+  // lit tab again (or native back) puts it away and the history is what's left.
   const tabs = [
     ['receive', t('tabReceive')],
     // Watch-only wallets show Send too — it prompts to load the seed to spend.
     ['send', t('tabSend')],
-    ['history', t('tabHistory')],
   ];
   return h(
     'div',
     { class: 'tabs' },
     tabs.map(([id, label]) =>
       tabBtn(label, ui.tab === id, () => {
-        ui.tab = id;
+        ui.tab = ui.tab === id ? 'history' : id;
         ui.sendError = ''; // a stale send error never survives a tab change
         ui.revealShown = false; // re-mask the recovery phrase whenever tabs change
         ui.nostrExportStep = false; // and the exported nostr key
@@ -4358,26 +4415,29 @@ function pager(page, total, onPage) {
 
 function historyTab() {
   if (ui.bump) return bumpView();
-  const txs = wallet.history; // BIP84 txs + silent-payment receipts, newest first
+  // History is SCOPED to the selected account: Savings shows the on-chain
+  // ledger (BIP84 txs, silent-payment receipts, gift reservations), Spending
+  // shows the ark side (receives, sends, boards, LN) — each card of the
+  // carousel owns its own timeline.
+  const histSel = accountSel();
+  const txs = histSel === 'spending' ? [] : wallet.history; // newest first
   const featDetail = featureHook('historyDetail');
   if (featDetail) return featDetail;
   if (ui.txDetail) {
-    const tx = txs.find((x) => x.txid === ui.txDetail);
+    const tx = wallet.history.find((x) => x.txid === ui.txDetail);
     if (tx) return txDetailView(tx);
     ui.txDetail = null;
   }
   if (wallet.offline)
     return h('div', { class: 'card' }, h('p', { class: 'muted center', style: 'margin:0' }, t('historyOffline')));
-  if (!wallet.loaded || (wallet.historyLoading && !txs.length))
+  if (!wallet.loaded || (histSel !== 'spending' && wallet.historyLoading && !txs.length))
     return h(
       'div',
       { class: 'card center col', style: 'align-items:center;gap:10px' },
       h('span', { class: 'spinner' }),
       wallet.historyLoading ? h('p', { class: 'small muted', style: 'margin:0' }, t('loadingHistory')) : null
     );
-  // Feature movements (Ark receives/sends/boards, ...) interleave with
-  // on-chain txs by time.
-  const featEntries = featureAll('historyEntries', txs);
+  const featEntries = featureAll('historyEntries', txs, histSel);
   if (!txs.length && !featEntries.length)
     return h('div', { class: 'card' }, h('p', { class: 'muted center', style: 'margin:0' }, t('noTxYet')));
 
@@ -4599,7 +4659,7 @@ applyDir();
 // Horizontal-dominant, quick, and only on the wallet's own tab pages — never
 // inside chat, profiles, takeovers, or the (offline-forced) settings tab.
 (() => {
-  const ORDER = ['receive', 'send', 'history'];
+  const ORDER = ['history', 'receive', 'send'];
   let sx = 0, sy = 0, t0 = 0, live = false, onBalance = false, swallowClick = false;
   window.addEventListener('click', (e) => {
     if (!swallowClick) return;

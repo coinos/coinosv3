@@ -19,10 +19,15 @@ import {
 import { t } from '../i18n.js';
 import { resolveBip353, parsePaymentName, parseBip21 as parseBip21Uri } from '../bip353.js';
 import { parseZapTarget, fetchPayParams, requestInvoice } from '../lnurl.js';
-import { shortAddr, shortTxid, timeAgo, ARK_ICON, ARK_MARK } from '../format.js';
+import { shortAddr, shortTxid, timeAgo, ARK_ICON, ARK_MARK, BITCOIN_ICON } from '../format.js';
 
 // t?ark1… bech32m — an Ark address for this or another ASP.
 export function isArkAddress(a) { return /^t?ark1[a-z0-9]{20,}$/i.test((a || '').trim()); }
+
+// Ark movement types that actually touch the chain — each is a real bitcoin
+// tx with a txid, so it wears the Bitcoin mark, not the Ark one: board pulls
+// coins in from on-chain, offboard and exit push them back out.
+const ONCHAIN_ARK = new Set(['board', 'offboard', 'exit']);
 
 // Wallet storage/key helpers for this feature, installed onto the core
 // wallet instance so a build without the feature ships none of it.
@@ -1016,11 +1021,16 @@ export function arkFeature(ctx) {
     return h(
       'div',
       { class: 'item', style: 'cursor:pointer', onClick: () => { ui.arkMoveDetail = m.id; render(); } },
-      // Ark mark in the (direction-colored) circle carries the rail; the label
-      // + signed amount carry direction, so no redundant "Ark" text chip.
+      // The circle's glyph names the RAIL the money actually rode: ⚡ for
+      // Lightning, the Bitcoin mark for the on-chain movements (board pulls
+      // coins in from chain; offboard/exit push them back out — each is a
+      // real tx with a txid), and the Ark mark for pure off-chain hops.
+      // Direction is carried by the tint + signed amount, no text chip.
       m.type.startsWith('ln-')
         ? h('div', { class: `ico ${incoming ? 'in' : 'out'}` }, '⚡')
-        : h('div', { class: `ico ${incoming ? 'in' : 'out'}`, html: ARK_MARK(15) }),
+        : ONCHAIN_ARK.has(m.type)
+          ? h('div', { class: `ico ${incoming ? 'in' : 'out'}`, html: BITCOIN_ICON(20) })
+          : h('div', { class: `ico ${incoming ? 'in' : 'out'}`, html: ARK_MARK(15) }),
       h('div', { class: 'grow' },
         h('div', { class: 'row gap6', style: 'align-items:center' },
           (() => {
@@ -1131,8 +1141,11 @@ export function arkFeature(ctx) {
       { class: 'card col', style: 'gap:10px' },
       h('div', { class: 'row gap6', style: 'align-items:center' },
         // the rail the user chose is the one to show: a payment SENT over
-        // Lightning stays Lightning here, however it settled underneath
-        m.type.startsWith('ln-') ? h('span', { style: 'font-size:18px' }, '⚡') : h('span', { html: ARK_ICON(18) }),
+        // Lightning stays Lightning here, however it settled underneath; an
+        // on-chain move (board/offboard/exit) wears the Bitcoin mark
+        m.type.startsWith('ln-') ? h('span', { style: 'font-size:18px' }, '⚡')
+          : ONCHAIN_ARK.has(m.type) ? h('span', { html: BITCOIN_ICON(18) })
+          : h('span', { html: ARK_ICON(18) }),
         h('h3', { style: 'margin:0' }, label),
         m.status !== 'complete' ? h('span', { class: 'tag pending' }, m.status) : null),
       m.type === 'refresh'

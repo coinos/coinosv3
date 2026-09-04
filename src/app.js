@@ -3384,16 +3384,22 @@ function balanceCard() {
     // active one's edge and drags/snaps into place, BlueWallet-style.
     const ORDER2 = ['spending', 'savings'];
     // Align the carousel to the selected card after this render lands — but
-    // never fight a finger or live momentum.
-    setTimeout(() => {
+    // never fight a finger or live momentum, and NEVER touch layout when it's
+    // already where it belongs. Boot fires many renders (cache, ark connect,
+    // scan, nostr, balance ticks); reading offsetLeft/scrollLeft on each one
+    // forced a synchronous layout mid-scroll — the stutter. `_alignedTo`
+    // short-circuits before any layout read once the card is in place.
+    requestAnimationFrame(() => {
       const el = document.querySelector('.bal-carousel');
-      if (!el || Date.now() - (el._lastScroll || 0) < 350) return;
+      if (!el || el._alignedTo === sel) return;
+      if (Date.now() - (el._lastScroll || 0) < 350) return;
       const k = el.children[ORDER2.indexOf(sel)];
       if (!k) return;
       const target = k.offsetLeft + k.offsetWidth / 2 - el.clientWidth / 2;
       if (Math.abs(el.scrollLeft - target) > 6) el.scrollTo({ left: target, behavior: el._inited ? 'smooth' : 'auto' });
+      el._alignedTo = sel;
       el._inited = true;
-    }, 0);
+    });
     _accDir = null; // the drag is the animation here
     // The settled-card check, shared by the scroll debounce and drag release.
     // While a finger or mouse button is still DOWN nothing switches — hovering
@@ -3408,6 +3414,9 @@ function balanceCard() {
       });
       const view = ORDER2[best];
       if (view && view !== accountSel()) {
+        // the scroll already rests on this card — mark it aligned so the
+        // post-render pass skips its layout read instead of re-aligning
+        el._alignedTo = view;
         ui.account = view;
         try { localStorage.setItem(ACCOUNT_KEY, view); } catch {}
         // selecting an account lands on its history (home), any open

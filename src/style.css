@@ -462,7 +462,17 @@ hr.divider { margin: 16px 0; }
   touch-action: pan-x pan-y;
 }
 .bal-carousel::-webkit-scrollbar { display: none; }
-.bal-slide { flex: 0 0 calc(100% - 40px); scroll-snap-align: center; min-width: 0; }
+/* Isolate each card's layout + paint from the rest of the page: the history
+   list building in below (and the balance number ticking) can't invalidate
+   the carousel's layer, and the scroll stays on the compositor even while the
+   main thread is busy with boot work. */
+.bal-slide {
+  flex: 0 0 calc(100% - 40px); scroll-snap-align: center; min-width: 0;
+  /* layout containment (not paint — that would clip the card's own shadow):
+     the history list building in below and the balance ticking can't force
+     the slide to reflow, so the scroll stays on the compositor during boot */
+  contain: layout;
+}
 .bal-carousel .card + .card { margin-top: 0; }
 .bal-carousel { cursor: grab; } /* touch never shows a cursor — no media-query hedging */
 .bal-carousel.grabbing, .bal-carousel.grabbing * { cursor: grabbing; user-select: none; }

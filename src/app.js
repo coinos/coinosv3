@@ -4909,11 +4909,11 @@ applyDir();
       return;
     }
     // The swipe surfaces form ONE RING that loops:
-    //   … page0 ⇄ page1 … lastPage ⇄ Send ⇄ Receive ⇄ page0 …
+    //   … page0 ⇄ page1 … lastPage ⇄ Receive ⇄ Send ⇄ page0 …
     // Swiping left over the history list turns pages older (the pager's
-    // Next); at the last page it wraps into Send, then Receive, then back to
-    // page 0. Swiping right from page 0 goes the other way — Receive, then
-    // Send, then the LAST page. No dead ends anywhere.
+    // Next); at the last page it wraps into Receive, then Send, then back to
+    // page 0. Swiping right from page 0 goes the other way — Send, then
+    // Receive, then the LAST page. No dead ends anywhere.
     const resets = () => {
       // same resets as a tab-bar tap
       ui.sendError = '';
@@ -4934,13 +4934,13 @@ applyDir();
       // a detail view / spinner / empty list publishes no pager — treat it
       // as a single page so the swipe still reaches the tabs
       const { page, pages } = _histPager || { page: 0, pages: 1 };
-      if (dx < 0) { if (page < pages - 1) { ui.txPage = page + 1; render(); } else goTab('send'); }
+      if (dx < 0) { if (page < pages - 1) { ui.txPage = page + 1; render(); } else goTab('receive'); }
       else if (page > 0) { ui.txPage = page - 1; render(); }
-      else goTab('receive');
+      else goTab('send');
       return;
     }
-    if (ui.tab === 'receive') { if (dx < 0) goHist(0); else goTab('send'); return; }
-    if (ui.tab === 'send') { if (dx < 0) goTab('receive'); else goHist(1e9); return; }
+    if (ui.tab === 'receive') { if (dx < 0) goTab('send'); else goHist(1e9); return; }
+    if (ui.tab === 'send') { if (dx < 0) goHist(0); else goTab('receive'); return; }
   }, { passive: true });
 })();
 

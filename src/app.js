@@ -159,6 +159,11 @@ function h(tag, attrs = {}, ...children) {
 // where a detached node runs its own animation frames).
 function morph(a, b) {
   if (a === b) return;
+  // A subtree frozen for a gesture (the balance carousel mid-drag/mid-glide)
+  // is left exactly as it stands: patching it would strip the drag's inline
+  // snap override and yank the scroll. endCarouselDrag unfreezes and runs a
+  // syncing render once motion stops.
+  if (a.nodeType === 1 && a._skipMorph) return;
   if (a.nodeType === 3 && b.nodeType === 3) {
     if (a.data !== b.data) a.data = b.data;
     return;
@@ -427,8 +432,11 @@ function render() {
   // A background render mid carousel-drag rebuilds the strip; the morph then
   // strips the drag's inline scroll-snap-type:none, so mandatory snap yanks
   // the card back to its origin — the "jump partway through" stutter (a
-  // position jump, not a dropped frame). Hold renders for the ~sub-second of a
-  // drag and flush one when it ends; the DOM never churns under the finger.
+  // position jump, not a dropped frame). Hold renders while the FINGER is
+  // down (pointermove writes scrollLeft on the main thread — a render there
+  // eats frames); after release the strip is morph-frozen (_skipMorph)
+  // instead, so the glide runs undisturbed while the history below is
+  // already switching to the chosen account.
   if (_carDragging) { _renderDeferred = true; return; }
   // A render that throws must never brick the page silently: stale DOM keeps
   // its handlers, every one of them calls render again, and every tap turns
@@ -437,6 +445,10 @@ function render() {
 }
 function endCarouselDrag() {
   _carDragging = false;
+  // the strip was frozen against the morph for the glide — unfreeze it and
+  // make sure one render runs so it catches up with any state committed early
+  const strip = document.querySelector('.bal-carousel');
+  if (strip && strip._skipMorph) { strip._skipMorph = false; _renderDeferred = true; }
   if (_renderDeferred) { _renderDeferred = false; render(); }
 }
 function renderCrash(err) {
@@ -3428,12 +3440,49 @@ function balanceCard() {
       el._inited = true;
     });
     _accDir = null; // the drag is the animation here
+    // Commit the account switch — shared by settle (the authority, at rest)
+    // and the EARLY commit at release: the moment a flick's outcome is known
+    // the history below starts loading, instead of waiting out the slide.
+    // The strip itself stays morph-frozen until the glide lands, so this
+    // render can't disturb the motion.
+    const commitAccount = (el, view) => {
+      // the scroll rests (or will rest) on this card — mark it aligned so
+      // the post-render pass skips its layout read instead of re-aligning
+      el._alignedTo = view;
+      ui.accountUserChosen = true; // a deliberate pick — no auto-select behind it
+      ui.account = view;
+      try { localStorage.setItem(ACCOUNT_KEY, view); } catch {}
+      // selecting an account lands on its history (home), any open
+      // payment detail belonged to the other account
+      ui.txDetail = null; ui.arkMoveDetail = null; ui.arkReconDetail = null; ui.arkExitDetail = null; ui.giftDetail = null;
+      ui.tab = 'history';
+      render();
+    };
+    // Where will a released touch flick land? Nearest card, pushed one over
+    // when the finger left with real speed — the same physics mandatory snap
+    // applies. A wrong guess only flashes the other history for a beat:
+    // settle corrects it when the snap actually lands.
+    const predictLanding = (el) => {
+      const kids = [...el.children];
+      if (!kids.length) return null;
+      const mid = el.scrollLeft + el.clientWidth / 2;
+      let idx = 0, d0 = Infinity;
+      kids.forEach((k, i) => {
+        const d = Math.abs(k.offsetLeft + k.offsetWidth / 2 - mid);
+        if (d < d0) { d0 = d; idx = i; }
+      });
+      const s = el._flick || [];
+      const a = s[0], b = s[s.length - 1];
+      const vel = a && b && b.t > a.t ? (b.x - a.x) / (b.t - a.t) : 0; // px/ms, + = toward higher index
+      if (Math.abs(vel) > 0.3) idx = Math.max(0, Math.min(kids.length - 1, idx + (vel > 0 ? 1 : -1)));
+      return ORDER2[idx];
+    };
     // The settled-card check, shared by the scroll debounce and drag release.
     // While a finger or mouse button is still DOWN nothing switches — hovering
     // a card mid-drag is browsing, not choosing; release is the choice.
     const settle = (el) => {
       if (el._dragging) return;
-      endCarouselDrag(); // motion has stopped — release the render hold (flushes any deferred render)
+      endCarouselDrag(); // motion has stopped — unfreeze the strip and sync it
       const mid = el.scrollLeft + el.clientWidth / 2;
       let best = 0, bestD = Infinity;
       [...el.children].forEach((k, i) => {
@@ -3441,19 +3490,7 @@ function balanceCard() {
         if (d < bestD) { bestD = d; best = i; }
       });
       const view = ORDER2[best];
-      if (view && view !== accountSel()) {
-        // the scroll already rests on this card — mark it aligned so the
-        // post-render pass skips its layout read instead of re-aligning
-        el._alignedTo = view;
-        ui.accountUserChosen = true; // a deliberate pick — no auto-select behind it
-        ui.account = view;
-        try { localStorage.setItem(ACCOUNT_KEY, view); } catch {}
-        // selecting an account lands on its history (home), any open
-        // payment detail belonged to the other account
-        ui.txDetail = null; ui.arkMoveDetail = null; ui.arkReconDetail = null; ui.arkExitDetail = null; ui.giftDetail = null;
-        ui.tab = 'history';
-        render();
-      }
+      if (view && view !== accountSel()) commitAccount(el, view);
     };
     return h('div', {
       class: 'bal-carousel',
@@ -3466,12 +3503,19 @@ function balanceCard() {
       // (scrollend would be the semantic signal but it doesn't fire reliably
       // for programmatic scrolls across browsers, so it's not relied on.)
       onScrollend: (e) => { const el = e.currentTarget; if (!el._dragging) { clearTimeout(el._settle); settle(el); } },
-      onTouchstart: (e) => { const el = e.currentTarget; el._dragging = true; _carDragging = true; clearTimeout(el._settle); },
+      onTouchstart: (e) => { const el = e.currentTarget; el._dragging = true; _carDragging = true; el._skipMorph = true; clearTimeout(el._settle); },
       onTouchend: (e) => {
-        e.currentTarget._dragging = false; // onScroll's debounce settles it
-        // safety: if momentum produces no scroll events, settle (which clears
-        // _carDragging) may never fire — release the render hold anyway
-        setTimeout(() => { if (!e.currentTarget._dragging && _carDragging) endCarouselDrag(); }, 700);
+        const el = e.currentTarget;
+        el._dragging = false; // onScroll's debounce settles it
+        // The finger is up: lift the render hold (the strip stays frozen via
+        // _skipMorph) and commit the predicted landing NOW, so the history
+        // below loads under the glide instead of after it.
+        _carDragging = false;
+        const view = predictLanding(el);
+        if (view && view !== accountSel()) commitAccount(el, view);
+        // safety: if momentum produces no scroll events, settle may never
+        // fire — unfreeze the strip and flush anyway
+        setTimeout(() => { if (!el._dragging && (el._skipMorph || _renderDeferred)) endCarouselDrag(); }, 700);
       },
       // Desktop: scroll-snap has no mouse drag, so emulate one — grab the
       // strip and pull. Touch keeps the native pan (pointerType check);
@@ -3504,7 +3548,8 @@ function balanceCard() {
           if (!moved && Math.abs(dx) > 4) {
             moved = true;
             el._dragging = true;
-            _carDragging = true; // hold renders so the morph can't strip snap-none mid-drag
+            _carDragging = true; // hold renders so nothing eats frames under the pull
+            el._skipMorph = true; // and freeze the strip against any later mid-glide morph
             el.classList.add('grabbing');
             el.style.scrollSnapType = 'none';
           }
@@ -3521,8 +3566,8 @@ function balanceCard() {
           el.classList.remove('grabbing');
           el._dragging = false;
           // safety: if the release glide produces no scroll events, settle
-          // never fires to release the render hold — do it after a beat
-          setTimeout(() => { if (!el._dragging && _carDragging) endCarouselDrag(); }, 700);
+          // never fires to unfreeze the strip — do it after a beat
+          setTimeout(() => { if (!el._dragging && (el._skipMorph || _renderDeferred)) endCarouselDrag(); }, 700);
           if (!moved) { endCarouselDrag(); return; }
           el._dragged = Date.now(); // the release's click must not double as a card tap
           // Commit to a neighbor on a small, deliberate move — not only when
@@ -3556,8 +3601,13 @@ function balanceCard() {
           el.addEventListener('scrollend', restore, { once: true });
           clearTimeout(el._snapT);
           el._snapT = setTimeout(restore, 700);
-          // the switch is left to onScroll's debounce, which trails the glide's
-          // own scroll events and so fires only once the card has come to rest
+          // The chosen card is known RIGHT HERE — commit it now so the
+          // history below loads under the glide. The hold lifts (renders may
+          // run again) but the strip stays morph-frozen until settle; settle
+          // then finds the account already switched and just syncs the strip.
+          _carDragging = false;
+          const view = ORDER2[best];
+          if (view && view !== accountSel()) commitAccount(el, view);
         };
         window.addEventListener('pointermove', mv);
         window.addEventListener('pointerup', up);
@@ -3565,6 +3615,10 @@ function balanceCard() {
       onScroll: (e) => {
         const el = e.target;
         el._lastScroll = Date.now();
+        // recent positions — predictLanding reads the release velocity off
+        // these when a touch flick lifts (same window the desktop drag keeps)
+        (el._flick ||= []).push({ t: performance.now(), x: el.scrollLeft });
+        while (el._flick.length > 8 || (el._flick.length && el._flick[0].t < performance.now() - 140)) el._flick.shift();
         // trails the LAST scroll event: during a glide/momentum scroll these
         // fire continuously, so this lands ~130ms after motion stops — after
         // the card is at rest, never mid-glide. settle bails while _dragging.

@@ -4607,6 +4607,9 @@ function txHistoryItem(tx) {
 }
 
 // Prev / page-of / next controls. Returns null when there's only one page.
+// The buttons LOOP within the pages (never disabled): Next on the last page
+// returns to page 1, Prev on page 1 jumps to the end — unlike the swipe
+// ring, they never leave the list for the tabs.
 const PAGE_SIZE = 10;
 // The history list currently on screen ({ page, pages }), null when a detail
 // view / spinner / another tab is up — the swipe gesture paginates against
@@ -4616,9 +4619,9 @@ function pager(page, total, onPage) {
   const pages = Math.ceil(total / PAGE_SIZE);
   if (pages <= 1) return null;
   return h('div', { class: 'row between', style: 'align-items:center;padding-top:10px' },
-    h('button', { class: 'btn-sm', disabled: page <= 0, onClick: () => onPage(page - 1) }, t('prevPage')),
+    h('button', { class: 'btn-sm', onClick: () => onPage((page - 1 + pages) % pages) }, t('prevPage')),
     h('span', { class: 'small muted' }, t('pageXofY', { x: page + 1, y: pages })),
-    h('button', { class: 'btn-sm', disabled: page >= pages - 1, onClick: () => onPage(page + 1) }, t('nextPage'))
+    h('button', { class: 'btn-sm', onClick: () => onPage((page + 1) % pages) }, t('nextPage'))
   );
 }
 

@@ -3349,9 +3349,12 @@ function balanceCard() {
         : null);
   };
   // Everything below the balance figure — the move button, top-up offer,
-  // spend-setup offer and the inline unfold panel — rides on whichever card
-  // is ACTIVE, so the peeking neighbor stays a clean balance preview.
-  const cardExtras = () => [
+  // spend-setup offer and the inline unfold panel. In carousel mode these
+  // belong to the SPENDING CARD ITSELF, not to whichever card is selected:
+  // the strip's flex row stretches both cards to the tallest, so an extra
+  // that appears only on selection made the whole strip change height right
+  // as a swipe settled. Tied to the card, heights never move mid-swipe.
+  const cardExtras = (view = sel) => [
     // "Move money" and friends: the only door between the two balances —
     // pointless (and confusing) while there's only one.
     ...(hasSpending ? featureAll('balanceActions') : []).map((a2) =>
@@ -3364,10 +3367,18 @@ function balanceCard() {
     // (Explicit latches carry a timestamp; self-heal only eats legacy booleans.)
     // A Spending face running on fumes while Savings sits comfortable gets a
     // one-tap top-up into the board panel.
-    hasSpending && isSpending && !ui.arkMoveOpen && wallet.spendable > 1000
+    hasSpending && view === 'spending' && !ui.arkMoveOpen && wallet.spendable > 1000
       && spending + (featureHook('spendingBoardingSat') || 0) < 1000
       && featureHook('arkReady') && !wallet.watchOnly
-      ? h('button', { class: 'btn-sm', style: 'margin-top:10px', onClick: () => { ui.arkMoveDir = 'toSpending'; ui.arkMoveOpen = true; render(); } }, t('topUpFromSavings'))
+      ? h('button', { class: 'btn-sm', style: 'margin-top:10px', onClick: () => {
+          // tapped on the peeking card: bring the card in with its panel
+          if (accountSel() !== 'spending') {
+            ui.accountUserChosen = true;
+            ui.account = 'spending';
+            try { localStorage.setItem(ACCOUNT_KEY, 'spending'); } catch {}
+          }
+          ui.arkMoveDir = 'toSpending'; ui.arkMoveOpen = true; render();
+        } }, t('topUpFromSavings'))
       : null,
     !hasSpending && !kindLocked && featureHook('arkReady') && !wallet.watchOnly && acc0 && acc0.type === 'full'
       && featureHook('namesSettled') !== 'pending' // a restoring name may prove Spending any second — don't flash the setup ask
@@ -3576,7 +3587,7 @@ function balanceCard() {
         ui.tab = 'history';
         render();
       },
-    }, faceFor(v), ...(v === sel ? cardExtras() : []))));
+    }, faceFor(v), ...(v === 'spending' ? cardExtras(v) : []))));
   }
   const dtRaw = animWindow('acct', sel, 300);
   // Decide AT the change whether this face switch animates: only deliberate

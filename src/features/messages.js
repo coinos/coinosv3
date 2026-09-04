@@ -2116,7 +2116,10 @@ export function messagesFeature(ctx) {
       h(multi ? 'textarea' : 'input', {
         ...(multi ? { rows: '4', style: 'font-family:var(--sans);min-height:72px' } : { type: 'text' }),
         placeholder: ph, value: ui.profEdit[key],
-        onInput: (ev) => { ui.profEdit[key] = ev.target.value; },
+        // render per keystroke so the page-top preview (name/picture/banner)
+        // tracks the draft live — the morph never rewrites a focused field,
+        // so this can't fight the typing
+        onInput: (ev) => { ui.profEdit[key] = ev.target.value; render(); },
       }));
     // A lightning address worth showing: not an npub-shaped machine address
     // (npub1…@some.relay duplicates the npub below) and not the same string
@@ -2134,17 +2137,25 @@ export function messagesFeature(ctx) {
     const showAbout = about.length > 1;
     // The cover photo: nostr's standard kind-0 `banner`. Legacy coinos.io
     // wore these proudly — migrated accounts bring theirs along, and anyone
-    // can set one in the editor below.
-    const bannerUrl = full && typeof full.banner === 'string' && /^https?:\/\//i.test(full.banner.trim())
-      ? full.banner.trim() : null;
+    // can set one in the editor below. WHILE EDITING, the draft is the
+    // truth: an uploaded (or pasted) picture/banner previews immediately at
+    // the top of the page instead of waiting for Save — and clearing a field
+    // previews the removal too.
+    const draft = mine && ui.profEdit ? ui.profEdit : null;
+    const urlish = (s) => (typeof s === 'string' && /^https?:\/\//i.test(s.trim()) ? s.trim() : null);
+    const bannerUrl = draft ? urlish(draft.banner)
+      : (full && urlish(full.banner)) || null;
+    const draftPic = draft && urlish(draft.picture);
     return h('div', { class: 'col', style: 'gap:16px' },
       ctx.brandHeader(false),
       h('div', { class: 'card col', style: 'gap:12px' },
         bannerUrl ? h('div', { class: 'profile-banner', style: `background-image:url(${JSON.stringify(bannerUrl)})` }) : null,
         h('div', { class: 'row gap6', style: 'align-items:center' },
-          avatar(pk, 'chat-avatar profile-avatar', false),
+          draftPic
+            ? h('div', { class: 'chat-avatar profile-avatar ava-img', style: `background-image:url(${JSON.stringify(draftPic)})` })
+            : avatar(pk, 'chat-avatar profile-avatar', false),
           h('div', { class: 'col grow', style: 'min-width:0;gap:2px' },
-            h('div', { class: 'chat-title' }, name),
+            h('div', { class: 'chat-title' }, draft && draft.name.trim() ? draft.name.trim() : name),
             nip05 ? h('div', { class: 'muted small break' }, nip05) : null,
             showLud ? h('div', { class: 'muted small break' }, '⚡ ' + lud16) : null,
             // the hat pitch lives beside the avatar it decorates

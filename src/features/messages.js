@@ -315,6 +315,30 @@ export function messagesFeature(ctx) {
     return npub ? npub.slice(0, 12) : pk.slice(0, 12);
   };
 
+  // Community wraps decrypt with real secp256k1 work (NIP-44), and a relay
+  // backlog delivers hundreds at once. Decrypting them inline in the
+  // subscription callbacks blocked the main thread in one burst on boot — the
+  // stutter felt when dragging the balance carousel right after a refresh.
+  // Queue the decrypt work and run it time-sliced: ~8ms of work, then yield so
+  // input and paint get a turn. Chat catches up a few frames later; the wallet
+  // stays responsive. (Same pattern the DM inbox drain already uses.)
+  const roomWork = [];
+  let roomWorking = false;
+  function enqueueRoomWork(fn) {
+    roomWork.push(fn);
+    if (roomWorking) return;
+    roomWorking = true;
+    (async () => {
+      try {
+        let t0 = performance.now();
+        while (roomWork.length) {
+          try { roomWork.shift()(); } catch {}
+          if (performance.now() - t0 > 8) { await new Promise((r) => setTimeout(r)); t0 = performance.now(); }
+        }
+      } finally { roomWorking = false; }
+    })();
+  }
+
   // ---- community rooms ----------------------------------------------------
 
   function ensureRoom(jm) {
@@ -376,18 +400,22 @@ export function messagesFeature(ctx) {
       subscribeOn(room.relays, { kinds: [1059], authors: [room.control.pk], limit: 500 }, (wrap) => {
         if (seenWraps.has(wrap.id)) return;
         seenWraps.add(wrap.id);
-        const opened = openWrap(wrap, room.control);
-        if (!opened || opened.rumor.kind !== 3308) return;
-        room.controlEntries.push(opened);
-        scheduleFold();
+        enqueueRoomWork(() => {
+          const opened = openWrap(wrap, room.control);
+          if (!opened || opened.rumor.kind !== 3308) return;
+          room.controlEntries.push(opened);
+          scheduleFold();
+        });
       }),
       subscribeOn(room.relays, { kinds: [1059], authors: [room.guestbook.pk], limit: 500 }, (wrap) => {
         if (seenWraps.has(wrap.id)) return;
         seenWraps.add(wrap.id);
-        const opened = openWrap(wrap, room.guestbook);
-        if (!opened) return;
-        room.guestEntries.push(opened);
-        scheduleFold();
+        enqueueRoomWork(() => {
+          const opened = openWrap(wrap, room.guestbook);
+          if (!opened) return;
+          room.guestEntries.push(opened);
+          scheduleFold();
+        });
       })
     );
     for (const c of jm.channels || []) subChannel(room, c.id);
@@ -408,9 +436,11 @@ export function messagesFeature(ctx) {
     allUnsubs.push(subscribeOn(room.relays, { kinds: [1059, 21059], authors: [room.chStream(id).pk], limit: 200 }, (wrap) => {
       if (seenWraps.has(wrap.id)) return;
       seenWraps.add(wrap.id);
-      const opened = openWrap(wrap, room.chStream(id));
-      if (!opened) return;
-      onChat(room, id, opened);
+      enqueueRoomWork(() => {
+        const opened = openWrap(wrap, room.chStream(id));
+        if (!opened) return;
+        onChat(room, id, opened);
+      });
     }));
   }
 

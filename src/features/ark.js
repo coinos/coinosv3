@@ -983,11 +983,17 @@ export function arkFeature(ctx) {
     // Deliberately dressed as an ORDINARY Sent row: the user spent their own
     // money and doesn't need an alarm about which device did it. (The ASP's
     // status API returns only a spent bit — no spend time or destination —
-    // so the timestamp is when this wallet found out.) Not tappable: the
-    // folded row sums several records, so a per-movement detail would show a
-    // fraction of the amount it advertises.
+    // so the timestamp is when this wallet found out.) The detail shows the
+    // hard facts: date, amount, and the coin ids that were consumed. The
+    // folded row isn't a stored movement, so the whole thing rides ui state.
     if (m.type === 'reconcile') {
-      return h('div', { class: 'item' },
+      return h('div', {
+        class: 'item', style: 'cursor:pointer',
+        onClick: () => {
+          ui.arkReconDetail = { amountSat: m.amountSat, ts: m.ts, vtxoIds: [...(m.vtxoIds || [])] };
+          render();
+        },
+      },
         h('div', { class: 'ico out', html: ARK_MARK(15) }),
         h('div', { class: 'grow' },
           h('div', {}, t('sent')),
@@ -1087,6 +1093,30 @@ export function arkFeature(ctx) {
       h('button', { class: 'btn-ghost btn-block', onClick: () => ctx.goBack(() => { ui.arkExitDetail = null; }) }, t('back')));
   }
 
+  // One label, N monospace coin ids — the send detail's consumed inputs and
+  // the reconcile detail's vanished coins share the shape.
+  const coinListRows = (label, ids) => !ids || !ids.length ? null
+    : h('div', { class: 'col', style: 'gap:4px' },
+        ...ids.map((id, i) => h('div', { class: 'row between', style: 'gap:12px' },
+          h('span', { class: 'small muted', style: 'flex-shrink:0' }, i === 0 ? label : ''),
+          h('span', { class: 'small', style: 'text-align:right;word-break:break-all' }, shortTxid(id)))));
+
+  // Detail for a folded reconcile row: the hard facts only — when this wallet
+  // learned of it, how much left, and which coins were consumed.
+  function arkReconDetailView(d) {
+    const row = (k, v) => h('div', { class: 'row between', style: 'gap:12px' },
+      h('span', { class: 'small muted', style: 'flex-shrink:0' }, k),
+      h('span', { class: 'small', style: 'text-align:right;word-break:break-all' }, v));
+    return h('div', { class: 'card col', style: 'gap:10px' },
+      h('div', { class: 'row gap6', style: 'align-items:center' },
+        h('span', { html: ARK_ICON(18) }),
+        h('h3', { style: 'margin:0' }, t('sent'))),
+      h('div', { class: 'amount-neg', style: 'font-size:20px' }, '-' + fmtAmount(d.amountSat) + ' ' + unitLabel()),
+      row(t('dateLabel'), new Date(d.ts).toLocaleString()),
+      coinListRows((d.vtxoIds || []).length > 1 ? t('arkVtxoInputs') : t('arkVtxoId'), d.vtxoIds),
+      h('button', { class: 'btn-ghost btn-block', onClick: () => ctx.goBack(() => { ui.arkReconDetail = null; }) }, t('back')));
+  }
+
   function arkMoveDetailView(m) {
     const incoming = m.type === 'refresh' ? false : !['send', 'offboard', 'exit', 'ln-send'].includes(m.type);
     const label = m.type === 'receive' ? t('received') : m.type === 'board' ? t('arkBoarded')
@@ -1122,6 +1152,8 @@ export function arkFeature(ctx) {
       })(),
       m.to ? row(t('arkPayTo'), shortAddr(m.to, 16, 12)) : null,
       m.vtxoId ? row(t('arkVtxoId'), shortTxid(m.vtxoId)) : null,
+      // the coins this payment consumed — a send can gather up to 24 inputs
+      coinListRows(t('arkVtxoInputs'), m.inputIds),
       // An offboard's fee is two different pockets — the miners' cut for the
       // on-chain weight and the ASP's service charge (base + lifetime ppm) —
       // shown apart so neither reads as the other being overpriced.
@@ -3005,8 +3037,9 @@ export function arkFeature(ctx) {
         if (last && last.type === 'reconcile' && last.ts === m.ts) {
           last.amountSat += m.amountSat;
           last.count += 1;
+          if (m.vtxoId) last.vtxoIds.push(m.vtxoId);
         } else {
-          out.push({ ...m, count: 1 });
+          out.push({ ...m, count: 1, vtxoIds: m.vtxoId ? [m.vtxoId] : [] });
         }
       }
       return exits.concat(out.map((m) => ({ time: m.ts, render: () => arkHistoryItem(m) })));
@@ -3017,6 +3050,9 @@ export function arkFeature(ctx) {
         if (a && !['done', 'failed'].includes(a.step)) return arkExitActionDetail(a);
         ui.arkExitDetail = null;
       }
+      // the folded reconcile row isn't a stored movement — its detail rides
+      // the ui state the row's tap put there (and nav history restores)
+      if (ui.arkReconDetail && typeof ui.arkReconDetail === 'object') return arkReconDetailView(ui.arkReconDetail);
       if (!ui.arkMoveDetail) return null;
       const s = arkStateNow();
       const m = s ? (s.movements || []).find((x) => x.id === ui.arkMoveDetail) : null;

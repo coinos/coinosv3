@@ -548,7 +548,7 @@ wallet.subscribe(scheduleRender);
 // views — most Spending payments open one of these, and leaving them out
 // meant the phone's native Back skipped past the history list entirely
 // (it landed on whatever tab minted the previous entry).
-const NAV_FIELDS = ['screen', 'tab', 'txDetail', 'arkMoveDetail', 'arkExitDetail', 'giftDetail', 'bump', 'giftMode', 'claimStep', 'chatOpen', 'msgView', 'msgCommunity', 'msgPeer', 'profilePk', 'profOverThread', 'settingsPage', 'nameEditOpen', 'noteThread', 'userSearch', 'zapSetup', 'hatShop'];
+const NAV_FIELDS = ['screen', 'tab', 'txDetail', 'arkMoveDetail', 'arkReconDetail', 'arkExitDetail', 'giftDetail', 'bump', 'giftMode', 'claimStep', 'chatOpen', 'msgView', 'msgCommunity', 'msgPeer', 'profilePk', 'profOverThread', 'settingsPage', 'nameEditOpen', 'noteThread', 'userSearch', 'zapSetup', 'hatShop'];
 function navSnapshot() {
   const s = {};
   for (const f of NAV_FIELDS) s[f] = ui[f] ?? null;
@@ -3269,7 +3269,7 @@ function setAccountSel(a, dir) {
   // Selecting an account shows its history right away — home base — and any
   // open payment detail (which belongs to the account it was opened from)
   // closes with it.
-  ui.txDetail = null; ui.arkMoveDetail = null; ui.arkExitDetail = null; ui.giftDetail = null;
+  ui.txDetail = null; ui.arkMoveDetail = null; ui.arkReconDetail = null; ui.arkExitDetail = null; ui.giftDetail = null;
   ui.tab = 'history';
   render();
 }
@@ -3412,7 +3412,7 @@ function balanceCard() {
         try { localStorage.setItem(ACCOUNT_KEY, view); } catch {}
         // selecting an account lands on its history (home), any open
         // payment detail belonged to the other account
-        ui.txDetail = null; ui.arkMoveDetail = null; ui.arkExitDetail = null; ui.giftDetail = null;
+        ui.txDetail = null; ui.arkMoveDetail = null; ui.arkReconDetail = null; ui.arkExitDetail = null; ui.giftDetail = null;
         ui.tab = 'history';
         render();
       }
@@ -3510,7 +3510,7 @@ function balanceCard() {
         if (strip && Date.now() - (strip._dragged || 0) < 300) return;
         ui.account = v;
         try { localStorage.setItem(ACCOUNT_KEY, v); } catch {}
-        ui.txDetail = null; ui.arkMoveDetail = null; ui.arkExitDetail = null; ui.giftDetail = null;
+        ui.txDetail = null; ui.arkMoveDetail = null; ui.arkReconDetail = null; ui.arkExitDetail = null; ui.giftDetail = null;
         ui.tab = 'history';
         render();
       },
@@ -3550,6 +3550,7 @@ function tabsBar() {
         ui.nostrExportStep = false; // and the exported nostr key
         ui.txDetail = null; // back to the history list when leaving/returning
         ui.arkMoveDetail = null;
+        ui.arkReconDetail = null;
         ui.giftDetail = null;
         ui.addrScan = false; // and back to the main Settings, not the address list
         ui.settingsPage = null;
@@ -4768,6 +4769,7 @@ applyDir();
     ui.revealShown = false;
     ui.txDetail = null;
     ui.arkMoveDetail = null;
+    ui.arkReconDetail = null;
     ui.giftDetail = null;
     ui.addrScan = false;
     ui.bump = null;

@@ -872,6 +872,7 @@ const STR = {
     dateLabel: 'Date',
     detailsLabel: 'Details',
     arkVtxoId: 'Coin (VTXO)',
+    arkVtxoInputs: 'Coins spent',
     lnReceiveIntro: 'Receive over Lightning — paid into this wallet on-chain, non-custodial.',
     lnReceiveAwaiting: 'Share this invoice. When it’s paid, the sats land here automatically.',
     lnReceiveWatching: 'Waiting for payment…',

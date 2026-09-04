@@ -502,9 +502,18 @@ export class ArkManager {
   // but never mint it, and the signed bytes stay held for unilateral exit.
   async reconcile() {
     const candidates = this.state.vtxos.filter((v) => v.state === 'spendable');
-    const states = await Promise.all(candidates.map((v) =>
-      getVtxoStatus(this.arkUrl, this._decoded(v).point.raw, this._keyForVtxo(v).privkey)
-        .catch(() => null))); // unreachable/erroring server changes nothing
+    // Each status query signs a challenge (schnorr) and may decode the vtxo —
+    // real secp256k1 work. Building them all in one synchronous map was a
+    // ~100ms+ EC burst on boot (dozens of coins), the stall behind a carousel
+    // drag right after a refresh. Kick the requests off in time-sliced batches
+    // so the signing spreads across frames; the network calls still overlap.
+    const pending = [];
+    let t0 = performance.now();
+    for (const v of candidates) {
+      pending.push(getVtxoStatus(this.arkUrl, this._decoded(v).point.raw, this._keyForVtxo(v).privkey).catch(() => null));
+      if (performance.now() - t0 > 6) { await new Promise((r) => setTimeout(r)); t0 = performance.now(); }
+    }
+    const states = await Promise.all(pending); // unreachable/erroring server changes nothing
     let changed = false;
     candidates.forEach((v, i) => {
       if (states[i] !== VTXO_STATE_SPENT) return;

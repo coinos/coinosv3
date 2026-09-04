@@ -3186,9 +3186,20 @@ function dlog(s) {
   try {
     const a = (window.__dl = window.__dl || []);
     a.push(Math.round(performance.now()) + ' ' + s);
-    if (a.length > 60) a.shift();
+    if (a.length > 120) a.shift();
   } catch {}
 }
+// TEMP: continuously watch for dropped frames and log any >40ms gap, so a
+// real drag's jank shows up in __dl next to the release/settle it overlaps.
+try {
+  let _lastFrame = performance.now();
+  const _fw = (t) => {
+    const gap = t - _lastFrame; _lastFrame = t;
+    if (gap > 40) dlog('FRAME-DROP ' + Math.round(gap) + 'ms');
+    requestAnimationFrame(_fw);
+  };
+  requestAnimationFrame(_fw);
+} catch {}
 // Spending is opt-in: a wallet is born on-chain only, and the second balance
 // (with its toggle, swipe, and Move money) appears once the user sets it up —
 // or the moment money is already there (a restored wallet, a claimed gift),

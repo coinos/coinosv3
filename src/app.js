@@ -3446,6 +3446,12 @@ function balanceCard() {
         if (e.target.closest && e.target.closest('button, a, input')) return;
         e.preventDefault(); // no text selection while pulling
         const el = e.currentTarget;
+        // A new grab invalidates any pending snap-restore from the previous
+        // release: bumping the token makes a stale restore a no-op, so it can
+        // never re-apply mandatory snap mid-glide and yank the card back to
+        // where it started. Kill its timer too so they don't pile up.
+        el._dragGen = (el._dragGen || 0) + 1;
+        clearTimeout(el._snapT);
         const x0 = e.clientX, s0 = el.scrollLeft;
         const kids0 = [...el.children];
         // the card the drag started on — a flick throws relative to it
@@ -3493,7 +3499,16 @@ function balanceCard() {
           if (Math.abs(vel) > 0.25) best = Math.max(0, Math.min(kids.length - 1, fromIdx + (vel < 0 ? 1 : -1)));
           const k = kids[best];
           if (k) el.scrollTo({ left: k.offsetLeft + k.offsetWidth / 2 - el.clientWidth / 2, behavior: 'smooth' });
-          setTimeout(() => { el.style.scrollSnapType = ''; }, 400);
+          // Restore mandatory snap only once THIS glide has come to rest, and
+          // only if no newer drag has taken over — a fixed timer used to fire
+          // mid-glide and snap the card back to its origin. scrollend marks
+          // the true end; the timer is just a fallback for when the target is
+          // already reached (no scroll, no scrollend).
+          const gen = el._dragGen;
+          const restore = () => { if (el._dragGen === gen && !el._dragging) el.style.scrollSnapType = ''; };
+          el.addEventListener('scrollend', restore, { once: true });
+          clearTimeout(el._snapT);
+          el._snapT = setTimeout(restore, 700);
           // the glide's own scroll events reschedule this; a release already
           // at rest on the target needs the switch to fire regardless
           clearTimeout(el._settle);

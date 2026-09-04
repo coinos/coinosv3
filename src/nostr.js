@@ -16,7 +16,7 @@ import { getPublicKey, finalizeEvent, generateSecretKey, verifyEvent } from 'nos
 import { decode as nip19decode, npubEncode, nsecEncode } from 'nostr-tools/nip19';
 import { wrapEvent as nip17WrapEvent } from 'nostr-tools/nip17';
 import { SimplePool } from 'nostr-tools/pool';
-import { randomBytes } from '@noble/hashes/utils';
+import { randomBytes, bytesToHex } from '@noble/hashes/utils';
 import { base64urlnopad } from '@scure/base';
 
 // One shared pool for all relay I/O — it manages connection lifecycles (and the
@@ -70,6 +70,32 @@ function verifyEventsAsync(events) {
 }
 // A single event → Promise<boolean>. Used to gate live subscription events.
 function verifyOneAsync(event) { return verifyEventsAsync([event]).then((r) => !!r[0]); }
+
+// Heavier nip44 jobs ride the same worker: opening community wraps (decrypt
+// under the symmetric stream key + seal verify per wrap) and unwrapping
+// NIP-17 DMs when the raw identity key is in hand (two ECDH ops + a seal
+// verify each) — the remaining boot secp256k1 after verification moved off.
+// Resolves to the worker's results array, or null when the worker can't take
+// the job (never created, died, stalled) — callers keep their time-sliced
+// main-thread fallback, so a dead worker only changes WHERE the crypto runs.
+function workerCrypto(msg, timeoutMs = 10_000) {
+  const w = verifyWorker();
+  if (!w) return null;
+  return new Promise((resolve) => {
+    const reqId = ++_vwSeq;
+    const t = setTimeout(() => { _vwPending.delete(reqId); resolve(null); }, timeoutMs);
+    _vwPending.set(reqId, (r) => { clearTimeout(t); resolve(Array.isArray(r) ? r : null); });
+    try { w.postMessage({ reqId, ...msg }); }
+    catch { clearTimeout(t); _vwPending.delete(reqId); resolve(null); }
+  });
+}
+// convKey / sk are Uint8Array; hex crosses the thread boundary.
+export function openWrapsOffthread(wraps, convKey) {
+  return workerCrypto({ op: 'openWraps', wraps, convKey: bytesToHex(convKey) });
+}
+export function unwrapDMsOffthread(wraps, sk) {
+  return workerCrypto({ op: 'unwrapDMs', wraps, sk: bytesToHex(sk) });
+}
 
 // Subscribe / publish on an explicit relay set, independent of the sync
 // feature's configuration. NWC needs this: the relays it advertises in a

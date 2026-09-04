@@ -15,7 +15,7 @@
 import {
   subscribeOn, publishOn, queryOn, fetchNostrProfile, fetchInboxRelays,
   npubOf, parseNostrPubkey, parseNostrRef, generateSecretKey, getPublicKey, finalizeEvent, nip44,
-  PROFILE_RELAYS,
+  PROFILE_RELAYS, openWrapsOffthread, unwrapDMsOffthread,
 } from '../nostr.js';
 import {
   channelKey, controlKey, guestbookKey, openWrap, wrapRumor, rumorWithId,
@@ -322,6 +322,21 @@ export function messagesFeature(ctx) {
   // Queue the decrypt work and run it time-sliced: ~8ms of work, then yield so
   // input and paint get a turn. Chat catches up a few frames later; the wallet
   // stays responsive. (Same pattern the DM inbox drain already uses.)
+  // Open one community wrap off the main thread when the crypto worker is
+  // up (the decrypt + seal verify per wrap is the remaining boot secp256k1
+  // the profiler pinned); the time-sliced queue below stays as the fallback,
+  // so a dead worker only changes where the crypto runs, never whether chat
+  // catches up. The stream conversation key is group material every member
+  // derives — no secret crosses the thread boundary.
+  function openWrapBg(wrap, stream, cb) {
+    const job = openWrapsOffthread([wrap], stream.convKey);
+    if (!job) { enqueueRoomWork(() => cb(openWrap(wrap, stream))); return; }
+    job.then((r) => {
+      if (r) cb(r[0]);
+      else enqueueRoomWork(() => cb(openWrap(wrap, stream))); // worker died mid-job
+    });
+  }
+
   const roomWork = [];
   let roomWorking = false;
   function enqueueRoomWork(fn) {
@@ -425,8 +440,7 @@ export function messagesFeature(ctx) {
       subscribeOn(room.relays, { kinds: [1059], authors: [room.control.pk], limit: 500 }, (wrap) => {
         if (seenWraps.has(wrap.id)) return;
         seenWraps.add(wrap.id);
-        enqueueRoomWork(() => {
-          const opened = openWrap(wrap, room.control);
+        openWrapBg(wrap, room.control, (opened) => {
           if (!opened || opened.rumor.kind !== 3308) return;
           room.controlEntries.push(opened);
           scheduleFold();
@@ -435,8 +449,7 @@ export function messagesFeature(ctx) {
       subscribeOn(room.relays, { kinds: [1059], authors: [room.guestbook.pk], limit: 500 }, (wrap) => {
         if (seenWraps.has(wrap.id)) return;
         seenWraps.add(wrap.id);
-        enqueueRoomWork(() => {
-          const opened = openWrap(wrap, room.guestbook);
+        openWrapBg(wrap, room.guestbook, (opened) => {
           if (!opened) return;
           room.guestEntries.push(opened);
           scheduleFold();
@@ -449,11 +462,13 @@ export function messagesFeature(ctx) {
   function subChannel(room, id) {
     if (room.subbed.has(id)) return;
     room.subbed.add(id);
-    allUnsubs.push(subscribeOn(room.relays, { kinds: [1059, 21059], authors: [room.chStream(id).pk], limit: 200 }, (wrap) => {
+    // derive the stream key once per channel, not once per wrap — groupKey
+    // does an hkdf + ECDH each call, real curve work on a 200-wrap backfill
+    const stream = room.chStream(id);
+    allUnsubs.push(subscribeOn(room.relays, { kinds: [1059, 21059], authors: [stream.pk], limit: 200 }, (wrap) => {
       if (seenWraps.has(wrap.id)) return;
       seenWraps.add(wrap.id);
-      enqueueRoomWork(() => {
-        const opened = openWrap(wrap, room.chStream(id));
+      openWrapBg(wrap, stream, (opened) => {
         if (!opened) return;
         onChat(room, id, opened);
       });
@@ -1199,9 +1214,24 @@ export function messagesFeature(ctx) {
     return !login || !!(login.signer && login.signer.decryptFrom);
   }
 
+  // Raw-key unwraps (seed-derived / pasted nsec — the common case) run in
+  // the crypto worker: two ECDH ops + a seal verify per wrap is the boot
+  // secp256k1 that used to run here. Remote signers can't export their key,
+  // so their decryptFrom stays on the main thread, exactly as before.
+  async function unwrapDMAny(wrap, d) {
+    if (d instanceof Uint8Array) {
+      const job = unwrapDMsOffthread([wrap], d);
+      if (job) {
+        const r = await job;
+        if (r) return r[0]; // null here means "not ours", not "worker failed"
+      }
+    }
+    return unwrapDM(wrap, d).catch(() => null);
+  }
+
   async function openInboxWrap(wrap) {
     for (const d of dmDecryptors()) {
-      const got = await unwrapDM(wrap, d).catch(() => null);
+      const got = await unwrapDMAny(wrap, d);
       if (!got) continue;
       if (got.rumor.kind === 14) {
         // unwrapDM judges "mine" against the key that DECRYPTED, but this

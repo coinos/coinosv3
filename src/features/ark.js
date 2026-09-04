@@ -29,6 +29,16 @@ export function isArkAddress(a) { return /^t?ark1[a-z0-9]{20,}$/i.test((a || '')
 // coins in from on-chain, offboard and exit push them back out.
 const ONCHAIN_ARK = new Set(['board', 'offboard', 'exit']);
 
+// Every live ark manager registers its debounced persist here so a pending
+// write is never lost: flushed synchronously when the page hides, and on a
+// wallet switch (see stopArk).
+const arkPersistFlushers = new Set();
+if (typeof document !== 'undefined') {
+  const flushAll = () => { for (const f of [...arkPersistFlushers]) { try { f(); } catch {} } };
+  addEventListener('pagehide', flushAll);
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flushAll(); });
+}
+
 // Wallet storage/key helpers for this feature, installed onto the core
 // wallet instance so a build without the feature ships none of it.
 export function installArkWallet(wallet) {
@@ -336,6 +346,10 @@ export function arkFeature(ctx) {
   let arkInitGen = 0; // guards against a stale init() resolving after a wallet switch
 
   function stopArk() {
+    // land any debounced ark write BEFORE bumping the gen (which would make the
+    // old manager's flusher a no-op), then drop the stale flushers
+    for (const f of [...arkPersistFlushers]) { try { f(); } catch {} }
+    arkPersistFlushers.clear();
     arkInitGen++;
     if (arkTimer) clearInterval(arkTimer);
     arkTimer = null;
@@ -393,6 +407,24 @@ export function arkFeature(ctx) {
     if (!arkAvailable()) return Promise.reject(new Error(t('arkNotConnected')));
     const cfg = getArkConfig();
     const gen = arkInitGen;
+    // Persisting ark state is EXPENSIVE — a JSON.parse of the stored state, a
+    // merge over every vtxo + movement, a JSON.stringify, a synchronous
+    // localStorage write, then saveCache(). The manager fires _save() on every
+    // mutation, and a boot reconcile mutates dozens of times in a burst —
+    // that's the main-thread stall that made a mouse drag lurch right after a
+    // refresh. The in-memory state is always current and every live READ goes
+    // to it (arkStateNow returns ark.state); only the disk copy has to catch
+    // up, so coalesce the writes: idle → write now, mid-burst → one write when
+    // it quiets (capped so a steady stream still lands). Flushed on hide.
+    let persistPending = null, persistT = 0, persistLastAt = 0, persistFirstAt = 0;
+    const flushPersist = () => {
+      clearTimeout(persistT); persistT = 0; persistFirstAt = 0;
+      if (!persistPending || gen !== arkInitGen) { persistPending = null; return; }
+      const s = persistPending; persistPending = null; persistLastAt = Date.now();
+      wallet.saveArkState(mergeArkStates(s, wallet.loadArkState(cfg.ark)), cfg.ark);
+      try { wallet.saveCache(); } catch {}
+    };
+    arkPersistFlushers.add(flushPersist);
     const mgr = new ArkManager({
       account: wallet.account(),
       storage: {
@@ -405,8 +437,16 @@ export function arkFeature(ctx) {
         // between init and the next reinit). saveCache() then carries ark
         // state into the snapshot -> debounced nostr publish.
         save: (s) => {
-          wallet.saveArkState(mergeArkStates(s, wallet.loadArkState(cfg.ark)), cfg.ark);
-          try { wallet.saveCache(); } catch {}
+          persistPending = s;
+          const now = Date.now();
+          if (!persistFirstAt) persistFirstAt = now;
+          // a lone change after a quiet spell writes immediately; a burst
+          // coalesces into one write ~200ms after it settles, but never waits
+          // more than ~800ms so a steady stream still lands
+          if (now - persistLastAt > 1000 && !persistT) { flushPersist(); return; }
+          if (now - persistFirstAt > 800) { flushPersist(); return; }
+          clearTimeout(persistT);
+          persistT = setTimeout(flushPersist, 200);
         },
       },
       arkUrl: cfg.ark,

@@ -4603,6 +4603,10 @@ function txHistoryItem(tx) {
 
 // Prev / page-of / next controls. Returns null when there's only one page.
 const PAGE_SIZE = 10;
+// The history list currently on screen ({ page, pages }), null when a detail
+// view / spinner / another tab is up — the swipe gesture paginates against
+// this and only falls through to tab navigation once the pages run out.
+let _histPager = null;
 function pager(page, total, onPage) {
   const pages = Math.ceil(total / PAGE_SIZE);
   if (pages <= 1) return null;
@@ -4614,6 +4618,7 @@ function pager(page, total, onPage) {
 }
 
 function historyTab() {
+  _histPager = null; // set again below only when the pageable list renders
   if (ui.bump) return bumpView();
   // History is SCOPED to the selected account: Savings shows the on-chain
   // ledger (BIP84 txs, silent-payment receipts, gift reservations), Spending
@@ -4649,9 +4654,10 @@ function historyTab() {
   const txPages = Math.ceil(entries.length / PAGE_SIZE);
   const txPage = Math.min(ui.txPage, Math.max(0, txPages - 1));
   const txSlice = entries.slice(txPage * PAGE_SIZE, txPage * PAGE_SIZE + PAGE_SIZE);
+  _histPager = { page: txPage, pages: txPages };
   return h(
     'div',
-    { class: 'card' },
+    { class: 'card history-card' },
     h('div', { class: 'list' },
       ...txSlice.map((e) => e.render())
     ),
@@ -4860,7 +4866,7 @@ applyDir();
 // inside chat, profiles, takeovers, or the (offline-forced) settings tab.
 (() => {
   const ORDER = ['history', 'receive', 'send'];
-  let sx = 0, sy = 0, t0 = 0, live = false, onBalance = false, swallowClick = false;
+  let sx = 0, sy = 0, t0 = 0, live = false, onBalance = false, onHistory = false, swallowClick = false;
   window.addEventListener('click', (e) => {
     if (!swallowClick) return;
     swallowClick = false;
@@ -4875,6 +4881,7 @@ applyDir();
     // single-face balance (kind-locked / savings-only wallets)
     if (e.target.closest && e.target.closest('.bal-carousel')) { live = false; return; }
     onBalance = !!(e.target.closest && e.target.closest('.balance'));
+    onHistory = !!(e.target.closest && e.target.closest('.history-card'));
     sx = e.touches[0].clientX;
     sy = e.touches[0].clientY;
     t0 = Date.now();
@@ -4896,6 +4903,15 @@ applyDir();
       const want = dx < 0 ? 'savings' : 'spending';
       if (spendingActive()) setAccountSel(want, dx < 0 ? 'left' : 'right');
       return;
+    }
+    // A swipe over the history list turns its pages (left = older, matching
+    // the pager's Next) — only once the pages run out does the same swipe
+    // fall through to tab navigation, so a long history is browsable by
+    // thumb without bouncing into Receive.
+    if (onHistory && ui.tab === 'history' && _histPager) {
+      const { page, pages } = _histPager;
+      if (dx < 0 && page < pages - 1) { ui.txPage = page + 1; render(); return; }
+      if (dx > 0 && page > 0) { ui.txPage = page - 1; render(); return; }
     }
     const next = ORDER[ORDER.indexOf(ui.tab) + (dx < 0 ? 1 : -1)];
     if (!next) return;

@@ -341,9 +341,14 @@ export function messagesFeature(ctx) {
 
   // ---- community rooms ----------------------------------------------------
 
-  function ensureRoom(jm) {
+  // subscribe:false builds the room from LOCAL CACHE only — no relay
+  // subscription, so none of the gift-wrap verify/decrypt (real secp256k1)
+  // runs. That's the boot default: the home screen and its unread dot read
+  // the last-known cached messages, and the heavy live backfill waits until
+  // the user actually opens Chat (homeView/room view pass subscribe:true).
+  function ensureRoom(jm, { subscribe = true } = {}) {
     let room = rooms.get(jm.community_id);
-    if (room) return room;
+    if (room) { if (subscribe) subscribeRoom(room); return room; }
     const root = hexToBytes(jm.community_root);
     room = {
       jm,
@@ -361,6 +366,7 @@ export function messagesFeature(ctx) {
       presence: new Map(), // pubkey -> ms of their last beat (this session only)
       typing: new Map(), // pubkey -> { ch, t }
       subbed: new Set(),
+      subscribed: false,
       relays: jm.relays && jm.relays.length ? jm.relays : DM_RELAYS,
     };
     rooms.set(jm.community_id, room);
@@ -381,7 +387,7 @@ export function messagesFeature(ctx) {
     // burst instead — a short quiet gap ends the burst — so the page goes
     // from cache straight to the settled state.
     let foldTimer = 0;
-    const scheduleFold = () => {
+    room.scheduleFold = () => {
       clearTimeout(foldTimer);
       foldTimer = setTimeout(() => {
         refold();
@@ -396,6 +402,25 @@ export function messagesFeature(ctx) {
       }, 250);
     };
 
+    // warm from local cache so the page (and the unread dot) paint before —
+    // and without needing — any relay subscription
+    const cached = st().cache;
+    for (const c of jm.channels || [])
+      for (const m of cached[c.id] || []) {
+        const msgs = room.byChannel.get(c.id) || room.byChannel.set(c.id, new Map()).get(c.id);
+        if (!msgs.has(m.rumor.id)) msgs.set(m.rumor.id, m);
+      }
+    bumpMsgRev();
+    if (subscribe) subscribeRoom(room);
+    return room;
+  }
+
+  // Open the relay subscriptions for a room — the heavy path (gift-wrap
+  // verify + decrypt). Deferred until Chat is opened; idempotent.
+  function subscribeRoom(room) {
+    if (room.subscribed) return;
+    room.subscribed = true;
+    const scheduleFold = room.scheduleFold;
     allUnsubs.push(
       subscribeOn(room.relays, { kinds: [1059], authors: [room.control.pk], limit: 500 }, (wrap) => {
         if (seenWraps.has(wrap.id)) return;
@@ -418,16 +443,7 @@ export function messagesFeature(ctx) {
         });
       })
     );
-    for (const c of jm.channels || []) subChannel(room, c.id);
-    // warm from local cache so the page paints before relays answer
-    const cached = st().cache;
-    for (const c of jm.channels || [])
-      for (const m of cached[c.id] || []) {
-        const msgs = room.byChannel.get(c.id) || room.byChannel.set(c.id, new Map()).get(c.id);
-        if (!msgs.has(m.rumor.id)) msgs.set(m.rumor.id, m);
-      }
-    bumpMsgRev();
-    return room;
+    for (const c of room.jm.channels || []) subChannel(room, c.id);
   }
 
   function subChannel(room, id) {
@@ -1105,7 +1121,8 @@ export function messagesFeature(ctx) {
         } catch {}
       }
     if (changed) {
-      for (const jm of communities()) ensureRoom(jm);
+      // cache-only here too — subscription waits for the user to open Chat
+      for (const jm of communities()) ensureRoom(jm, { subscribe: ui.chatOpen });
       scheduleRepaint();
     }
     // republish when any identity's copy is missing or stale
@@ -2935,9 +2952,12 @@ export function messagesFeature(ctx) {
         window.visualViewport?.removeEventListener('resize', onViewportResize);
       });
       startDMs();
-      // Communities subscribe up front too, not just when chat opens — the
-      // header's unread dot can't report a room nobody is listening to.
-      for (const jm of communities()) { try { ensureRoom(jm); } catch {} }
+      // Communities are built from CACHE ONLY at boot (subscribe:false) — the
+      // unread dot reads the last-known messages, but none of the gift-wrap
+      // verify/decrypt runs until the user opens Chat (homeView subscribes
+      // them). This keeps the home screen (and the balance carousel) off the
+      // hook for the ~500ms of secp256k1 a full community backfill costs.
+      for (const jm of communities()) { try { ensureRoom(jm, { subscribe: false }); } catch {} }
       syncLists().catch(() => {});
       syncInbox().catch(() => {});
       registerPush().catch(() => {}); // silent refresh when permission already granted

@@ -42,7 +42,7 @@ const SW = `const CACHE = 'cold-{{VERSION}}';
 // module are available offline too. app-{{VERSION}}.js is the main bundle —
 // content-addressed, so a new deploy precaches a new name and the old cache
 // is dropped wholesale.
-const SHELL = ['./', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'jsqr.js', 'nip46.js', 'app-{{VERSION}}.js'{{EXTRA_SHELL}}];
+const SHELL = ['./', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'jsqr.js', 'nip46.js', 'verify-worker.js', 'app-{{VERSION}}.js'{{EXTRA_SHELL}}];
 
 self.addEventListener('install', (e) => {
   self.skipWaiting();
@@ -179,6 +179,22 @@ export async function buildNip46({ minify = true } = {}) {
     throw new Error('nip46 bundle failed');
   }
   return iife(await result.outputs[0].text());
+}
+
+// Off-main-thread nostr event verification worker (classic Worker, its own
+// bundle of nostr-tools verify + noble crypto). NOT wrapped in an IIFE —
+// worker code runs at top level and needs its self.onmessage handler live.
+export async function buildVerifyWorker({ minify = true } = {}) {
+  const result = await Bun.build({
+    entrypoints: ['./src/verify-worker.js'],
+    target: 'browser',
+    minify,
+  });
+  if (!result.success) {
+    for (const log of result.logs) console.error(log);
+    throw new Error('verify-worker bundle failed');
+  }
+  return await result.outputs[0].text();
 }
 
 // The notify-only push handler for builds without the ark+nwc features (the
@@ -421,6 +437,7 @@ if (import.meta.main) {
 
   // Lazy-loaded QR decoder — kept out of index.html, fetched only when a
   // browser without BarcodeDetector opens the scanner.
+  await Bun.write('dist/verify-worker.js', await buildVerifyWorker());
   await Bun.write('dist/jsqr.js', await buildJsQr());
   // Lazy-loaded NIP-46 remote-signer client — fetched on first bunker login.
   await Bun.write('dist/nip46.js', await buildNip46());

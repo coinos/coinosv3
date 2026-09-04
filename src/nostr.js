@@ -12,7 +12,7 @@
 import * as nip06 from 'nostr-tools/nip06';
 import * as nip44 from 'nostr-tools/nip44';
 import * as nip04 from 'nostr-tools/nip04';
-import { getPublicKey, finalizeEvent, generateSecretKey } from 'nostr-tools/pure';
+import { getPublicKey, finalizeEvent, generateSecretKey, verifyEvent } from 'nostr-tools/pure';
 import { decode as nip19decode, npubEncode, nsecEncode } from 'nostr-tools/nip19';
 import { wrapEvent as nip17WrapEvent } from 'nostr-tools/nip17';
 import { SimplePool } from 'nostr-tools/pool';
@@ -25,7 +25,51 @@ import { base64urlnopad } from '@scure/base';
 // timeout, network blip) takes every live subscription with it and nothing
 // re-subscribes — sync stops merging and NWC stops answering until a reload.
 // On reconnect the pool re-fires open subs with since = last event seen.
-const pool = new SimplePool({ enablePing: true, enableReconnect: true });
+// verifyEvent: () => true switches OFF the pool's own synchronous signature
+// check — a schnorr verify per event, which on a relay backlog froze the main
+// thread (the boot/chat carousel stutter). We re-add verification off-thread:
+// every event is gated through a Web Worker (verifyEventsAsync) before it
+// reaches a caller, so nothing unverified is ever trusted, but the crypto
+// runs on another thread. matchFilters still runs in the pool.
+const pool = new SimplePool({ enablePing: true, enableReconnect: true, verifyEvent: () => true });
+
+// ---- off-main-thread verification -----------------------------------------
+let _vw = null, _vwDead = false, _vwSeq = 0;
+const _vwPending = new Map(); // reqId -> resolve
+function verifyWorker() {
+  if (_vw || _vwDead) return _vw;
+  try {
+    _vw = new Worker('/verify-worker.js', { type: 'module' });
+    _vw.onmessage = (e) => {
+      const { reqId, results } = e.data || {};
+      const done = _vwPending.get(reqId);
+      if (done) { _vwPending.delete(reqId); done(results); }
+    };
+    _vw.onerror = () => { _vwDead = true; _vw = null; }; // fall back to main-thread verify
+  } catch { _vwDead = true; }
+  return _vw;
+}
+const _verifySync = (events) => events.map((e) => { try { return verifyEvent(e); } catch { return false; } });
+// Verify a batch; resolves to a boolean[] aligned to `events`. Off-thread when
+// the worker is available, else synchronous. Never resolves an event as valid
+// without an actual check.
+function verifyEventsAsync(events) {
+  if (!events.length) return Promise.resolve([]);
+  const w = verifyWorker();
+  if (!w) return Promise.resolve(_verifySync(events));
+  return new Promise((resolve) => {
+    const reqId = ++_vwSeq;
+    let settled = false;
+    const finish = (r) => { if (!settled) { settled = true; resolve(r); } };
+    // if the worker ever stalls, don't hang the event forever — verify inline
+    const t = setTimeout(() => { _vwPending.delete(reqId); finish(_verifySync(events)); }, 4000);
+    _vwPending.set(reqId, (r) => { clearTimeout(t); finish(r); });
+    try { w.postMessage({ reqId, events }); }
+    catch { clearTimeout(t); _vwPending.delete(reqId); finish(_verifySync(events)); }
+  });
+}
+// A single event → Promise<boolean>. Used to gate live subscription events.
+function verifyOneAsync(event) { return verifyEventsAsync([event]).then((r) => !!r[0]); }
 
 // Subscribe / publish on an explicit relay set, independent of the sync
 // feature's configuration. NWC needs this: the relays it advertises in a
@@ -72,13 +116,19 @@ export function subscribeOn(relays, filter, onEvent, extra = {}) {
     // "provided filter is not an object" — and the subscription dies silently.
     const live = liveRelays(relays);
     probeRelays(relays);
-    const sub = pool.subscribeMany(live, filter, { onevent: onEvent, ...extra });
+    // gate each event through off-thread verification before the caller sees it
+    const gated = (event) => { verifyOneAsync(event).then((ok) => { if (ok) onEvent(event); }); };
+    const sub = pool.subscribeMany(live, filter, { onevent: gated, ...extra });
     return () => { try { sub.close(); } catch {} };
   } catch { return () => {}; }
 }
 export async function queryOn(relays, filter, maxWait = 1500) {
   probeRelays(relays);
-  try { return await pool.querySync(liveRelays(relays), filter, { maxWait }); } catch { return []; }
+  try {
+    const evs = await pool.querySync(liveRelays(relays), filter, { maxWait });
+    const oks = await verifyEventsAsync(evs);
+    return evs.filter((_, i) => oks[i]);
+  } catch { return []; }
 }
 export async function publishOn(relays, evt) {
   try {
@@ -351,14 +401,19 @@ export class NostrSync {
 
   // Fetch events matching a filter from the relays (best-effort).
   async fetchEvents(filter, maxWait = 5000) {
-    try { return await pool.querySync(this.relays, filter, { maxWait }); } catch { return []; }
+    try {
+      const evs = await pool.querySync(this.relays, filter, { maxWait });
+      const oks = await verifyEventsAsync(evs);
+      return evs.filter((_, i) => oks[i]);
+    } catch { return []; }
   }
 
   // Live subscription; returns an unsubscribe function.
   subscribeEvents(filter, onEvent) {
     try {
       // single filter object — see subscribeOn for the array-wrapping trap
-      const sub = pool.subscribeMany(this.relays, filter, { onevent: onEvent });
+      const gated = (event) => { verifyOneAsync(event).then((ok) => { if (ok) onEvent(event); }); };
+      const sub = pool.subscribeMany(this.relays, filter, { onevent: gated });
       return () => { try { sub.close(); } catch {} };
     } catch { return () => {}; }
   }

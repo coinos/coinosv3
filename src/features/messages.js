@@ -1206,6 +1206,12 @@ export function messagesFeature(ctx) {
       if (!decryptorsComplete()) await Promise.resolve(hook('nostrLoginResume')).catch(() => null);
       if (!dmDecryptors().length) return;
       const complete = decryptorsComplete();
+      // Each openInboxWrap decrypts a gift wrap — NIP-44 ECDH, real
+      // secp256k1 work. A backlog decrypted in one tight loop blocks the main
+      // thread for the whole burst (the boot-time jank that made a carousel
+      // drag lurch). Cap each synchronous run to a frame's budget and yield so
+      // input and paint get a turn; the backfill just takes a few extra frames.
+      let chunkStart = performance.now();
       for (const [id, p] of [...pendingWraps]) {
         // A remote signer can die mid-pass; counting the remaining wraps as
         // full-strength failures would evict messages that were never really
@@ -1213,6 +1219,10 @@ export function messagesFeature(ctx) {
         if (complete && !decryptorsComplete()) break;
         if (await openInboxWrap(p.wrap)) pendingWraps.delete(id);
         else if (complete && ++p.tries >= PENDING_TRIES) pendingWraps.delete(id);
+        if (performance.now() - chunkStart > 8) {
+          await new Promise((r) => setTimeout(r));
+          chunkStart = performance.now();
+        }
       }
     } finally { draining = false; }
     // still holding wraps: the signer may connect later — keep a slow retry

@@ -82,16 +82,27 @@ export class ArkManager {
     this.state = null;
     this.info = null;
     this._lnDriving = new Set(); // re-entrancy guard: sync poll vs UI fast-poll vs mailbox push
+    // A derived key for an index never changes for this wallet, but computing
+    // it costs a BIP32 derive + a secp256k1 getPublicKey (a full point mul).
+    // reconcile() alone calls _keyForVtxo for every spendable coin, and decode/
+    // send/exit/fee-math hit it again — dozens of EC muls per boot burst, the
+    // dominant main-thread cost in a CPU profile. Memoize by index.
+    this._keyCache = new Map();
   }
 
   // ---- keys ----
   _key(index) {
+    let k = this._keyCache.get(index);
+    if (k) return k;
     const node = this.account.deriveChild(3).deriveChild(index);
-    return { privkey: node.privateKey, pubkey: secp256k1.getPublicKey(node.privateKey, true) };
+    k = { privkey: node.privateKey, pubkey: secp256k1.getPublicKey(node.privateKey, true) };
+    this._keyCache.set(index, k);
+    return k;
   }
   _mailboxKey() {
+    if (this._mbKey) return this._mbKey;
     const node = this.account.deriveChild(4).deriveChild(0);
-    return { privkey: node.privateKey, pubkey: secp256k1.getPublicKey(node.privateKey, true) };
+    return (this._mbKey = { privkey: node.privateKey, pubkey: secp256k1.getPublicKey(node.privateKey, true) });
   }
   _keyForVtxo(v) { return this._key(v.keyIndex); }
 

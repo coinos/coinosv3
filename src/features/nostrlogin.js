@@ -10,6 +10,7 @@
 
 import { newMnemonic } from '../wallet.js';
 import { npubOf, nsecOf } from '../nostr.js';
+import { bytesToHex, hexToBytes } from '@noble/hashes/utils';
 import { t } from '../i18n.js';
 import { qrSvg } from '../qr.js';
 import {
@@ -79,9 +80,21 @@ export function nostrLoginFeature(ctx) {
   // A pasted key stores NOTHING. The UI promises it is used once and never
   // kept, and that promise is worth more than saving someone a paste after a
   // reload — they reconnect from the nostr settings card instead.
+  //
+  // A PASSKEY-derived key is the exception among keys: no such promise was
+  // made, the key exists only through this app's PRF derivation, and
+  // re-deriving it takes a WebAuthn ceremony — a system dialog plus a
+  // biometric on every open, which is why passkey users kept meeting "your
+  // signer isn't connected" in chat. The same storage already holds the
+  // wallet seed, so keeping the key is the same exposure class — and it's
+  // what makes a passkey identity always-available the way its owner expects.
   const sessionOf = (signer) => {
     if (!signer) return {};
-    return { session: signer.session || null };
+    const out = { session: signer.session || null };
+    if (viaOf(signer) === 'passkey' && signer.kind === 'key' && signer.secret) {
+      out.sk = bytesToHex(signer.secret);
+    }
+    return out;
   };
 
   // HOW this account was connected — so the reconnect surfaces can offer the
@@ -529,6 +542,14 @@ export function nostrLoginFeature(ctx) {
     if (resuming) return resuming;
     if (Date.now() - resumeFailedAt < 20_000) return null;
     resuming = (async () => {
+      // a stored passkey-derived key reattaches instantly — no network, no
+      // dialog; see sessionOf for why this key (alone among keys) is kept
+      if (st.sk) {
+        try {
+          const s = keySigner(hexToBytes(st.sk));
+          if (s.pubkey === st.pubkey) return (live = s);
+        } catch {}
+      }
       if (typeof window !== 'undefined' && window.nostr) {
         try {
           const s = await extensionSigner();
@@ -661,11 +682,11 @@ export function nostrLoginFeature(ctx) {
       if (!st.pubkey) return null;
       return { pubkey: st.pubkey, npub: npubOf(st.pubkey), signer: live };
     },
-    // A page reload loses the signer. An installed extension can usually be
-    // re-attached without prompting, which is what lets the payment address
-    // stay tied to the user's real identity across reloads. Returns null for
-    // signers we cannot silently reattach (pasted keys, bunkers without a
-    // stored session).
+    // A page reload loses the signer. A stored passkey key or an installed
+    // extension reattaches without prompting, which is what lets the payment
+    // address stay tied to the user's real identity across reloads. Returns
+    // null for signers we cannot silently reattach (pasted keys, bunkers
+    // without a stored session).
     nostrLoginResume() { return resumeLogin(); },
     unlockExtra() { return unlockExtra(); },
     // The welcome screen's sign-in block: Google and passkey act right there;

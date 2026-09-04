@@ -4871,7 +4871,7 @@ applyDir();
 // inside chat, profiles, takeovers, or the (offline-forced) settings tab.
 (() => {
   const ORDER = ['history', 'receive', 'send'];
-  let sx = 0, sy = 0, t0 = 0, live = false, onBalance = false, onHistory = false, swallowClick = false;
+  let sx = 0, sy = 0, t0 = 0, live = false, onBalance = false, swallowClick = false;
   window.addEventListener('click', (e) => {
     if (!swallowClick) return;
     swallowClick = false;
@@ -4886,7 +4886,6 @@ applyDir();
     // single-face balance (kind-locked / savings-only wallets)
     if (e.target.closest && e.target.closest('.bal-carousel')) { live = false; return; }
     onBalance = !!(e.target.closest && e.target.closest('.balance'));
-    onHistory = !!(e.target.closest && e.target.closest('.history-card'));
     sx = e.touches[0].clientX;
     sy = e.touches[0].clientY;
     t0 = Date.now();
@@ -4909,30 +4908,39 @@ applyDir();
       if (spendingActive()) setAccountSel(want, dx < 0 ? 'left' : 'right');
       return;
     }
-    // A swipe over the history list turns its pages (left = older, matching
-    // the pager's Next) — only once the pages run out does the same swipe
-    // fall through to tab navigation, so a long history is browsable by
-    // thumb without bouncing into Receive.
-    if (onHistory && ui.tab === 'history' && _histPager) {
-      const { page, pages } = _histPager;
-      if (dx < 0 && page < pages - 1) { ui.txPage = page + 1; render(); return; }
-      if (dx > 0 && page > 0) { ui.txPage = page - 1; render(); return; }
+    // The swipe surfaces form ONE RING that loops:
+    //   … page0 ⇄ page1 … lastPage ⇄ Send ⇄ Receive ⇄ page0 …
+    // Swiping left over the history list turns pages older (the pager's
+    // Next); at the last page it wraps into Send, then Receive, then back to
+    // page 0. Swiping right from page 0 goes the other way — Receive, then
+    // Send, then the LAST page. No dead ends anywhere.
+    const resets = () => {
+      // same resets as a tab-bar tap
+      ui.sendError = '';
+      ui.revealShown = false;
+      ui.txDetail = null;
+      ui.arkMoveDetail = null;
+      ui.arkReconDetail = null;
+      ui.giftDetail = null;
+      ui.addrScan = false;
+      ui.bump = null;
+      ui.giftMode = false;
+    };
+    const goTab = (tab) => { _swipeDir = dx < 0 ? 'left' : 'right'; ui.tab = tab; resets(); render(); };
+    // entering history from a wrap lands on a chosen page (an oversized
+    // index clamps to the last page in historyTab)
+    const goHist = (page) => { _swipeDir = dx < 0 ? 'left' : 'right'; ui.tab = 'history'; resets(); ui.txPage = page; render(); };
+    if (ui.tab === 'history') {
+      // a detail view / spinner / empty list publishes no pager — treat it
+      // as a single page so the swipe still reaches the tabs
+      const { page, pages } = _histPager || { page: 0, pages: 1 };
+      if (dx < 0) { if (page < pages - 1) { ui.txPage = page + 1; render(); } else goTab('send'); }
+      else if (page > 0) { ui.txPage = page - 1; render(); }
+      else goTab('receive');
+      return;
     }
-    const next = ORDER[ORDER.indexOf(ui.tab) + (dx < 0 ? 1 : -1)];
-    if (!next) return;
-    _swipeDir = dx < 0 ? 'left' : 'right';
-    ui.tab = next;
-    // same resets as a tab-bar tap
-    ui.sendError = '';
-    ui.revealShown = false;
-    ui.txDetail = null;
-    ui.arkMoveDetail = null;
-    ui.arkReconDetail = null;
-    ui.giftDetail = null;
-    ui.addrScan = false;
-    ui.bump = null;
-    ui.giftMode = false;
-    render();
+    if (ui.tab === 'receive') { if (dx < 0) goHist(0); else goTab('send'); return; }
+    if (ui.tab === 'send') { if (dx < 0) goTab('receive'); else goHist(1e9); return; }
   }, { passive: true });
 })();
 

@@ -3492,19 +3492,25 @@ function balanceCard() {
           el._dragging = false;
           if (!moved) return;
           el._dragged = Date.now(); // the release's click must not double as a card tap
-          // A quick FLICK throws the card: velocity over the last ~100ms of
-          // the drag decides the direction outright; a slow release just
-          // settles on whichever card is nearest.
+          // Commit to a neighbor on a small, deliberate move — not only when
+          // the drag drags PAST the halfway point. A short flick that traveled
+          // ~20% of a card toward the neighbor, or any quick flick, switches;
+          // otherwise it snaps back. (Nearest-point settling made a short pull
+          // spring back to where it started — the "slide then jump back"
+          // glitch.) Direction: a flick uses its velocity sign, a slow drag
+          // uses how far it actually moved from the card it grabbed.
+          const kids = [...el.children];
           const last = samples[samples.length - 1];
           const past = samples[0];
           const vel = last && past && last.t > past.t ? (last.x - past.x) / (last.t - past.t) : 0;
-          const kids = [...el.children];
-          let best = 0, bestD = Infinity;
-          kids.forEach((k, i) => {
-            const d = Math.abs(k.offsetLeft + k.offsetWidth / 2 - (el.scrollLeft + el.clientWidth / 2));
-            if (d < bestD) { bestD = d; best = i; }
-          });
-          if (Math.abs(vel) > 0.25) best = Math.max(0, Math.min(kids.length - 1, fromIdx + (vel < 0 ? 1 : -1)));
+          const pitch = kids[1] ? (kids[1].offsetLeft - kids[0].offsetLeft) : el.clientWidth || 1;
+          const fromCenter = kids[fromIdx].offsetLeft + kids[fromIdx].offsetWidth / 2;
+          const nowCenter = el.scrollLeft + el.clientWidth / 2;
+          const moved = (nowCenter - fromCenter) / pitch; // + = toward higher index
+          let dir = 0;
+          if (Math.abs(vel) > 0.12) dir = vel < 0 ? 1 : -1; // quick flick
+          else if (Math.abs(moved) > 0.15) dir = moved > 0 ? 1 : -1; // pulled ~a sixth of a card
+          const best = Math.max(0, Math.min(kids.length - 1, fromIdx + dir));
           const k = kids[best];
           if (k) el.scrollTo({ left: k.offsetLeft + k.offsetWidth / 2 - el.clientWidth / 2, behavior: 'smooth' });
           // Restore mandatory snap only once THIS glide has come to rest, and

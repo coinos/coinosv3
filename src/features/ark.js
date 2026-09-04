@@ -1179,23 +1179,21 @@ export function arkFeature(ctx) {
       m.preimage ? row(t('preimageLabel'), shortTxid(m.preimage)) : null,
       m.preimage ? h('button', { class: 'btn-block', onClick: () => ctx.copy(m.preimage) }, t('copyPreimage')) : null,
       // A send that funded a bearer gift: show its fate, and while unclaimed
-      // offer the link again plus the sweep-back — same powers the gift card
-      // has, where the sender will actually go looking for them: history.
+      // the sweep-back — the copy-link lives in the grouped small-button row
+      // below, next to the other copy actions.
       (() => {
         const g = giftForMovement(m);
         if (!g) return null;
         refreshArkGiftRecords();
         const open = !g.claimed && !g.revoked;
-        const code = encodeArkGiftCode(getNetwork(), g.amountSat, hex.decode(g.secretHex));
         return h('div', { class: 'col', style: 'gap:8px;border-top:1px solid var(--border,rgba(128,128,128,.2));padding-top:10px' },
           h('div', { class: 'row gap6', style: 'align-items:center' },
             h('span', {}, '🎁 ' + t('giftHistoryTitle')),
             h('span', { class: g.claimed ? 'tag conf' : 'tag' },
               g.claimed ? t('giftClaimedTag') : g.revoked ? t('giftRevokedTag') : t('giftUnclaimedTag'))),
-          open ? copyBtn(`${location.origin}/g/${code}`, t('giftCopyLinkAgain')) : null,
           open ? (ui.busy && ui.revokeId === g.id
-            ? h('button', { class: 'btn-block', disabled: true }, h('span', { class: 'spinner sm' }))
-            : h('button', { class: 'btn-block', onClick: async () => {
+            ? h('button', { class: 'btn-block btn-danger', disabled: true }, h('span', { class: 'spinner sm' }))
+            : h('button', { class: 'btn-block btn-danger', onClick: async () => {
                 ui.revokeId = g.id; ui.busy = true; render();
                 try { await doArkGiftRevoke(g.id); toast(t('giftArkRevoked')); }
                 catch (e) { toast(e.message); }
@@ -1205,12 +1203,23 @@ export function arkFeature(ctx) {
       m.txid
         ? h('div', { class: 'col', style: 'gap:6px' },
             h('div', { class: 'small muted' }, t('transactionId')),
-            h('div', { class: 'addr-box', style: 'width:100%' }, m.txid),
-            h('div', { class: 'row gap6' },
-              copyBtn(m.txid, t('copyTxid')),
-              h('a', { class: 'btn btn-sm', href: url, target: '_blank', rel: 'noopener', onClick: (e) => { e.preventDefault(); openExternal(url); } }, t('viewOnMempool'))))
+            h('div', { class: 'addr-box', style: 'width:100%' }, m.txid))
         : null,
-      m.to ? copyBtn(m.to, t('copyAddress')) : null,
+      // All the small copy/view actions travel TOGETHER in one wrapping row at
+      // their natural width — not each stretched full-width and split apart by
+      // the block buttons. The block actions (Revoke above, Back below) own
+      // the full width; these are secondary and read as a cluster.
+      (() => {
+        const g = giftForMovement(m);
+        const open = g && !g.claimed && !g.revoked;
+        const chips = [
+          open ? copyBtn(`${location.origin}/g/${encodeArkGiftCode(getNetwork(), g.amountSat, hex.decode(g.secretHex))}`, t('giftCopyLinkAgain')) : null,
+          m.txid ? copyBtn(m.txid, t('copyTxid')) : null,
+          m.txid ? h('a', { class: 'btn btn-sm', href: url, target: '_blank', rel: 'noopener', onClick: (e) => { e.preventDefault(); openExternal(url); } }, t('viewOnMempool')) : null,
+          m.to ? copyBtn(m.to, t('copyAddress')) : null,
+        ].filter(Boolean);
+        return chips.length ? h('div', { class: 'row gap6 wrap' }, ...chips) : null;
+      })(),
       h('button', { class: 'btn-ghost btn-block', onClick: () => ctx.goBack(() => { ui.arkMoveDetail = null; }) }, t('back'))
     );
   }

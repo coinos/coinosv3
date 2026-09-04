@@ -1766,30 +1766,48 @@ export function arkFeature(ctx) {
       ' ',
       h('button', { class: 'linklike small', onClick: () => { ui.arkCoinsPage = true; render(); } },
         t('arkDepthBtn')));
+  // Pricing the advisory is EC-heavy: it decodes every spendable coin (for its
+  // genesis depth) and builds the exit transactions (estimateExitFeeSat). Doing
+  // that synchronously in the render path was the cold cost behind a carousel
+  // drag stutter right after a refresh. So the render only READS the cached
+  // answer, and the recompute runs in idle time — never competing with input.
+  let _depthKey = null, _depthComputing = false;
+  function computeDepthAdvisory() {
+    if (!ark || !ark.state) return;
+    const spend = (ark.state.vtxos || []).filter((v) => v.state === 'spendable');
+    const feeRate = Math.max(1, (wallet.feeRates && wallet.feeRates.halfHourFee) || 2);
+    const key = feeRate + '|' + spend.map((v) => v.id).join(',');
+    if (key === _depthKey || _depthComputing) return; // already priced this exact set
+    _depthComputing = true;
+    const run = () => {
+      try {
+        let depth = 0;
+        for (const v of spend) { try { depth = Math.max(depth, ark._decoded(v).genesis.length); } catch {} }
+        let show = false, exitFee = 0;
+        if (spend.length && depth >= EXIT_DEPTH_ADVISORY) {
+          try { exitFee = estimateExitFeeSat(ark); } catch {}
+          const afterFee = Math.ceil(530 * feeRate); // one coin, one hop post-renewal
+          show = afterFee < exitFee; // renewing has to actually help
+        }
+        _depthKey = key;
+        const cached = wallet.loadFeatureState('arkDepth', null);
+        if (!cached || cached.show !== show || cached.exitFee !== exitFee) {
+          wallet.saveFeatureState('arkDepth', { show, exitFee });
+          render();
+        }
+      } finally { _depthComputing = false; }
+    };
+    if (typeof requestIdleCallback === 'function') requestIdleCallback(run, { timeout: 2000 });
+    else setTimeout(run, 200);
+  }
   function exitDepthNotice() {
     if (!arkAvailable() || wallet.watchOnly) return null;
-    // Ark connects lazily after the wallet paints, so the first renders have
-    // no state to price an exit from — the line popping in seconds later
-    // shoved the whole layout down. Paint the last computed answer at once;
-    // the live numbers replace it in place.
+    // Render is cheap: paint the last computed answer immediately (so the line
+    // doesn't pop in and shove layout), and kick an idle recompute if the coin
+    // set changed. The heavy EC never runs in the render/interaction path.
+    if (ark && ark.state) computeDepthAdvisory();
     const cached = wallet.loadFeatureState('arkDepth', null);
-    if (!ark || !ark.state) return cached && cached.show ? depthNoticeEl(cached.exitFee) : null;
-    const remember = (show, exitFee = 0) => {
-      if (!cached || cached.show !== show || cached.exitFee !== exitFee)
-        wallet.saveFeatureState('arkDepth', { show, exitFee });
-    };
-    const spend = (ark.state.vtxos || []).filter((v) => v.state === 'spendable');
-    let depth = 0;
-    for (const v of spend) { try { depth = Math.max(depth, ark._decoded(v).genesis.length); } catch {} }
-    if (!spend.length || depth < EXIT_DEPTH_ADVISORY) { remember(false); return null; }
-    let exitFee = 0; try { exitFee = estimateExitFeeSat(ark); } catch {}
-    // after a renewal everything is ONE coin, ONE hop: parent + its fee
-    // child + the claim, ~530 vB all in at today's rate
-    const feeRate = Math.max(1, (wallet.feeRates && wallet.feeRates.halfHourFee) || 2);
-    const afterFee = Math.ceil(530 * feeRate);
-    if (afterFee >= exitFee) { remember(false); return null; } // renewing wouldn't help — stay quiet
-    remember(true, exitFee);
-    return depthNoticeEl(exitFee);
+    return cached && cached.show ? depthNoticeEl(cached.exitFee) : null;
   }
 
   // The screen behind that notice's Manage link: every spendable coin with

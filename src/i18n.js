@@ -179,6 +179,7 @@ const STR = {
     msgNewChannel: 'New channel',
     msgAdmin: 'admin',
     msgEdited: '(edited)',
+    msgReact: 'React',
     publicChatTitle: '{name} community',
     publicChatDesc: 'Live chat — read along, sign in to join the conversation',
     publicChatSignIn: 'Sign in to chat',

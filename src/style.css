@@ -419,11 +419,28 @@ hr.divider { margin: 16px 0; }
   background: var(--paper); color: var(--muted); font-size: 12px; line-height: 1; cursor: pointer;
 }
 .chat-row:hover .chat-del { display: flex; }
-.chat-reacts { display: flex; gap: 5px; margin-top: 3px; }
+/* the react opener rides the bubble edge like the delete ×; on a mine-row
+   both show, so it steps left to clear the × */
+.chat-react-btn {
+  position: absolute; top: -7px; right: -7px; width: 18px; height: 18px;
+  display: none; align-items: center; justify-content: center;
+  border: 1px solid var(--line-strong); border-radius: 50%;
+  background: var(--paper); font-size: 10px; line-height: 1; cursor: pointer; padding: 0;
+}
+.chat-row:hover .chat-react-btn { display: flex; }
+.chat-row.mine .chat-react-btn { right: 14px; }
+.chat-react-picker { display: flex; gap: 4px; margin-top: 4px; flex-wrap: wrap; }
+.chat-react-picker button {
+  font-size: 15px; line-height: 1; padding: 4px 6px;
+  border: 1px solid var(--line); border-radius: 9px; background: var(--paper); cursor: pointer;
+}
+.chat-reacts { display: flex; gap: 5px; margin-top: 3px; flex-wrap: wrap; }
 .chat-react {
   font-size: 12px; background: var(--paper); border: 1px solid var(--line);
   border-radius: 9px; padding: 1px 7px;
 }
+.chat-react.clickable { cursor: pointer; }
+.chat-react.on { border-color: var(--accent); color: var(--accent); }
 .chat-compose {
   display: flex; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--line);
   align-items: center; flex: 0 0 auto;

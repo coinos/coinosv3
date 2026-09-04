@@ -609,6 +609,38 @@ export function messagesFeature(ctx) {
     }
   }
 
+  // A reaction is a kind-7 rumor on the channel stream — same envelope as a
+  // message, content = the emoji. One reaction per author per message (the
+  // fold keeps the latest), so picking a different emoji replaces yours;
+  // tapping an existing chip joins that vote. Optimistic like sendMessage:
+  // the chip appears immediately, the wire catches up.
+  const REACT_EMOJIS = ['👍', '❤️', '😂', '🔥', '🎉', '🙏'];
+  async function sendReaction(room, chId, m, emoji) {
+    const id = await identity();
+    if (!id) { noIdToast(); return; }
+    ui.msgReactFor = null;
+    const { created_at, ms } = msTags(Date.now());
+    const rumor = rumorWithId({
+      kind: 7, pubkey: id.pubkey, content: emoji,
+      tags: [['channel', chId], ['epoch', String(EPOCH)], ['e', m.rumor.id], ['k', '9'], ms], created_at,
+    });
+    const r = room.reactions.get(m.rumor.id) || room.reactions.set(m.rumor.id, new Map()).get(m.rumor.id);
+    const prev = r.get(id.pubkey);
+    r.set(id.pubkey, emoji);
+    render();
+    try {
+      const wrap = await wrapRumor(rumor, id.signer, room.chStream(chId));
+      seenWraps.add(wrap.id); // our own echo has nothing to add
+      const ok = await publishOn(room.relays, wrap);
+      if (!ok) toast(t('msgSendFailed'));
+    } catch (e) {
+      // never went out — put back whatever stood before
+      if (prev) r.set(id.pubkey, prev); else r.delete(id.pubkey);
+      toast(e.message || String(e));
+      render();
+    }
+  }
+
   async function deleteMessage(room, chId, m) {
     const id = await identity();
     if (!id || id.pubkey !== m.author) return;
@@ -2594,6 +2626,10 @@ export function messagesFeature(ctx) {
       const reacts = room.reactions.get(m.rumor.id);
       const counts = new Map();
       if (reacts) for (const emoji of reacts.values()) counts.set(emoji, (counts.get(emoji) || 0) + 1);
+      // this wallet's own reaction (any of its identities) — highlighted, and
+      // choosing another emoji replaces it (one reaction per author, the fold
+      // keeps the latest)
+      const myReact = reacts && my.map((pk) => reacts.get(pk)).find(Boolean);
       return h(
         'div', { class: 'chat-row' + (mine ? ' mine' : '') + (grouped ? ' grouped' : '') },
         grouped ? h('div', { class: 'chat-avatar spacer' }) : avatar(m.author),
@@ -2607,15 +2643,27 @@ export function messagesFeature(ctx) {
               m.author === room.jm.owner ? h('span', { class: 'chat-badge' }, t('msgAdmin')) : null),
             h('span', { class: 'chat-time' }, timeLabel(tms))),
           h('div', { class: 'chat-bubble' },
-            text,
+            ...noteBody(text),
             edit ? h('span', { class: 'chat-edited' }, ' ', t('msgEdited')) : null,
+            h('button', {
+              class: 'chat-react-btn', title: t('msgReact'),
+              onClick: () => { ui.msgReactFor = ui.msgReactFor === m.rumor.id ? null : m.rumor.id; render(); },
+            }, '🙂'),
             mine
               ? h('button', { class: 'chat-del', title: t('msgDelete'), onClick: () => deleteMessage(room, chId, m) }, '×')
               : null),
+          ui.msgReactFor === m.rumor.id
+            ? h('div', { class: 'chat-react-picker' },
+                REACT_EMOJIS.map((e2) => h('button', { onClick: () => sendReaction(room, chId, m, e2) }, e2)))
+            : null,
           counts.size
             ? h('div', { class: 'chat-reacts' },
                 [...counts.entries()].map(([emoji, n]) =>
-                  h('span', { class: 'chat-react' }, emoji, n > 1 ? ' ' + n : '')))
+                  h('span', {
+                    class: 'chat-react clickable' + (emoji === myReact ? ' on' : ''),
+                    title: t('msgReact'),
+                    onClick: () => sendReaction(room, chId, m, emoji),
+                  }, emoji, n > 1 ? ' ' + n : '')))
             : null)
       );
     });
@@ -2794,7 +2842,7 @@ export function messagesFeature(ctx) {
         ? msgs.map((m) =>
             h('div', { class: 'chat-row dm' + (m.mine ? ' mine' : '') },
               h('div', { class: 'chat-body' },
-                h('div', { class: 'chat-bubble' + (m.mine ? ' me' : '') }, m.rumor.content),
+                h('div', { class: 'chat-bubble' + (m.mine ? ' me' : '') }, ...noteBody(m.rumor.content)),
                 h('div', { class: 'chat-time' }, timeLabel(m.rumor.created_at * 1000)))))
         : [h('div', { class: 'muted small', style: 'text-align:center;padding:24px 0' }, t('msgNoDmsYet'))])),
       composer(t('msgDmPlaceholder'), () => sendDM(peer), null, 'dm:' + peer));

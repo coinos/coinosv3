@@ -35,6 +35,30 @@ function h(tag, attrs = {}, ...children) {
   return e;
 }
 
+// Message text, safely: content stays text nodes (relay content must never
+// reach innerHTML); URLs become links, image URLs render inline. The app's
+// richer noteBody also resolves nostr: mentions — here they stay dim stubs,
+// since this page has no profile screens to open.
+const LINK_SPLIT = /(https?:\/\/[^\s]+|nostr:(?:npub|nprofile|note|nevent|naddr)1[a-z0-9]+)/gi;
+function linkedBody(text) {
+  const out = [];
+  for (const part of String(text || '').split(LINK_SPLIT)) {
+    if (!part) continue;
+    if (/^https?:\/\//i.test(part)) {
+      if (/\.(png|jpe?g|gif|webp|avif)(\?[^\s]*)?$/i.test(part)) {
+        out.push(h('img', { src: part, class: 'note-img', loading: 'lazy',
+          onError: (e) => { e.target.style.display = 'none'; } }));
+      } else {
+        out.push(h('a', { href: part, target: '_blank', rel: 'noopener noreferrer' },
+          part.length > 64 ? part.slice(0, 61) + '…' : part));
+      }
+    } else if (/^nostr:/i.test(part)) {
+      out.push(h('span', { class: 'faint' }, part.slice(6, 18) + '…'));
+    } else out.push(part);
+  }
+  return out;
+}
+
 export function mountPublicChat() {
   const root = document.getElementById('app');
   const rootBytes = hexToBytes(COMMUNITY.community_root);
@@ -220,7 +244,7 @@ export function mountPublicChat() {
             h('span', { class: 'chat-name' + (m.author === COMMUNITY.owner ? ' owner' : '') }, nameOf(m.author)),
             m.author === COMMUNITY.owner ? h('span', { class: 'chat-badge' }, t('msgAdmin')) : null,
             h('span', { class: 'chat-time' }, timeAgo(ms / 1000))),
-          h('div', { class: 'chat-bubble' }, content,
+          h('div', { class: 'chat-bubble' }, ...linkedBody(content),
             edit && edit.author === m.author ? h('span', { class: 'chat-edited' }, ' ' + t('msgEdited')) : null),
           reacts && reacts.size ? h('div', { class: 'chat-reacts' },
             ...[...[...reacts.values()].reduce((m2, e) => m2.set(e, (m2.get(e) || 0) + 1), new Map()).entries()]

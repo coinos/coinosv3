@@ -1175,9 +1175,9 @@ export function arkFeature(ctx) {
             row(t('arkFeeChain'), fmtAmount(m.chainFeeSat) + ' ' + unitLabel()),
             row(t('arkFeeService'), fmtAmount(m.serviceFeeSat) + ' ' + unitLabel()))
         : m.detail ? row(t('detailsLabel'), m.detail) : null,
-      // proof of payment: the preimage is what a merchant asks for
+      // proof of payment: the preimage is what a merchant asks for (its copy
+      // button rides the grouped small-button row below with the others)
       m.preimage ? row(t('preimageLabel'), shortTxid(m.preimage)) : null,
-      m.preimage ? h('button', { class: 'btn-block', onClick: () => ctx.copy(m.preimage) }, t('copyPreimage')) : null,
       // A send that funded a bearer gift: show its fate, and while unclaimed
       // the sweep-back — the copy-link lives in the grouped small-button row
       // below, next to the other copy actions.
@@ -1214,6 +1214,7 @@ export function arkFeature(ctx) {
         const open = g && !g.claimed && !g.revoked;
         const chips = [
           open ? copyBtn(`${location.origin}/g/${encodeArkGiftCode(getNetwork(), g.amountSat, hex.decode(g.secretHex))}`, t('giftCopyLinkAgain')) : null,
+          m.preimage ? copyBtn(m.preimage, t('copyPreimage')) : null,
           m.txid ? copyBtn(m.txid, t('copyTxid')) : null,
           m.txid ? h('a', { class: 'btn btn-sm', href: url, target: '_blank', rel: 'noopener', onClick: (e) => { e.preventDefault(); openExternal(url); } }, t('viewOnMempool')) : null,
           m.to ? copyBtn(m.to, t('copyAddress')) : null,

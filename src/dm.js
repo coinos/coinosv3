@@ -57,12 +57,27 @@ export async function wrapDM(skOrSigner, receiverPk, rumor, extraTags = []) {
 // The kind 14 rumor alone, id included — synchronous, so a sender can put
 // the message on screen before any signing or encryption has run. Wrapping
 // the same rumor later yields the same id, so the sent-copy echo dedupes.
-export function makeDMRumor(senderPk, peerPk, text) {
+// extraTags: e.g. [['e', <id>]] marks a reply to another message.
+export function makeDMRumor(senderPk, peerPk, text, extraTags = []) {
   const rumor = {
     kind: 14,
     pubkey: senderPk,
     content: text,
-    tags: [['p', peerPk]],
+    tags: [['p', peerPk], ...extraTags],
+    created_at: now(),
+  };
+  rumor.id = getEventHash(rumor);
+  return rumor;
+}
+
+// A reaction to a DM: a kind 7 rumor riding the same gift-wrap envelope
+// (the shape 0xchat and friends use), e-tagging the reacted message.
+export function makeDMReaction(senderPk, peerPk, targetId, emoji) {
+  const rumor = {
+    kind: 7,
+    pubkey: senderPk,
+    content: emoji,
+    tags: [['p', peerPk], ['e', targetId]],
     created_at: now(),
   };
   rumor.id = getEventHash(rumor);

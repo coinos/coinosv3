@@ -22,7 +22,7 @@ import {
   foldControl, foldGuestbook, observeAuthor, eventMs, msTags, makeEdition,
   communityId, parseInviteLink, makeInviteLink, makeInviteBundleEvent, openInviteBundle,
 } from '../concord.js';
-import { makeDMRumor, unwrapDM, wrapDM } from '../dm.js';
+import { makeDMRumor, makeDMReaction, unwrapDM, wrapDM } from '../dm.js';
 import { saveInbox } from '../dm-inbox.js';
 import { makeSearcher, resultRows, fallbackAvatar, warmSearch } from '../recipient-search.js';
 import { getNetwork } from '../api.js';
@@ -219,6 +219,10 @@ export function messagesFeature(ctx) {
 
   const rooms = new Map(); // cid -> room runtime
   const threads = new Map(); // peerPk -> Map(rumorId -> { rumor, mine })
+  // DM reactions, keyed by the reacted message's id — no thread needed, so a
+  // reaction that arrives before its message still lands. Ephemeral like the
+  // community ones: the wrap backlog rebuilds them on reload.
+  const dmReacts = new Map(); // rumorId -> Map(authorPk -> emoji)
   const pendingDirect = new Map(); // rumor id -> { bundle, from }
   const profiles = new Map(); // pubkey -> profile | null while loading
   const seenWraps = new Set();
@@ -1337,6 +1341,13 @@ export function messagesFeature(ctx) {
         const peer = mine ? (to || got.peer || got.author) : got.author;
         noteDM(peer, got.rumor, mine);
         persistDms();
+      } else if (got.rumor.kind === 7) {
+        // a DM reaction (ours echoed back, or the peer's — 0xchat's shape)
+        const target = got.rumor.tags?.find((x) => x[0] === 'e')?.[1];
+        if (target) {
+          (dmReacts.get(target) || dmReacts.set(target, new Map()).get(target)).set(got.author, got.rumor.content);
+          scheduleRepaint();
+        }
       } else if (got.rumor.kind === 3313 && !isMe(got.author)) {
         try {
           const b = openDirectBundle(got.rumor.content);
@@ -1479,7 +1490,9 @@ export function messagesFeature(ctx) {
     // Same optimistic shape as channel sends: the rumor is synchronous and on
     // screen at once. Wrapping the same rumor keeps the id, so the sent-copy
     // echo folds into this entry instead of duplicating it.
-    const rumor = makeDMRumor(id.pubkey, peer, text);
+    const replyTo = ui.msgReplyTo && threadOf(peer).has(ui.msgReplyTo) ? ui.msgReplyTo : null;
+    ui.msgReplyTo = null;
+    const rumor = makeDMRumor(id.pubkey, peer, text, replyTo ? [['e', replyTo]] : []);
     const entry = { rumor, mine: true, pending: true };
     threadOf(peer).set(rumor.id, entry);
     clearDraft('dm:' + peer);
@@ -1503,6 +1516,37 @@ export function messagesFeature(ctx) {
       persistDms();
     } catch (e) {
       threadOf(peer).delete(rumor.id);
+      toast(e.message || String(e));
+      render();
+    }
+  }
+
+  // React to a DM: the same kind-7-in-a-gift-wrap shape 0xchat uses, sent to
+  // the peer and to our own inbox (the echo is what other devices fold in).
+  // Optimistic like sendDM; one reaction per author, latest wins.
+  async function sendDmReaction(peer, m, emoji) {
+    const id = await identity();
+    if (!id) { noIdToast(); return; }
+    if (!(id.signer instanceof Uint8Array) && !id.signer.encryptTo) { toast(t('msgSignerNoDm')); return; }
+    ui.msgSheet = null;
+    const rumor = makeDMReaction(id.pubkey, peer, m.rumor.id, emoji);
+    const r = dmReacts.get(m.rumor.id) || dmReacts.set(m.rumor.id, new Map()).get(m.rumor.id);
+    const prev = r.get(id.pubkey);
+    r.set(id.pubkey, emoji);
+    render();
+    try {
+      const toPeer = await wrapDM(id.signer, peer, rumor);
+      const toSelf = await wrapDM(id.signer, id.pubkey, rumor);
+      seenWraps.add(toPeer.id); seenWraps.add(toSelf.id);
+      const ok = await publishOn(DM_RELAYS, toPeer);
+      publishOn(DM_RELAYS, toSelf);
+      fetchInboxRelays(peer).then((inbox) => {
+        const extra = inbox.slice(0, 4).filter((x) => !DM_RELAYS.includes(x));
+        if (extra.length) publishOn(extra, toPeer);
+      }).catch(() => {});
+      if (!ok) toast(t('msgSendFailed'));
+    } catch (e) {
+      if (prev) r.set(id.pubkey, prev); else r.delete(id.pubkey);
       toast(e.message || String(e));
       render();
     }
@@ -2949,18 +2993,81 @@ export function messagesFeature(ctx) {
 
   // ---- dm thread ----------------------------------------------------------
 
+  // The DM flavor of the message action sheet: reactions + Reply + Copy.
+  // No Delete — a gift-wrapped DM can't be retracted from the peer's relays.
+  function dmSheet(peer) {
+    const m = threadOf(peer).get(ui.msgSheet);
+    if (!m) { ui.msgSheet = null; return null; }
+    const my = myPubkeys();
+    const reacts = dmReacts.get(m.rumor.id);
+    const myReact = reacts && my.map((pk) => reacts.get(pk)).find(Boolean);
+    const close = () => { ui.msgSheet = null; render(); };
+    const item = (icon, label, onClick) => h('button', { class: 'msg-sheet-item', onClick },
+      h('span', { class: 'msg-sheet-ico' }, icon), label);
+    return h('div', {
+      class: 'confirm-pop-backdrop',
+      onClick: (e) => { if (e.target === e.currentTarget) close(); },
+    },
+      h('div', { class: 'card col msg-sheet' },
+        h('div', { class: 'msg-sheet-emojis' },
+          REACT_EMOJIS.map((e2) => h('button', {
+            class: e2 === myReact ? 'on' : '',
+            onClick: () => { close(); sendDmReaction(peer, m, e2); },
+          }, e2))),
+        item('↩', t('msgReply'), () => {
+          ui.msgReplyTo = m.rumor.id;
+          close();
+          setTimeout(() => document.getElementById('msg-draft')?.focus(), 50);
+        }),
+        item('⧉', t('copy'), async () => {
+          try { await navigator.clipboard.writeText(m.rumor.content); toast(t('copied')); } catch {}
+          close();
+        })));
+  }
+
   function dmView() {
     startDMs();
     const peer = ui.msgPeer;
     if (!peer) { ui.msgView = 'home'; return homeView(); }
-    const msgs = [...(threads.get(peer)?.values() || [])].sort((a, b) => a.rumor.created_at - b.rumor.created_at);
+    const thread = threads.get(peer) || new Map();
+    const msgs = [...thread.values()].sort((a, b) => a.rumor.created_at - b.rumor.created_at);
     // Looking at the thread is reading it — including anything that lands while
     // it's still open, since every arrival repaints us.
     markRead(dmRead(peer), newestFrom(msgs, (m) => !m.mine));
     stickToBottom();
+    const my = myPubkeys();
+    const dmQuote = (m) => {
+      const replyId = (m.rumor.tags || []).find((x) => x[0] === 'e')?.[1];
+      const src = replyId && thread.get(replyId);
+      if (!src) return null;
+      return h('div', { class: 'chat-quote' },
+        h('span', { class: 'chat-quote-name' }, displayName(src.rumor.pubkey)),
+        h('span', { class: 'chat-quote-text' }, String(src.rumor.content || '').replace(/\s+/g, ' ').slice(0, 90)));
+    };
+    const dmChips = (m) => {
+      const reacts = dmReacts.get(m.rumor.id);
+      if (!reacts || !reacts.size) return null;
+      const myReact = my.map((pk) => reacts.get(pk)).find(Boolean);
+      const counts = new Map();
+      for (const emoji of reacts.values()) counts.set(emoji, (counts.get(emoji) || 0) + 1);
+      return h('div', { class: 'chat-reacts' },
+        [...counts.entries()].map(([emoji, n]) => h('span', {
+          class: 'chat-react clickable' + (emoji === myReact ? ' on' : ''),
+          onClick: () => sendDmReaction(peer, m, emoji),
+        }, emoji, n > 1 ? ' ' + n : '')));
+    };
+    const dmReplyBar = () => {
+      const m = ui.msgReplyTo && thread.get(ui.msgReplyTo);
+      if (!m) { ui.msgReplyTo = null; return null; }
+      return h('div', { class: 'reply-bar' },
+        h('div', { class: 'col grow', style: 'gap:1px;min-width:0' },
+          h('span', { class: 'small', style: 'font-weight:650' }, '↩ ', displayName(m.rumor.pubkey)),
+          h('span', { class: 'small muted chat-quote-text' }, String(m.rumor.content || '').replace(/\s+/g, ' ').slice(0, 90))),
+        h('button', { class: 'chat-del', style: 'position:static;display:flex;flex-shrink:0', onClick: () => { ui.msgReplyTo = null; render(); } }, '×'));
+    };
     return h('div', { class: 'card col chat-card' },
       h('div', { class: 'row chat-head gap6', style: 'align-items:center' },
-        backBtn(() => { ui.msgView = 'home'; render(); }),
+        backBtn(() => { ui.msgView = 'home'; ui.msgReplyTo = null; ui.msgSheet = null; render(); }),
         avatar(peer),
         h('div', { class: 'col clickable', style: 'gap:2px;min-width:0', onClick: () => openProfile(peer) },
           h('div', { class: 'chat-title' }, displayName(peer)),
@@ -2976,10 +3083,23 @@ export function messagesFeature(ctx) {
         ? msgs.map((m) =>
             h('div', { class: 'chat-row dm' + (m.mine ? ' mine' : '') },
               h('div', { class: 'chat-body' },
-                h('div', { class: 'chat-bubble' + (m.mine ? ' me' : '') }, ...noteBody(m.rumor.content)),
+                h('div', {
+                  class: 'chat-bubble clickable' + (m.mine ? ' me' : ''),
+                  // same tap-for-actions as community bubbles
+                  onClick: (e) => {
+                    if (e.target.closest && e.target.closest('a, button, img')) return;
+                    const sel = window.getSelection && window.getSelection();
+                    if (sel && String(sel).length) return;
+                    ui.msgSheet = ui.msgSheet === m.rumor.id ? null : m.rumor.id;
+                    render();
+                  },
+                }, dmQuote(m), ...noteBody(m.rumor.content)),
+                dmChips(m),
                 h('div', { class: 'chat-time' }, timeLabel(m.rumor.created_at * 1000)))))
         : [h('div', { class: 'muted small', style: 'text-align:center;padding:24px 0' }, t('msgNoDmsYet'))])),
-      composer(t('msgDmPlaceholder'), () => sendDM(peer), null, 'dm:' + peer));
+      dmReplyBar(),
+      composer(t('msgDmPlaceholder'), () => sendDM(peer), null, 'dm:' + peer),
+      ui.msgSheet ? dmSheet(peer) : null);
   }
 
   // ---- feature ------------------------------------------------------------

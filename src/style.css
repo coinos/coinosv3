@@ -64,6 +64,15 @@
 
 * { box-sizing: border-box; }
 
+html {
+  /* Reserve the scrollbar's gutter always, so it doesn't appear the instant
+     the history list fills the page and shrink the viewport — that width
+     change re-centered the balance carousel's snapped card, the "slight move
+     one last time" after a switch. Stable gutter = no reflow when content
+     grows. */
+  scrollbar-gutter: stable;
+}
+
 html, body {
   margin: 0;
   padding: 0;

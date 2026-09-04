@@ -3392,7 +3392,9 @@ function balanceCard() {
     requestAnimationFrame(() => {
       const el = document.querySelector('.bal-carousel');
       if (!el || el._alignedTo === sel) return;
-      if (Date.now() - (el._lastScroll || 0) < 350) return;
+      // never yank the card while a finger/mouse is on it, or right after a
+      // scroll — a boot render firing this mid-drag was the "false start"
+      if (el._dragging || Date.now() - (el._lastScroll || 0) < 350) return;
       const k = el.children[ORDER2.indexOf(sel)];
       if (!k) return;
       const target = k.offsetLeft + k.offsetWidth / 2 - el.clientWidth / 2;

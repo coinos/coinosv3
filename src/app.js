@@ -1953,7 +1953,7 @@ function avatarMenu() {
     });
   return h('button', {
     class: 'header-avatar',
-    title: me ? t('profEdit') : undefined,
+    title: me ? t('profYourProfile') : undefined,
     onClick: me ? () => { featureHook('showProfile', me); render(); } : undefined,
   }, node);
 }

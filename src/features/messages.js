@@ -1645,7 +1645,7 @@ export function messagesFeature(ctx) {
     // router otherwise keeps a thread above the profile, which is the order
     // for the other direction (a note row tapped on a profile page).
     ui.profOverThread = !!ui.noteThread;
-    ui.profEdit = null; ui.profEditFilled = false; ui.logoutConfirm = null;
+    ui.profEdit = null; ui.profEditFilled = false; ui.logoutConfirm = null; ui.profCompose = null;
     render();
     fetchFullProfile(pk);
     notesFor(pk);
@@ -1864,6 +1864,24 @@ export function messagesFeature(ctx) {
   }
   // Publish a kind-1 reply to the focused note (NIP-10 markers), addressed to
   // the conversation's own relays plus ours, and shown optimistically.
+  // A new top-level kind-1 note, published to the identity's own relays —
+  // the profile page's compose button. The fresh note is prepended to the
+  // profile's notes cache so it appears immediately.
+  async function publishPost(text) {
+    const id = await identity();
+    if (!id) throw new Error(t('msgNoIdentity'));
+    const partial = { kind: 1, content: text, created_at: Math.floor(Date.now() / 1000), tags: [] };
+    const evt = id.signer instanceof Uint8Array ? finalizeEvent(partial, id.signer) : await id.signer.signEvent(partial);
+    const relays = [...new Set([...(await notesRelays(id.pubkey)), ...wallet.nostrRelays()])];
+    const ok = await publishOn(relays, evt);
+    if (!ok) throw new Error(t('msgSendFailed'));
+    for (const pk of new Set([id.pubkey, ui.profilePk].filter(Boolean))) {
+      const c = notesCache.get(pk);
+      if (c && !c.notes.some((e) => e.id === evt.id)) c.notes = [evt, ...c.notes].slice(0, 20);
+    }
+    return evt;
+  }
+
   async function publishReply(c, s, text) {
     const id = await identity();
     if (!id) throw new Error(t('msgNoIdentity'));
@@ -2062,12 +2080,14 @@ export function messagesFeature(ctx) {
             }, t('logoutForget')) : null,
             h('button', { class: 'btn-ghost btn-block', onClick: () => { ui.logoutConfirm = null; render(); } }, t('back'))));
     const full = fullProfiles.get(pk);
-    // Your own profile IS the editor — and it renders IMMEDIATELY, seeded
-    // from the local name/picture cache, so the page never reflows when the
-    // published kind 0 arrives. saveProfile re-fetches the newest kind 0
-    // before merging, so a stale seed can't clobber anything.
+    // Your own profile reads like anyone else's — npub, bio, latest posts —
+    // with the editor behind an explicit Edit button (it used to BE the
+    // page, which made looking at your own profile feel like a form). The
+    // seed comes from the local name/picture cache so the form opens
+    // instantly; saveProfile re-fetches the newest kind 0 before merging,
+    // so a stale seed can't clobber anything.
     const myAddr = mine ? hook('namesAddress') : null;
-    if (mine && !ui.profEdit) {
+    const openEditor = () => {
       const p = (full === undefined ? profileOf(pk) : full) || {};
       ui.profEdit = {
         uname: myAddr ? myAddr.split('@')[0] : '',
@@ -2077,7 +2097,8 @@ export function messagesFeature(ctx) {
         banner: (full || {}).banner || '',
       };
       ui.profEditFilled = full !== undefined;
-    }
+      render();
+    };
     // Once the real kind 0 lands, top up fields still sitting empty — never
     // ones the user (or the cache) already filled.
     if (mine && ui.profEdit && !ui.profEditFilled && full !== undefined) {
@@ -2138,9 +2159,9 @@ export function messagesFeature(ctx) {
           ? h('p', { class: 'small', style: 'margin:0;white-space:pre-wrap;overflow-wrap:anywhere' },
               ...noteBody(about.slice(0, 1000)))
           : null,
-        // your own npub stays out of the editor — it means nothing to most
-        // people, and the account settings still show it to those who care
-        mine ? null : h('button', {
+        // the npub, tap to copy — on every profile including your own; it
+        // only steps aside while the (long) edit form is open
+        ui.profEdit ? null : h('button', {
           class: 'addr-box break npub-box', title: t('copy'),
           style: 'font-size:11px;cursor:pointer;text-align:left;width:100%',
           onClick: async () => { try { await navigator.clipboard.writeText(npub); toast(t('copied')); } catch {} },
@@ -2208,9 +2229,33 @@ export function messagesFeature(ctx) {
                 })),
               h('button', { class: 'btn-primary btn-block', disabled: ui.profSaving, onClick: saveProfile },
                 ui.profSaving ? h('span', { class: 'spinner sm' }) : t('save')),
-              logoutBtn())
+              h('button', { class: 'btn-ghost btn-block', onClick: () => { ui.profEdit = null; ui.profEditFilled = false; render(); } }, t('cancel')))
           : mine
-            ? logoutBtn() // the editor renders above once the kind 0 loads
+            ? h('div', { class: 'col', style: 'gap:8px' },
+                h('div', { class: 'row gap6 wrap' },
+                  h('button', { class: 'btn-primary grow', onClick: openEditor }, t('profEdit')),
+                  h('button', { class: 'grow', onClick: () => { ui.profCompose = ui.profCompose == null ? '' : null; render(); } }, t('profNewPost'))),
+                ui.profCompose == null ? null : h('div', { class: 'col', style: 'gap:8px' },
+                  h('textarea', {
+                    rows: '3', placeholder: t('profComposePh'),
+                    style: 'font-family:var(--sans);min-height:64px',
+                    value: ui.profCompose,
+                    onInput: (ev) => { ui.profCompose = ev.target.value; },
+                  }),
+                  h('div', { class: 'row gap6' },
+                    h('button', { class: 'btn-primary grow', disabled: !!ui.profPosting, onClick: async () => {
+                      const text = (ui.profCompose || '').trim();
+                      if (!text) return;
+                      ui.profPosting = true; render();
+                      try {
+                        await publishPost(text);
+                        ui.profCompose = null;
+                        toast(t('profPosted'));
+                      } catch (e) { toast(e.message || String(e)); }
+                      ui.profPosting = false; render();
+                    } }, ui.profPosting ? h('span', { class: 'spinner sm' }) : t('profPostBtn')),
+                    h('button', { class: 'btn-ghost', onClick: () => { ui.profCompose = null; render(); } }, t('cancel')))),
+                logoutBtn())
             : ui.pubProf
               ? null // no wallet open: messaging and paying both need one
               : h('div', { class: 'row gap6 wrap' },
@@ -2254,7 +2299,7 @@ export function messagesFeature(ctx) {
               noteRow(pk, ev, name),
             ])));
       })(),
-      h('button', { class: 'btn-ghost btn-block', onClick: () => { ui.profilePk = null; ui.profOverThread = false; ui.pubProf = null; ui.profEdit = null; ui.profEditFilled = false; render(); } }, t('back')),
+      h('button', { class: 'btn-ghost btn-block', onClick: () => { ui.profilePk = null; ui.profOverThread = false; ui.pubProf = null; ui.profEdit = null; ui.profEditFilled = false; ui.profCompose = null; render(); } }, t('back')),
       mine ? logoutPop() : null);
   }
 

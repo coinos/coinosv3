@@ -428,7 +428,12 @@ function animatedAmount(key, sat) {
 
 let _carDragging = false; // a balance-carousel drag is in progress
 let _renderDeferred = false;
+// /chat runs the standalone public community view: it owns #app outright,
+// and every app render (feature init, emitter ticks) must stand down or the
+// onboarding screen paints over the chat moments after it mounts.
+let _publicChatMode = false;
 function render() {
+  if (_publicChatMode) return;
   // A background render mid carousel-drag rebuilds the strip; the morph then
   // strips the drag's inline scroll-snap-type:none, so mandatory snap yanks
   // the card back to its origin — the "jump partway through" stutter (a
@@ -4950,6 +4955,15 @@ window.addEventListener('load', () => {
 });
 loadLocale(getLang()).finally(async () => {
   applyBootAutoLogout(); // clear an overdue session before we read it for claim targets
+  // Public read-only community chat: no wallet, no login — the join material
+  // ships in the bundle, so the page decrypts client-side (src/public-chat.js).
+  // A share-anywhere link; its sign-in button leads back to the normal app.
+  if (location.pathname === '/chat') {
+    _publicChatMode = true; // app renders stand down — the page owns #app
+    const m = await import('./public-chat.js');
+    m.mountPublicChat();
+    return;
+  }
   // A gift link's feature is deferred — wait for it before asking who owns
   // the URL, or the claim would fall through to a normal boot and be lost.
   if (/^\/(g|ag|lg)\//.test(location.pathname)) await _deferredReady;

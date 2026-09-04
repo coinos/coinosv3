@@ -29,21 +29,9 @@ import { getNetwork } from '../api.js';
 import { hexToBytes, bytesToHex } from '@noble/hashes/utils';
 import { t } from '../i18n.js';
 
-// Genesis output of tools/concord-genesis.js — the coinos community's join
-// material (CORD-02 §8). The community_root here is deliberately public-ish:
-// every coinos user is meant to be a member of the default community.
-const COMMUNITY = {
-  community_id: 'b517fb4ba04c4c4eac2bd486ee800d1a8644fcdca5c5643098062e7733ee4986',
-  owner: '98ae4da926c471c23fd12d1ebdd5839ba82917baa618e184e0c9916d93dcf4f7',
-  owner_salt: '466450cd6cd0e6991a5acea091c5bc9e9a1c1ba27a970e64d2af4860e7f60cb1',
-  community_root: '58b2ce26eba30fbd19d9a57bce4c61e65838686998f10bba1d3e822fb72b372e',
-  root_epoch: 0,
-  channels: [{ id: '56bf8b96c1a3768c85444873df507cdbc3275fcbc21996af09e60003f850f85c', name: 'general' }],
-  relays: ['wss://relay.coinos.io', 'wss://nos.lol'],
-  name: 'coinos',
-};
-
-const EPOCH = 0;
+// The coinos community's join material lives in ../community.js — shared
+// with the public read-only chat page so the two can never drift.
+import { COMMUNITY, EPOCH } from '../community.js';
 const DM_RELAYS = ['wss://relay.coinos.io', 'wss://nos.lol'];
 const NOTIFIER = 'https://nwcpush.coinos.io';
 const APP_BASE = 'https://v3.coinos.io';
@@ -811,6 +799,10 @@ export function messagesFeature(ctx) {
   const urlProfile = (() => {
     if (typeof location === 'undefined' || urlInvite) return null;
     const m = location.pathname.match(/^\/([A-Za-z0-9._-]{1,64})\/?$/);
+    // reserved app routes are never usernames — /chat is the public
+    // community page (app.js routes it), and eating it here rewrote the URL
+    // to / before that route ever saw it
+    if (m && ['chat'].includes(m[1])) return null;
     return m ? m[1] : null;
   })();
   if (urlProfile) { try { history.replaceState(null, '', '/'); } catch {} }

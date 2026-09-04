@@ -180,6 +180,7 @@ const STR = {
     msgAdmin: 'admin',
     msgEdited: '(edited)',
     msgReact: 'React',
+    msgReply: 'Reply',
     publicChatTitle: '{name} community',
     publicChatDesc: 'Live chat — read along, sign in to join the conversation',
     publicChatSignIn: 'Sign in to chat',

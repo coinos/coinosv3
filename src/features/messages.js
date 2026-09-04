@@ -582,9 +582,13 @@ export function messagesFeature(ctx) {
     // it only keeps unconfirmed messages out of the cache and marks what to
     // withdraw if signing fails.
     const { created_at, ms } = msTags(Date.now());
+    // an armed reply context e-tags the quoted message (rendered as a quote
+    // by replyQuote on every device that has the original)
+    const replyTo = ui.msgReplyTo && room.byChannel.get(chId)?.has(ui.msgReplyTo) ? ui.msgReplyTo : null;
+    ui.msgReplyTo = null;
     const rumor = rumorWithId({
       kind: 9, pubkey: id.pubkey, content: text,
-      tags: [['channel', chId], ['epoch', String(EPOCH)], ms], created_at,
+      tags: [['channel', chId], ['epoch', String(EPOCH)], ...(replyTo ? [['e', replyTo]] : []), ms], created_at,
     });
     const msgs = room.byChannel.get(chId) || room.byChannel.set(chId, new Map()).get(chId);
     const entry = { rumor, author: id.pubkey, pending: true };
@@ -618,7 +622,7 @@ export function messagesFeature(ctx) {
   async function sendReaction(room, chId, m, emoji) {
     const id = await identity();
     if (!id) { noIdToast(); return; }
-    ui.msgReactFor = null;
+    ui.msgSheet = null;
     const { created_at, ms } = msTags(Date.now());
     const rumor = rumorWithId({
       kind: 7, pubkey: id.pubkey, content: emoji,
@@ -639,6 +643,72 @@ export function messagesFeature(ctx) {
       toast(e.message || String(e));
       render();
     }
+  }
+
+  // The displayed text of a message after its edit fold, trimmed to one line.
+  function msgSnippet(room, m, max = 90) {
+    const edit = room.edits.get(m.rumor.id);
+    const text = edit && edit.author === m.author ? edit.rumor.content : m.rumor.content;
+    const one = String(text || '').replace(/\s+/g, ' ').trim();
+    return one.length > max ? one.slice(0, max - 1) + '…' : one;
+  }
+
+  // A kind-9 that e-tags another message is a REPLY — render the quoted
+  // context above its text, Telegram-style. Quotes of deleted (or not-yet-
+  // loaded) messages stay silent rather than resurrect them.
+  function replyQuote(room, chId, m) {
+    const replyId = (m.rumor.tags || []).find((x) => x[0] === 'e')?.[1];
+    if (!replyId || room.deletes.has(replyId)) return null;
+    const src = room.byChannel.get(chId)?.get(replyId);
+    if (!src) return null;
+    return h('div', { class: 'chat-quote' },
+      h('span', { class: 'chat-quote-name' }, displayName(src.author)),
+      h('span', { class: 'chat-quote-text' }, msgSnippet(room, src)));
+  }
+
+  // Telegram-style message action sheet: quick reactions on top, then the
+  // actions this message supports. Opened by a tap on the bubble.
+  function messageSheet(room, chId) {
+    const m = room.byChannel.get(chId)?.get(ui.msgSheet);
+    if (!m) { ui.msgSheet = null; return null; }
+    const my = myPubkeys();
+    const mine = my.includes(m.author);
+    const reacts = room.reactions.get(m.rumor.id);
+    const myReact = reacts && my.map((pk) => reacts.get(pk)).find(Boolean);
+    const close = () => { ui.msgSheet = null; render(); };
+    const item = (icon, label, onClick) => h('button', { class: 'msg-sheet-item', onClick },
+      h('span', { class: 'msg-sheet-ico' }, icon), label);
+    return h('div', {
+      class: 'confirm-pop-backdrop',
+      onClick: (e) => { if (e.target === e.currentTarget) close(); },
+    },
+      h('div', { class: 'card col msg-sheet' },
+        h('div', { class: 'msg-sheet-emojis' },
+          REACT_EMOJIS.map((e2) => h('button', {
+            class: e2 === myReact ? 'on' : '',
+            onClick: () => { close(); sendReaction(room, chId, m, e2); },
+          }, e2))),
+        item('↩', t('msgReply'), () => {
+          ui.msgReplyTo = m.rumor.id;
+          close();
+          setTimeout(() => document.getElementById('msg-draft')?.focus(), 50);
+        }),
+        item('⧉', t('copy'), async () => {
+          try { await navigator.clipboard.writeText(msgSnippet(room, m, 100000)); toast(t('copied')); } catch {}
+          close();
+        }),
+        mine ? item('✕', t('msgDelete'), () => { close(); deleteMessage(room, chId, m); }) : null));
+  }
+
+  // The composer's "replying to" context bar, with its way out.
+  function replyBar(room, chId) {
+    const m = ui.msgReplyTo && room.byChannel.get(chId)?.get(ui.msgReplyTo);
+    if (!m) { ui.msgReplyTo = null; return null; }
+    return h('div', { class: 'reply-bar' },
+      h('div', { class: 'col grow', style: 'gap:1px;min-width:0' },
+        h('span', { class: 'small', style: 'font-weight:650' }, '↩ ', displayName(m.author)),
+        h('span', { class: 'small muted chat-quote-text' }, msgSnippet(room, m))),
+      h('button', { class: 'chat-del', style: 'position:static;display:flex;flex-shrink:0', onClick: () => { ui.msgReplyTo = null; render(); } }, '×'));
   }
 
   async function deleteMessage(room, chId, m) {
@@ -2642,20 +2712,26 @@ export function messagesFeature(ctx) {
               displayName(m.author),
               m.author === room.jm.owner ? h('span', { class: 'chat-badge' }, t('msgAdmin')) : null),
             h('span', { class: 'chat-time' }, timeLabel(tms))),
-          h('div', { class: 'chat-bubble' },
+          h('div', {
+            class: 'chat-bubble clickable',
+            // Telegram-style: a tap on the message opens its action sheet
+            // (quick reactions, reply, copy, delete). Links, images and the
+            // hover × keep their own clicks; a desktop text-selection drag
+            // ends in a click too, and must not pop the sheet over the copy.
+            onClick: (e) => {
+              if (e.target.closest && e.target.closest('a, button, img')) return;
+              const sel = window.getSelection && window.getSelection();
+              if (sel && String(sel).length) return;
+              ui.msgSheet = ui.msgSheet === m.rumor.id ? null : m.rumor.id;
+              render();
+            },
+          },
+            replyQuote(room, chId, m),
             ...noteBody(text),
             edit ? h('span', { class: 'chat-edited' }, ' ', t('msgEdited')) : null,
-            h('button', {
-              class: 'chat-react-btn', title: t('msgReact'),
-              onClick: () => { ui.msgReactFor = ui.msgReactFor === m.rumor.id ? null : m.rumor.id; render(); },
-            }, '🙂'),
             mine
               ? h('button', { class: 'chat-del', title: t('msgDelete'), onClick: () => deleteMessage(room, chId, m) }, '×')
               : null),
-          ui.msgReactFor === m.rumor.id
-            ? h('div', { class: 'chat-react-picker' },
-                REACT_EMOJIS.map((e2) => h('button', { onClick: () => sendReaction(room, chId, m, e2) }, e2)))
-            : null,
           counts.size
             ? h('div', { class: 'chat-reacts' },
                 [...counts.entries()].map(([emoji, n]) =>
@@ -2685,7 +2761,7 @@ export function messagesFeature(ctx) {
     return h('div', { class: 'card col chat-card' },
       h('div', { class: 'row between chat-head' },
         h('div', { class: 'row gap6', style: 'align-items:center;min-width:0' },
-          backBtn(() => { ui.msgView = 'home'; render(); }),
+          backBtn(() => { ui.msgView = 'home'; ui.msgReplyTo = null; ui.msgSheet = null; render(); }),
           h('div', {
             class: 'col clickable', style: 'gap:2px;min-width:0',
             onClick: () => { ui.msgMembers = !ui.msgMembers; render(); },
@@ -2700,7 +2776,7 @@ export function messagesFeature(ctx) {
           chans.length > 1
             ? h('select', {
                 class: 'chan-pick',
-                onChange: (e) => { ui.msgChannel = e.target.value; ui.msgStick = true; subChannel(room, e.target.value); render(); },
+                onChange: (e) => { ui.msgChannel = e.target.value; ui.msgStick = true; ui.msgReplyTo = null; ui.msgSheet = null; subChannel(room, e.target.value); render(); },
               }, chans.map((c) => h('option', { value: c.id, selected: c.id === ch?.id }, '#' + c.name)))
             : null,
           h('button', {
@@ -2725,11 +2801,13 @@ export function messagesFeature(ctx) {
         },
       }, ...(ch ? messageRows(room, ch.id) : [])),
       ch ? typingLine(room, ch.id) : null,
+      ch ? replyBar(room, ch.id) : null,
       composer(
         chans.length > 1 ? t('msgPlaceholder', { channel: ch ? ch.name : '' }) : t('msgPlaceholderPlain'),
         () => ch && sendMessage(room, ch.id),
         () => ch && ping(room, ch.id, TYPING),
-        ch ? 'ch:' + ch.id : 'ch:'));
+        ch ? 'ch:' + ch.id : 'ch:'),
+      ch && ui.msgSheet ? messageSheet(room, ch.id) : null);
   }
 
   // "Alice is typing…" — named up to two, counted beyond that.

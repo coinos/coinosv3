@@ -237,6 +237,14 @@ export function mountPublicChat() {
       const edit = edits.get(m.rumor.id);
       const content = edit && edit.author === m.author ? edit.rumor.content : m.rumor.content;
       const reacts = reactions.get(m.rumor.id);
+      // a reply e-tags its quoted message — render the context when we hold it
+      const replyId = (m.rumor.tags || []).find((x) => x[0] === 'e')?.[1];
+      const replySrc = replyId && !(deletes.get(replyId) || new Set()).size
+        ? (byChannel.get(activeChannel) || new Map()).get(replyId) : null;
+      const quote = replySrc ? h('div', { class: 'chat-quote' },
+        h('span', { class: 'chat-quote-name' }, nameOf(replySrc.author)),
+        h('span', { class: 'chat-quote-text' },
+          String(replySrc.rumor.content || '').replace(/\s+/g, ' ').slice(0, 90))) : null;
       log.append(h('div', { class: 'chat-row' + (grouped ? ' grouped' : '') },
         grouped ? h('div', { class: 'chat-avatar spacer' }) : avatar(m.author),
         h('div', { class: 'chat-body' },
@@ -244,7 +252,7 @@ export function mountPublicChat() {
             h('span', { class: 'chat-name' + (m.author === COMMUNITY.owner ? ' owner' : '') }, nameOf(m.author)),
             m.author === COMMUNITY.owner ? h('span', { class: 'chat-badge' }, t('msgAdmin')) : null,
             h('span', { class: 'chat-time' }, timeAgo(ms / 1000))),
-          h('div', { class: 'chat-bubble' }, ...linkedBody(content),
+          h('div', { class: 'chat-bubble' }, quote, ...linkedBody(content),
             edit && edit.author === m.author ? h('span', { class: 'chat-edited' }, ' ' + t('msgEdited')) : null),
           reacts && reacts.size ? h('div', { class: 'chat-reacts' },
             ...[...[...reacts.values()].reduce((m2, e) => m2.set(e, (m2.get(e) || 0) + 1), new Map()).entries()]

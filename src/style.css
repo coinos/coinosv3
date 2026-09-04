@@ -423,20 +423,34 @@ hr.divider { margin: 16px 0; }
   padding: 0;
 }
 .chat-row:hover .chat-del { display: flex; }
-/* the react opener rides the bubble edge like the delete ×; on a mine-row
-   both show, so it steps left to clear the × */
-.chat-react-btn {
-  position: absolute; top: -7px; right: -7px; width: 18px; height: 18px;
-  display: none; align-items: center; justify-content: center;
-  border: 1px solid var(--line-strong); border-radius: 50%;
-  background: var(--paper); font-size: 10px; line-height: 1; cursor: pointer; padding: 0;
+/* Telegram-style message action sheet: quick reactions + actions, opened by
+   a tap on any bubble (rides the confirm-pop backdrop). */
+.msg-sheet { width: 100%; max-width: 300px; gap: 2px; }
+.msg-sheet-emojis { display: flex; gap: 4px; margin-bottom: 8px; }
+.msg-sheet-emojis button {
+  flex: 1; font-size: 19px; line-height: 1; padding: 8px 0;
+  border: 1px solid var(--line); border-radius: 10px; background: var(--paper);
 }
-.chat-row:hover .chat-react-btn { display: flex; }
-.chat-row.mine .chat-react-btn { right: 16px; } /* 18px × at -7 ends at 11; 5px of air */
-.chat-react-picker { display: flex; gap: 4px; margin-top: 4px; flex-wrap: wrap; }
-.chat-react-picker button {
-  font-size: 15px; line-height: 1; padding: 4px 6px;
-  border: 1px solid var(--line); border-radius: 9px; background: var(--paper); cursor: pointer;
+.msg-sheet-emojis button.on { border-color: var(--accent); }
+.msg-sheet-item {
+  display: flex; gap: 12px; align-items: center; text-align: left;
+  border: none; background: none; padding: 11px 8px; font-weight: 550; border-radius: 10px;
+}
+.msg-sheet-item:hover { background: var(--surface2); }
+.msg-sheet-ico { width: 20px; text-align: center; color: var(--muted); flex-shrink: 0; }
+/* the quoted message a reply carries, and the composer's replying-to bar */
+.chat-quote {
+  display: flex; flex-direction: column; gap: 0; margin-bottom: 4px;
+  border-left: 3px solid var(--accent); background: var(--surface2);
+  border-radius: 6px; padding: 3px 8px; font-size: 12px; max-width: 100%;
+}
+.chat-quote-name { font-weight: 650; }
+.chat-quote-text {
+  color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.reply-bar {
+  display: flex; align-items: center; gap: 8px; padding: 7px 12px;
+  border-top: 1px solid var(--line); background: var(--surface2); flex: 0 0 auto;
 }
 .chat-reacts { display: flex; gap: 5px; margin-top: 3px; flex-wrap: wrap; }
 .chat-react {

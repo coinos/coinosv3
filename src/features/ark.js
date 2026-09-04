@@ -2662,7 +2662,13 @@ export function arkFeature(ctx) {
                   onClick: () => { ui.arkMoveOpen = false; ui.arkExitPage = true; ui.arkError = ''; render(); },
                 }, t('arkUniTitle')));
             })()),
-      ui.arkError ? h('div', { class: 'notice err' }, ui.arkError) : null);
+      ui.arkError ? h('div', { class: 'notice err' }, ui.arkError) : null,
+      // the panel unfolds on the balance card with no obvious way back out —
+      // a dismiss returns you to the plain card
+      h('button', {
+        class: 'linklike small', style: 'align-self:center;margin-top:2px',
+        onClick: () => { ui.arkMoveOpen = false; ui.arkError = ''; render(); },
+      }, t('cancel')));
   }
 
 

@@ -3563,12 +3563,22 @@ function tabsBar() {
 }
 
 function tabContent() {
-  switch (ui.tab) {
-    case 'receive': return receiveTab();
-    case 'send': return sendTab();
-    case 'history': return historyTab();
-    case 'settings': return settingsTab();
-  }
+  if (ui.tab === 'settings') return settingsTab();
+  if (ui.tab === 'history') return historyTab();
+  // Receive and Send are panes that fold open ABOVE the home view, not
+  // replacements for it: the transaction history stays visible below them, so
+  // getting back to it is scrolling, not hunting for the toggle. A history
+  // DETAIL (a tapped row) still claims the whole area — you're reading one
+  // payment, not browsing — as does the receive celebration takeover.
+  const pane = ui.tab === 'receive' ? receiveTab() : sendTab();
+  const hist = historyTab();
+  const detailOpen = ui.bump || ui.txDetail || ui.arkMoveDetail
+    || ui.arkReconDetail || ui.arkExitDetail || ui.giftDetail;
+  if (detailOpen) return hist;
+  return h('div', { class: 'col', style: 'gap:16px' },
+    pane,
+    h('div', { class: 'small faint', style: 'text-transform:uppercase;letter-spacing:.06em;margin-top:4px' }, t('tabHistory')),
+    hist);
 }
 
 // A payment is "recent" enough to celebrate if it's still pending or confirmed

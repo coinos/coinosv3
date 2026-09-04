@@ -980,25 +980,20 @@ export function arkFeature(ctx) {
     // coins the server saw spent outside this device's story (another
     // device, a swept expiry, an adopted renewal) — the row that keeps the
     // history summing to the balance. Folded per reconcile pass upstream.
-    // "Spent on another device" read as an accusation; it's now a plain Sent
-    // wearing a quiet "synced" tag, and a tap unfolds the reassurance.
+    // Deliberately dressed as an ORDINARY Sent row: the user spent their own
+    // money and doesn't need an alarm about which device did it. (The ASP's
+    // status API returns only a spent bit — no spend time or destination —
+    // so the timestamp is when this wallet found out.) Not tappable: the
+    // folded row sums several records, so a per-movement detail would show a
+    // fraction of the amount it advertises.
     if (m.type === 'reconcile') {
-      const open = ui.arkReconOpen === m.id;
-      return h('div', {
-        class: 'item', style: 'cursor:pointer;flex-wrap:wrap',
-        onClick: () => { ui.arkReconOpen = open ? null : m.id; render(); },
-      },
+      return h('div', { class: 'item' },
         h('div', { class: 'ico out', html: ARK_MARK(15) }),
         h('div', { class: 'grow' },
-          h('div', { class: 'row gap6', style: 'align-items:center' },
-            t('arkReconSent'), h('span', { class: 'tag' }, t('arkReconTag'))),
-          h('div', { class: 'small faint' },
-            timeAgo(m.ts / 1000) + (m.count > 1 ? ` · ${t('arkReconCoins', { n: m.count })}` : ''))),
+          h('div', {}, t('sent')),
+          h('div', { class: 'small faint' }, timeAgo(m.ts / 1000))),
         h('div', { style: 'text-align:right' },
-          h('div', { class: 'amount-neg' }, '-' + fmtAmount(m.amountSat))),
-        open
-          ? h('div', { class: 'small muted', style: 'flex-basis:100%;margin-top:6px' }, t('arkReconExplain'))
-          : null);
+          h('div', { class: 'amount-neg' }, '-' + fmtAmount(m.amountSat))));
     }
     // a renewal moves nothing anywhere — its history amount is what it COST
     if (m.type === 'refresh') {

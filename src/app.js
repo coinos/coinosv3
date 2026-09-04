@@ -3191,44 +3191,6 @@ function offlineBanner() {
 // Lightning) or Savings (on-chain). The balance card headline, the Receive
 // pane, and the gift source all follow it.
 const ACCOUNT_KEY = 'btc-wallet-account';
-// TEMP carousel diagnostics: a ring buffer of the last drag decisions, read
-// via window.__dl to see what a real failing flick actually did. Remove once
-// the snap-back report is settled.
-function dlog(s) {
-  try {
-    const a = (window.__dl = window.__dl || []);
-    a.push(Math.round(performance.now()) + ' ' + s);
-    if (a.length > 120) a.shift();
-  } catch {}
-}
-// TEMP: continuously watch for dropped frames and log any >40ms gap, so a
-// real drag's jank shows up in __dl next to the release/settle it overlaps.
-// Also trace scrollLeft every frame into __scroll to catch a position JUMP
-// (a stutter that isn't a dropped frame).
-try {
-  let _lastFrame = performance.now();
-  let _lastSl = -1, _movingUntil = 0;
-  window.__scroll = [];
-  const _fw = (t) => {
-    const gap = t - _lastFrame; _lastFrame = t;
-    if (gap > 40) dlog('FRAME-DROP ' + Math.round(gap) + 'ms');
-    try {
-      const el = document.querySelector('.bal-carousel');
-      if (el) {
-        const sl = Math.round(el.scrollLeft);
-        // record only while the scroll is actually moving (or just moved), so
-        // idle frames don't shift the flick motion out of the buffer
-        if (sl !== _lastSl) { _lastSl = sl; _movingUntil = t + 700; }
-        if (t < _movingUntil) {
-          window.__scroll.push([Math.round(t), sl, Math.round(gap)]);
-          if (window.__scroll.length > 800) window.__scroll.shift();
-        }
-      }
-    } catch {}
-    requestAnimationFrame(_fw);
-  };
-  requestAnimationFrame(_fw);
-} catch {}
 // Spending is opt-in: a wallet is born on-chain only, and the second balance
 // (with its toggle, swipe, and Move money) appears once the user sets it up —
 // or the moment money is already there (a restored wallet, a claimed gift),
@@ -3459,7 +3421,7 @@ function balanceCard() {
     // While a finger or mouse button is still DOWN nothing switches — hovering
     // a card mid-drag is browsing, not choosing; release is the choice.
     const settle = (el) => {
-      if (el._dragging) { dlog('settle-skip:dragging'); return; }
+      if (el._dragging) return;
       endCarouselDrag(); // motion has stopped — release the render hold (flushes any deferred render)
       const mid = el.scrollLeft + el.clientWidth / 2;
       let best = 0, bestD = Infinity;
@@ -3468,7 +3430,6 @@ function balanceCard() {
         if (d < bestD) { bestD = d; best = i; }
       });
       const view = ORDER2[best];
-      dlog('settle sl=' + Math.round(el.scrollLeft) + ' nearest=' + view + ' cur=' + accountSel());
       if (view && view !== accountSel()) {
         // the scroll already rests on this card — mark it aligned so the
         // post-render pass skips its layout read instead of re-aligning
@@ -3572,7 +3533,6 @@ function balanceCard() {
           if (Math.abs(vel) > 0.12) dir = vel < 0 ? 1 : -1; // quick flick
           else if (Math.abs(travelled) > 0.15) dir = travelled > 0 ? 1 : -1; // pulled ~a sixth of a card
           const best = Math.max(0, Math.min(kids.length - 1, fromIdx + dir));
-          dlog('release vel=' + (Math.round(vel * 100) / 100) + ' travelled=' + (Math.round(travelled * 100) / 100) + ' dir=' + dir + ' from=' + fromIdx + ' best=' + best + ' sl=' + Math.round(el.scrollLeft));
           const k = kids[best];
           if (k) el.scrollTo({ left: k.offsetLeft + k.offsetWidth / 2 - el.clientWidth / 2, behavior: 'smooth' });
           // Restore mandatory snap only once THIS glide has come to rest, and

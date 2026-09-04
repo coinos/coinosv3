@@ -3239,6 +3239,7 @@ function viewLabel(a, view) {
   return view === 'spending' ? t('spendingName') : t('savingsName');
 }
 function switchToView(id, view) {
+  ui.accountUserChosen = true; // deliberate pick from the accounts screen
   ui.account = view;
   try { localStorage.setItem(ACCOUNT_KEY, view); } catch {}
   if (id === activeId) { ui.screen = 'wallet'; ui.tab = 'history'; render(); }
@@ -3263,6 +3264,7 @@ let _accDir = null; // which way the balance face should slide in
 let _accAnim = false; // whether the current face switch animates (decided at the switch)
 function setAccountSel(a, dir) {
   if (ui.account === a) return;
+  ui.accountUserChosen = true; // deliberate pick — auto-select must not override
   _accDir = dir || (a === 'savings' ? 'left' : 'right');
   ui.account = a;
   try { localStorage.setItem(ACCOUNT_KEY, a); } catch {}
@@ -3419,6 +3421,7 @@ function balanceCard() {
         // the scroll already rests on this card — mark it aligned so the
         // post-render pass skips its layout read instead of re-aligning
         el._alignedTo = view;
+        ui.accountUserChosen = true; // a deliberate pick — no auto-select behind it
         ui.account = view;
         try { localStorage.setItem(ACCOUNT_KEY, view); } catch {}
         // selecting an account lands on its history (home), any open
@@ -3534,6 +3537,7 @@ function balanceCard() {
         if (e.target.closest && e.target.closest('button, a, input')) return;
         const strip = e.currentTarget.parentNode;
         if (strip && Date.now() - (strip._dragged || 0) < 300) return;
+        ui.accountUserChosen = true; // deliberate pick
         ui.account = v;
         try { localStorage.setItem(ACCOUNT_KEY, v); } catch {}
         ui.txDetail = null; ui.arkMoveDetail = null; ui.arkReconDetail = null; ui.arkExitDetail = null; ui.giftDetail = null;

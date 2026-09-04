@@ -496,6 +496,13 @@ export function arkFeature(ctx) {
   let _autoSelected = false;
   function maybeAutoSelectSpending() {
     if (_autoSelected || wallet.watchOnly) return;
+    // The user beat us to it: they've already scrolled/tapped/flicked to an
+    // account this session. The "open onto Spending when Savings is empty"
+    // convenience only applies to the UNTOUCHED open — arriving late (when
+    // the ark balance finally syncs, a second after a refresh) and yanking
+    // the card away from the one they just chose is the exact opposite of
+    // convenient. Consume the one-shot so it can't fire behind them.
+    if (ui.accountUserChosen) { _autoSelected = true; return; }
     const b = arkBalance();
     if (!b || b.spendableSat + b.pendingSat <= 0) return;
     _autoSelected = true;
@@ -2767,7 +2774,7 @@ export function arkFeature(ctx) {
 
   return {
     id: 'ark',
-    init() { _autoSelected = false; initArk(); },
+    init() { _autoSelected = false; ui.accountUserChosen = false; initArk(); },
     stop() { stopArk(); },
     screenView() { return ui.arkCoinsPage ? arkCoinsPage() : ui.arkExitPage ? arkExitPage() : null; },
     receiveTakeover() {

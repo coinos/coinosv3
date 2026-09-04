@@ -980,15 +980,25 @@ export function arkFeature(ctx) {
     // coins the server saw spent outside this device's story (another
     // device, a swept expiry, an adopted renewal) — the row that keeps the
     // history summing to the balance. Folded per reconcile pass upstream.
+    // "Spent on another device" read as an accusation; it's now a plain Sent
+    // wearing a quiet "synced" tag, and a tap unfolds the reassurance.
     if (m.type === 'reconcile') {
-      return h('div', { class: 'item' },
+      const open = ui.arkReconOpen === m.id;
+      return h('div', {
+        class: 'item', style: 'cursor:pointer;flex-wrap:wrap',
+        onClick: () => { ui.arkReconOpen = open ? null : m.id; render(); },
+      },
         h('div', { class: 'ico out', html: ARK_MARK(15) }),
         h('div', { class: 'grow' },
-          h('div', {}, t('arkSpentElsewhere')),
+          h('div', { class: 'row gap6', style: 'align-items:center' },
+            t('arkReconSent'), h('span', { class: 'tag' }, t('arkReconTag'))),
           h('div', { class: 'small faint' },
-            timeAgo(m.ts / 1000) + (m.count > 1 ? ` · ${t('arkSpentElsewhereN', { n: m.count })}` : ''))),
+            timeAgo(m.ts / 1000) + (m.count > 1 ? ` · ${t('arkReconCoins', { n: m.count })}` : ''))),
         h('div', { style: 'text-align:right' },
-          h('div', { class: 'amount-neg' }, '-' + fmtAmount(m.amountSat))));
+          h('div', { class: 'amount-neg' }, '-' + fmtAmount(m.amountSat))),
+        open
+          ? h('div', { class: 'small muted', style: 'flex-basis:100%;margin-top:6px' }, t('arkReconExplain'))
+          : null);
     }
     // a renewal moves nothing anywhere — its history amount is what it COST
     if (m.type === 'refresh') {

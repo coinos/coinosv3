@@ -3191,11 +3191,21 @@ function dlog(s) {
 }
 // TEMP: continuously watch for dropped frames and log any >40ms gap, so a
 // real drag's jank shows up in __dl next to the release/settle it overlaps.
+// Also trace scrollLeft every frame into __scroll to catch a position JUMP
+// (a stutter that isn't a dropped frame).
 try {
   let _lastFrame = performance.now();
+  window.__scroll = [];
   const _fw = (t) => {
     const gap = t - _lastFrame; _lastFrame = t;
     if (gap > 40) dlog('FRAME-DROP ' + Math.round(gap) + 'ms');
+    try {
+      const el = document.querySelector('.bal-carousel');
+      if (el) {
+        window.__scroll.push([Math.round(t), Math.round(el.scrollLeft), Math.round(gap)]);
+        if (window.__scroll.length > 400) window.__scroll.shift();
+      }
+    } catch {}
     requestAnimationFrame(_fw);
   };
   requestAnimationFrame(_fw);

@@ -141,8 +141,27 @@ export function installSyncWallet(wallet) {
       // full snapshot — they'd blank the core fields they don't carry.
       const fulls = mine.filter((s) => isCoreDtag(s.dtag, this.netName));
       const newest = fulls[0] && fulls[0].state; // fetchAllStates returns newest-first
+      const localTxs = this.txs || [];
       if (newest && (newest.savedAt || 0) > (this._savedAt || 0)) {
         this._applySnapshot(newest); // re-runs extension loads (idempotent merge)
+        this.emit();
+      }
+      // On-chain tx history: UNION across every device's core and what this
+      // device already had, newest-first so the freshest confirmation data
+      // wins per txid. Newest-core-wholesale alone lost history: a device
+      // whose history fetch keeps failing (mobile 429 storms) publishes a
+      // THIN core — balance present, txs empty — and every fresh device then
+      // adopted it and showed a balance with no transactions (adam's phone,
+      // 2026-09-04) while a fat core sat shadowed in an older device slot.
+      // Safe because history is append-mostly and every SUCCESSFUL local
+      // scan still prunes rows its addresses no longer report.
+      const byId = new Map();
+      for (const list of [this.txs || [], localTxs, ...fulls.map((s) => s.state.txs || [])]) {
+        for (const t of list) if (t && t.txid && !byId.has(t.txid)) byId.set(t.txid, t);
+      }
+      if (byId.size > (this.txs || []).length) {
+        this.txs = [...byId.values()];
+        this._sortTxs();
         this.emit();
       }
       this.saveCache(); // persist the merged result + republish our own slot

@@ -417,6 +417,10 @@ hr.divider { margin: 16px 0; }
   display: none; align-items: center; justify-content: center;
   border: 1px solid var(--line-strong); border-radius: 50%;
   background: var(--paper); color: var(--muted); font-size: 12px; line-height: 1; cursor: pointer;
+  /* the global button padding (11px 16px) floors the border-box past 18px
+     wide and turns the circle into an oval — a fixed-size round button
+     must zero it */
+  padding: 0;
 }
 .chat-row:hover .chat-del { display: flex; }
 /* the react opener rides the bubble edge like the delete ×; on a mine-row
@@ -428,7 +432,7 @@ hr.divider { margin: 16px 0; }
   background: var(--paper); font-size: 10px; line-height: 1; cursor: pointer; padding: 0;
 }
 .chat-row:hover .chat-react-btn { display: flex; }
-.chat-row.mine .chat-react-btn { right: 14px; }
+.chat-row.mine .chat-react-btn { right: 16px; } /* 18px × at -7 ends at 11; 5px of air */
 .chat-react-picker { display: flex; gap: 4px; margin-top: 4px; flex-wrap: wrap; }
 .chat-react-picker button {
   font-size: 15px; line-height: 1; padding: 4px 6px;

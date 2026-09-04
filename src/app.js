@@ -3506,10 +3506,10 @@ function balanceCard() {
           const pitch = kids[1] ? (kids[1].offsetLeft - kids[0].offsetLeft) : el.clientWidth || 1;
           const fromCenter = kids[fromIdx].offsetLeft + kids[fromIdx].offsetWidth / 2;
           const nowCenter = el.scrollLeft + el.clientWidth / 2;
-          const moved = (nowCenter - fromCenter) / pitch; // + = toward higher index
+          const travelled = (nowCenter - fromCenter) / pitch; // + = toward higher index
           let dir = 0;
           if (Math.abs(vel) > 0.12) dir = vel < 0 ? 1 : -1; // quick flick
-          else if (Math.abs(moved) > 0.15) dir = moved > 0 ? 1 : -1; // pulled ~a sixth of a card
+          else if (Math.abs(travelled) > 0.15) dir = travelled > 0 ? 1 : -1; // pulled ~a sixth of a card
           const best = Math.max(0, Math.min(kids.length - 1, fromIdx + dir));
           const k = kids[best];
           if (k) el.scrollTo({ left: k.offsetLeft + k.offsetWidth / 2 - el.clientWidth / 2, behavior: 'smooth' });

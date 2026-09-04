@@ -3195,6 +3195,7 @@ function dlog(s) {
 // (a stutter that isn't a dropped frame).
 try {
   let _lastFrame = performance.now();
+  let _lastSl = -1, _movingUntil = 0;
   window.__scroll = [];
   const _fw = (t) => {
     const gap = t - _lastFrame; _lastFrame = t;
@@ -3202,8 +3203,14 @@ try {
     try {
       const el = document.querySelector('.bal-carousel');
       if (el) {
-        window.__scroll.push([Math.round(t), Math.round(el.scrollLeft), Math.round(gap)]);
-        if (window.__scroll.length > 400) window.__scroll.shift();
+        const sl = Math.round(el.scrollLeft);
+        // record only while the scroll is actually moving (or just moved), so
+        // idle frames don't shift the flick motion out of the buffer
+        if (sl !== _lastSl) { _lastSl = sl; _movingUntil = t + 700; }
+        if (t < _movingUntil) {
+          window.__scroll.push([Math.round(t), sl, Math.round(gap)]);
+          if (window.__scroll.length > 800) window.__scroll.shift();
+        }
       }
     } catch {}
     requestAnimationFrame(_fw);

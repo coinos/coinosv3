@@ -3434,19 +3434,16 @@ function balanceCard() {
     return h('div', {
       class: 'bal-carousel',
       // The account switch (and its history-list rebuild) is the heaviest work
-      // the carousel triggers — running it mid-glide dropped a frame and read
-      // as a stutter. It now fires on `scrollend`, i.e. once motion has truly
-      // come to rest and the card is already in place, so the render is
-      // invisible. onScroll keeps only a long fallback for browsers without
-      // scrollend; it never drives the switch on its own during a glide.
-      onScrollend: (e) => { const el = e.currentTarget; clearTimeout(el._settle); settle(el); },
+      // the carousel triggers, so it must never run mid-glide (that dropped a
+      // frame and read as a stutter). The switch is driven by the onScroll
+      // debounce below, which naturally trails the LAST scroll event — during a
+      // smooth glide or momentum scroll, scroll events fire continuously until
+      // motion stops, so the debounce lands after the card is already at rest.
+      // (scrollend would be the semantic signal but it doesn't fire reliably
+      // for programmatic scrolls across browsers, so it's not relied on.)
+      onScrollend: (e) => { const el = e.currentTarget; if (!el._dragging) { clearTimeout(el._settle); settle(el); } },
       onTouchstart: (e) => { const el = e.currentTarget; el._dragging = true; clearTimeout(el._settle); },
-      onTouchend: (e) => {
-        const el = e.currentTarget;
-        el._dragging = false;
-        clearTimeout(el._settle);
-        el._settle = setTimeout(() => settle(el), 350); // fallback; scrollend usually wins
-      },
+      onTouchend: (e) => { e.currentTarget._dragging = false; }, // onScroll's debounce settles it
       // Desktop: scroll-snap has no mouse drag, so emulate one — grab the
       // strip and pull. Touch keeps the native pan (pointerType check);
       // buttons keep their clicks untouched. Mandatory snap fights raw
@@ -3520,11 +3517,8 @@ function balanceCard() {
           el.addEventListener('scrollend', restore, { once: true });
           clearTimeout(el._snapT);
           el._snapT = setTimeout(restore, 700);
-          // the account switch waits for scrollend (onScrollend on the strip)
-          // so its render never lands mid-glide; this is only the fallback for
-          // browsers without scrollend, kept long so scrollend wins normally
-          clearTimeout(el._settle);
-          el._settle = setTimeout(() => settle(el), 500);
+          // the switch is left to onScroll's debounce, which trails the glide's
+          // own scroll events and so fires only once the card has come to rest
         };
         window.addEventListener('pointermove', mv);
         window.addEventListener('pointerup', up);
@@ -3532,11 +3526,11 @@ function balanceCard() {
       onScroll: (e) => {
         const el = e.target;
         el._lastScroll = Date.now();
-        // scrollend drives the switch; this long debounce only covers browsers
-        // that lack it, and is kept well clear of a glide's duration so it
-        // never fires mid-motion
+        // trails the LAST scroll event: during a glide/momentum scroll these
+        // fire continuously, so this lands ~130ms after motion stops — after
+        // the card is at rest, never mid-glide. settle bails while _dragging.
         clearTimeout(el._settle);
-        el._settle = setTimeout(() => settle(el), 400);
+        el._settle = setTimeout(() => settle(el), 130);
       },
     }, ORDER2.map((v) => h('div', {
       class: 'card balance bal-slide',

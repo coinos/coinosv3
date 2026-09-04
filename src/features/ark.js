@@ -222,6 +222,9 @@ export function mergeArkStates(a, b) {
     if ((rm.feeSat || 0) > 0 && !(lm.feeSat > 0)) take.feeSat = rm.feeSat;
     if (rm.chainFeeSat != null && lm.chainFeeSat == null) take.chainFeeSat = rm.chainFeeSat;
     if (rm.serviceFeeSat != null && lm.serviceFeeSat == null) take.serviceFeeSat = rm.serviceFeeSat;
+    // an LN-origin tag learned on another device (matched against the
+    // registrar's receipts there) rides the snapshot to this one
+    if (rm.viaLn && !lm.viaLn) { take.viaLn = true; if (rm.lnHash) take.lnHash = rm.lnHash; }
     return Object.keys(take).length ? { ...lm, ...take } : lm;
   });
   // Two devices (or the push and the poll, pre-guard) can each record the
@@ -357,6 +360,8 @@ export function arkFeature(ctx) {
     stopNwcFunding();
     for (const timer of arkLnTimers.values()) clearInterval(timer);
     arkLnTimers.clear();
+    clearTimeout(lnTagT);
+    lnTagSeen = -1;
     ark = null;
     arkConnectPromise = null;
   }
@@ -459,7 +464,7 @@ export function arkFeature(ctx) {
         const tx = (wallet.txs || []).find((t2) => t2.txid === txid2);
         return tx && tx.confirmed ? { confirmed: true, block_height: tx.blockHeight || NaN } : null;
       },
-      onUpdate: () => { maybeAutoSelectSpending(); render(); },
+      onUpdate: (m) => { maybeAutoSelectSpending(); scheduleLnTag(m); render(); },
     });
     ui.arkError = '';
     arkConnectPromise = mgr.init().then(() => {
@@ -503,6 +508,7 @@ export function arkFeature(ctx) {
       // Receives arrive in real time over the mailbox stream; the poll is the
       // fallback and what drives in-flight boards/refreshes forward.
       mgr.startMailboxStream();
+      scheduleLnTag(mgr); // receives that landed while this device was closed
       arkTimer = setInterval(() => { if (ark === mgr) tick(); }, getNetwork() === 'regtest' ? 5000 : 30000);
       render();
       return mgr;
@@ -527,6 +533,60 @@ export function arkFeature(ctx) {
     const cfg = getArkConfig();
     if (!cfg) return null;
     return wallet.loadArkState(cfg.ark);
+  }
+
+  // Which receives actually arrived over Lightning? A payment to the user's
+  // name@coinos.io address settles on the registrar's node and lands here as
+  // an ordinary arkoor from its float wallet — the mailbox protocol carries
+  // no memo, so the movement alone can't name the rail the sender used. The
+  // registrar keeps a receipt per LN settlement it forwarded; matching those
+  // against receive movements (exact amount, delivery within a couple of
+  // minutes) marks the row viaLn so it wears the ⚡ the sender expects.
+  // Best-effort and cosmetic: a rare amount+time collision only mislabels an
+  // icon. The receipt's payment hash is stamped on the matched movement so a
+  // receipt never claims a second row on later passes.
+  let lnTagBusy = false, lnTagT = 0, lnTagSeen = -1;
+  async function tagLnReceives(mgr) {
+    if (lnTagBusy) return;
+    // nothing a receipt could match (the registrar keeps them 7 days) —
+    // don't spend a signed fetch on every boot of a quiet wallet
+    if (!(mgr.state.movements || []).some((m) => m.type === 'receive' && m.status === 'complete'
+        && !m.viaLn && (m.ts || 0) > Date.now() - 7 * 86400_000)) return;
+    lnTagBusy = true;
+    try {
+      const receipts = await Promise.resolve(ctx.hook('namesLnReceipts')).catch(() => null);
+      if (!receipts || !receipts.length || ark !== mgr || !mgr.state) return;
+      const moves = (mgr.state.movements || [])
+        .filter((m) => m.type === 'receive' && m.status === 'complete');
+      const used = new Set(moves.filter((m) => m.lnHash).map((m) => m.lnHash));
+      let changed = false;
+      for (const r of receipts) {
+        if (r.hash && used.has(r.hash)) continue;
+        let best = null;
+        for (const m of moves) {
+          if (m.viaLn || m.amountSat !== r.sat) continue;
+          const dt = Math.abs((m.ts || 0) - r.ts);
+          if (dt > 180_000) continue;
+          if (!best || dt < Math.abs((best.ts || 0) - r.ts)) best = m;
+        }
+        if (!best) continue;
+        best.viaLn = true;
+        if (r.hash) { best.lnHash = r.hash; used.add(r.hash); }
+        changed = true;
+      }
+      if (changed) mgr._save();
+    } finally { lnTagBusy = false; }
+  }
+  // Fires off onUpdate, so gate on the thing that actually warrants a fetch:
+  // the count of untagged receives changed (a new receive landed, or a
+  // snapshot brought some in). Debounced so a catch-up burst asks once.
+  function scheduleLnTag(mgr) {
+    const n = (mgr.state.movements || []).reduce((c, m) =>
+      c + (m.type === 'receive' && m.status === 'complete' && !m.viaLn ? 1 : 0), 0);
+    if (n === lnTagSeen) return;
+    lnTagSeen = n;
+    clearTimeout(lnTagT);
+    lnTagT = setTimeout(() => { if (ark === mgr) tagLnReceives(mgr).catch(() => {}); }, 2000);
   }
 
   // A wallet that opens onto "Savings: 0" while its money sits in Spending
@@ -1069,11 +1129,13 @@ export function arkFeature(ctx) {
       'div',
       { class: 'item', style: 'cursor:pointer', onClick: () => { ui.arkMoveDetail = m.id; render(); } },
       // The circle's glyph names the RAIL the money actually rode: ⚡ for
-      // Lightning, the Bitcoin mark for the on-chain movements (board pulls
-      // coins in from chain; offboard/exit push them back out — each is a
-      // real tx with a txid), and the Ark mark for pure off-chain hops.
+      // Lightning (including a receive the registrar forwarded from an LN
+      // settlement — viaLn, matched against its receipts), the Bitcoin mark
+      // for the on-chain movements (board pulls coins in from chain;
+      // offboard/exit push them back out — each is a real tx with a txid),
+      // and the Ark mark for pure off-chain hops.
       // Direction is carried by the tint + signed amount, no text chip.
-      m.type.startsWith('ln-')
+      m.type.startsWith('ln-') || m.viaLn
         ? h('div', { class: `ico ${incoming ? 'in' : 'out'}` }, '⚡')
         : ONCHAIN_ARK.has(m.type)
           ? h('div', { class: `ico ${incoming ? 'in' : 'out'}`, html: BITCOIN_ICON(20) })
@@ -1190,7 +1252,7 @@ export function arkFeature(ctx) {
         // the rail the user chose is the one to show: a payment SENT over
         // Lightning stays Lightning here, however it settled underneath; an
         // on-chain move (board/offboard/exit) wears the Bitcoin mark
-        m.type.startsWith('ln-') ? h('span', { style: 'font-size:18px' }, '⚡')
+        m.type.startsWith('ln-') || m.viaLn ? h('span', { style: 'font-size:18px' }, '⚡')
           : ONCHAIN_ARK.has(m.type) ? h('span', { html: BITCOIN_ICON(18) })
           : h('span', { html: ARK_ICON(18) }),
         h('h3', { style: 'margin:0' }, label),

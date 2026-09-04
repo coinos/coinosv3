@@ -359,6 +359,8 @@ export function namesFeature(ctx) {
   // Suggest the identity's own nostr username as the claim default — nobody
   // should have to retype who they already are — but only when that name is
   // actually free on the registrar (or already theirs to retake).
+  let lnReceipts = { at: 0, p: null };
+
   let suggestedFor = null;
   function suggestName() {
     const me = (hook('nostrLoginIdentity') || {}).pubkey || (wallet.nostrPubkey && wallet.nostrPubkey());
@@ -764,6 +766,22 @@ export function namesFeature(ctx) {
         h('button', { class: 'btn-ghost btn-block', onClick: () => goBack(() => { ui.nameEditOpen = null; ui.nameClaimError = null; }) }, t('back')));
     },
     namesAdoptIdentity(signer, npub) { return adoptIdentity(signer, npub); },
+    // Recent LN settlements the registrar forwarded to this wallet's name(s)
+    // as float arkoors — the ark feature matches them against its receive
+    // movements to put ⚡ on the rows that actually arrived over Lightning.
+    // Lives here because the registrar call needs the wallet's NIP-98
+    // signer. Cached briefly: a receive burst asks more than once.
+    namesLnReceipts() {
+      if (!available()) return Promise.resolve([]);
+      if (lnReceipts.p && Date.now() - lnReceipts.at < 30_000) return lnReceipts.p;
+      lnReceipts = {
+        at: Date.now(),
+        p: post('/lnreceipts', 'GET')
+          .then((j) => j.receipts || [])
+          .catch(() => { lnReceipts.at = 0; return []; }),
+      };
+      return lnReceipts.p;
+    },
     // the claimed payment address, for anyone prefilling a lightning address
     namesAddress() { const st = load(); return st.name ? `${st.name}@${st.domain || DOMAIN()}` : null; },
     // Sign-in races this lookup against the seed work: by the time the

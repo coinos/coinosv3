@@ -305,13 +305,27 @@ const arkParamOf = (uri) => {
   return m ? decodeURIComponent(m[1]) : null;
 };
 
+// A float arkoor delivery is indistinguishable from any other ark receive on
+// the wallet's side (the mailbox protocol carries no memo), so remember each
+// LN settlement we forwarded that way: the wallet asks /lnreceipts and
+// matches by amount + delivery time to put the ⚡ on the right history rows.
+// Bounded per name; entries age out on the invoice-retention horizon. Only
+// float deliveries are recorded — a viaClink delivery runs the wallet's own
+// LN-receive flow, which tags itself.
+function recordLnReceipt(name, sat, hash) {
+  const all = state.lnReceipts ||= {};
+  const cutoff = Date.now() - 7 * 86400_000;
+  all[name] = [...(all[name] || []).filter((r) => r.ts > cutoff),
+    { sat, ts: Date.now(), ...(hash ? { hash } : {}) }].slice(-50);
+}
+
 // Deliver a settled payment to the name's owner. Two ways, and we try the
 // one that works while they're asleep first:
 //   1. an arkoor send from the float — instant, free, needs no cooperation
 //   2. ask their wallet for an invoice and pay it over Lightning — needs no
 //      float at all, but only works while something of theirs is listening
 // Failing both, it queues and retries; nothing is ever dropped silently.
-async function forward(name, sat) {
+async function forward(name, sat, hash) {
   const rec = state.names[name];
   const dest = rec && arkParamOf(rec.uri);
   const clink = clinkDest(rec);
@@ -320,6 +334,8 @@ async function forward(name, sat) {
   const viaFloat = async () => {
     if (!dest || !fwd || fwd.balance().spendableSat < sat) return false;
     await fwd.send(dest, sat);
+    recordLnReceipt(name, sat, hash);
+    persist();
     log(`forwarded ${sat} sat to ${name}`);
     return true;
   };
@@ -463,11 +479,11 @@ async function settleLoop() {
       persist();
     }
     try {
-      await forward(name, sat);
+      await forward(name, sat, inv.payment_hash);
     } catch (e) {
       log(`forward failed for ${name} (${sat} sat): ${e.message} — queued`);
       state.pending = state.pending || [];
-      state.pending.push({ name, sat, ts: Date.now() });
+      state.pending.push({ name, sat, hash: inv.payment_hash, ts: Date.now() });
       persist();
     }
   }
@@ -579,7 +595,7 @@ setInterval(async () => {
   const still = [];
   for (const p of q) {
     if (p.next && Date.now() < p.next) { still.push(p); continue; }
-    try { await forward(p.name, p.sat); }
+    try { await forward(p.name, p.sat, p.hash); }
     catch (e) {
       log(`forward retry failed for ${p.name} (${p.sat} sat, try ${(p.tries || 0) + 1}): ${e.message}`);
       p.tries = (p.tries || 0) + 1;
@@ -868,6 +884,25 @@ Bun.serve({
       } catch (e) {
         return json({ error: e.message || 'no route found' }, 404);
       }
+    }
+
+    // Recent LN settlements forwarded to the caller's name(s) as float
+    // arkoors — the wallet matches them against its receive movements to
+    // mark which ones actually arrived over Lightning. NIP-98 authed and
+    // owner-only: this is a feed of incoming amounts.
+    if (url.pathname === '/lnreceipts' && req.method === 'GET') {
+      if (!rateOk(ip, 30)) return json({ error: 'rate limited' }, 429);
+      const a = await checkNip98(req, url, '');
+      if (a.error) return json({ error: a.error }, 401);
+      const receipts = [];
+      for (const [key, rec] of Object.entries(state.names)) {
+        if (rec.pubkey !== a.pubkey && rec.manager !== a.pubkey) continue;
+        for (const r of (state.lnReceipts || {})[key] || []) {
+          receipts.push({ name: key, sat: r.sat, ts: r.ts, hash: r.hash || null });
+        }
+      }
+      receipts.sort((x, y) => y.ts - x.ts);
+      return json({ receipts: receipts.slice(0, 100) });
     }
 
     // Prefix search over registered names — powers recipient search in the

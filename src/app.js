@@ -421,11 +421,23 @@ function animatedAmount(key, sat) {
   return el;
 }
 
+let _carDragging = false; // a balance-carousel drag is in progress
+let _renderDeferred = false;
 function render() {
+  // A background render mid carousel-drag rebuilds the strip; the morph then
+  // strips the drag's inline scroll-snap-type:none, so mandatory snap yanks
+  // the card back to its origin — the "jump partway through" stutter (a
+  // position jump, not a dropped frame). Hold renders for the ~sub-second of a
+  // drag and flush one when it ends; the DOM never churns under the finger.
+  if (_carDragging) { _renderDeferred = true; return; }
   // A render that throws must never brick the page silently: stale DOM keeps
   // its handlers, every one of them calls render again, and every tap turns
   // into a no-op. Show the error and offer the way out instead.
   try { renderInner(); } catch (err) { renderCrash(err); }
+}
+function endCarouselDrag() {
+  _carDragging = false;
+  if (_renderDeferred) { _renderDeferred = false; render(); }
 }
 function renderCrash(err) {
   console.error('render failed:', err);
@@ -3448,6 +3460,7 @@ function balanceCard() {
     // a card mid-drag is browsing, not choosing; release is the choice.
     const settle = (el) => {
       if (el._dragging) { dlog('settle-skip:dragging'); return; }
+      endCarouselDrag(); // motion has stopped — release the render hold (flushes any deferred render)
       const mid = el.scrollLeft + el.clientWidth / 2;
       let best = 0, bestD = Infinity;
       [...el.children].forEach((k, i) => {
@@ -3481,8 +3494,13 @@ function balanceCard() {
       // (scrollend would be the semantic signal but it doesn't fire reliably
       // for programmatic scrolls across browsers, so it's not relied on.)
       onScrollend: (e) => { const el = e.currentTarget; if (!el._dragging) { clearTimeout(el._settle); settle(el); } },
-      onTouchstart: (e) => { const el = e.currentTarget; el._dragging = true; clearTimeout(el._settle); },
-      onTouchend: (e) => { e.currentTarget._dragging = false; }, // onScroll's debounce settles it
+      onTouchstart: (e) => { const el = e.currentTarget; el._dragging = true; _carDragging = true; clearTimeout(el._settle); },
+      onTouchend: (e) => {
+        e.currentTarget._dragging = false; // onScroll's debounce settles it
+        // safety: if momentum produces no scroll events, settle (which clears
+        // _carDragging) may never fire — release the render hold anyway
+        setTimeout(() => { if (!e.currentTarget._dragging && _carDragging) endCarouselDrag(); }, 700);
+      },
       // Desktop: scroll-snap has no mouse drag, so emulate one — grab the
       // strip and pull. Touch keeps the native pan (pointerType check);
       // buttons keep their clicks untouched. Mandatory snap fights raw
@@ -3514,6 +3532,7 @@ function balanceCard() {
           if (!moved && Math.abs(dx) > 4) {
             moved = true;
             el._dragging = true;
+            _carDragging = true; // hold renders so the morph can't strip snap-none mid-drag
             el.classList.add('grabbing');
             el.style.scrollSnapType = 'none';
           }
@@ -3529,7 +3548,10 @@ function balanceCard() {
           window.removeEventListener('pointerup', up);
           el.classList.remove('grabbing');
           el._dragging = false;
-          if (!moved) return;
+          // safety: if the release glide produces no scroll events, settle
+          // never fires to release the render hold — do it after a beat
+          setTimeout(() => { if (!el._dragging && _carDragging) endCarouselDrag(); }, 700);
+          if (!moved) { endCarouselDrag(); return; }
           el._dragged = Date.now(); // the release's click must not double as a card tap
           // Commit to a neighbor on a small, deliberate move — not only when
           // the drag drags PAST the halfway point. A short flick that traveled

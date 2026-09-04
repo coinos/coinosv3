@@ -3069,16 +3069,16 @@ export function arkFeature(ctx) {
       if (sel && sel !== 'spending') return []; // ark movements are the Spending timeline
       const s = arkStateNow();
       if (!s) return [];
-      // Memoized briefly: this rebuilds, sorts, and dedupes the whole
-      // movements list plus the accounted-inputs set — fine once, wasteful
-      // on every repaint. Movements only change through saves that trigger
-      // a render themselves, so a short reuse window costs nothing visible.
-      const key = `${(s.movements || []).length}:${(s.actions || []).length}`;
-      if (this._histMemo && this._histMemo.key === key && Date.now() - this._histMemo.t < 1500) {
-        return this._histMemo.val;
-      }
+      // Memoized on the state's REVISION, not a timer. This rebuild sorts and
+      // dedupes every movement, resolves gifts, and touches secp256k1 — ~60ms
+      // cold. A 1.5s TTL used to re-cool it between unhurried flicks, so every
+      // account switch paid the rebuild and stuttered the slide; keyed on _rev
+      // it's reused until the data actually changes (each _save bumps _rev),
+      // and stays warm no matter how slowly the user flicks back and forth.
+      const key = `${s._rev || 0}:${(s.movements || []).length}:${(s.actions || []).length}`;
+      if (this._histMemo && this._histMemo.key === key) return this._histMemo.val;
       const val = this._histBuild(s);
-      this._histMemo = { key, t: Date.now(), val };
+      this._histMemo = { key, val };
       return val;
     },
     _histBuild(s) {

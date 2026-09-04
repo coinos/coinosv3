@@ -161,6 +161,10 @@ export class ArkManager {
   }
 
   _save() {
+    // a monotonic revision that bumps on every state change — lets memoized
+    // derivations (history build, etc.) invalidate exactly when the data
+    // changes instead of on a timer that re-cools between interactions
+    this.state._rev = (this.state._rev || 0) + 1;
     this.storage.save(this.state);
     this.onUpdate(this);
   }

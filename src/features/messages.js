@@ -1891,7 +1891,20 @@ export function messagesFeature(ctx) {
             }, name),
             h('span', { class: 'small faint', style: 'white-space:nowrap' },
               (isReply ? '↩ ' + t('profReplyTag') + ' · ' : '') + timeLabel(ev.created_at * 1000))),
-          canZap ? h('button', { class: 'btn-sm', title: t('zapTitle'), onClick: (e) => { e.stopPropagation(); zapNote(pk, ev); } }, '⚡') : null),
+          h('div', { class: 'row', style: 'gap:6px;flex-shrink:0' },
+            // Reply on every post: opens (or re-targets) its thread and puts
+            // the cursor in the reply box — no hunting for the row tap.
+            h('button', {
+              class: 'btn-sm', title: t('msgReply'), onClick: (e) => {
+                e.stopPropagation();
+                if (ui.noteThread && ui.noteThread.rootId === rootIdOf(ev)) {
+                  ui.noteThread.focusId = ev.id;
+                  render();
+                } else openNoteThread(ev);
+                setTimeout(() => document.querySelector('.thread-reply-input')?.focus(), 120);
+              },
+            }, '↩'),
+            canZap ? h('button', { class: 'btn-sm', title: t('zapTitle'), onClick: (e) => { e.stopPropagation(); zapNote(pk, ev); } }, '⚡') : null)),
         h('div', { class: 'small', style: 'white-space:pre-wrap;overflow-wrap:anywhere' }, ...noteBody(ev.content))));
   }
 

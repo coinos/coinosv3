@@ -1733,17 +1733,51 @@ export function messagesFeature(ctx) {
       const seen = new Set();
       const fresh = (evs || [])
         .filter((e) => !seen.has(e.id) && seen.add(e.id))
-        .sort((a, b) => b.created_at - a.created_at)
-        .slice(0, 20);
+        .sort((a, b) => b.created_at - a.created_at);
       if (fresh.length || !c.notes.length) {
         c.notes = fresh;
-        persistPage('notes', pk, fresh.map(slimNote));
+        persistPage('notes', pk, fresh.slice(0, 20).map(slimNote)); // cache stays bounded
       }
     })().catch(() => {}).finally(() => {
       c.status = 'ready';
       if (ui.profilePk === pk) render();
     });
     return c;
+  }
+
+  // Infinite scroll: pull the next page of OLDER notes (until = oldest seen)
+  // when the profile page nears its bottom. Guarded so scroll spam costs
+  // nothing: one fetch in flight, and a short answer marks the end.
+  // Registered at CONSTRUCTION, not init(): the public no-wallet profile
+  // (a /username deep link over the unlock screen) scrolls too, and init
+  // only runs once a wallet opens.
+  if (typeof window !== 'undefined') {
+    window.addEventListener('scroll', () => {
+      if (!ui.profilePk) return;
+      if (window.innerHeight + window.scrollY < (document.documentElement.scrollHeight || 0) - 600) return;
+      loadOlderNotes(ui.profilePk).catch(() => {});
+    }, { passive: true });
+  }
+  async function loadOlderNotes(pk) {
+    const c = notesCache.get(pk);
+    if (!c || c.status !== 'ready' || c.loadingMore || c.end) return;
+    const oldest = c.notes[c.notes.length - 1];
+    if (!oldest) { c.end = true; return; }
+    c.loadingMore = true;
+    render();
+    try {
+      const evs = await queryOn(await notesRelays(pk),
+        { kinds: [1], authors: [pk], limit: 30, until: oldest.created_at - 1 }, 4500);
+      const seen = new Set(c.notes.map((e) => e.id));
+      const older = (evs || [])
+        .filter((e) => !seen.has(e.id) && seen.add(e.id))
+        .sort((a, b) => b.created_at - a.created_at);
+      if (older.length) c.notes = [...c.notes, ...older];
+      else c.end = true; // the relays have nothing older
+    } catch {} finally {
+      c.loadingMore = false;
+      if (ui.profilePk === pk) render();
+    }
   }
 
   // Note content, safely: text stays text nodes — relay content must never
@@ -1757,6 +1791,12 @@ export function messagesFeature(ctx) {
       if (/^https?:\/\//i.test(part)) {
         if (/\.(png|jpe?g|gif|webp|avif)(\?[^\s]*)?$/i.test(part)) {
           out.push(h('img', { src: part, class: 'note-img', loading: 'lazy',
+            onError: (e) => { e.target.style.display = 'none'; } }));
+        } else if (/\.(mp4|webm|mov|m4v)(\?[^\s]*)?$/i.test(part)) {
+          // metadata-only preload: the poster frame paints, nothing streams
+          // until the viewer presses play
+          out.push(h('video', { src: part, class: 'note-video', controls: true,
+            preload: 'metadata', playsinline: true,
             onError: (e) => { e.target.style.display = 'none'; } }));
         } else {
           out.push(h('a', { href: part, target: '_blank', rel: 'noopener noreferrer' },
@@ -2337,7 +2377,10 @@ export function messagesFeature(ctx) {
                   render();
                   hook('matchSendText', npubStr);
                 } }, t('profPay')))),
-      // Their latest public notes, zappable in place.
+      // Their public notes: the PAGE scrolls (no inner scrollbox), older
+      // pages stream in as you near the bottom (the init() scroll listener →
+      // loadOlderNotes), and on phones the feed goes full-bleed — edge to
+      // edge, no card walls (see .notes-feed).
       (() => {
         const c = notesFor(pk);
         // while loading: an invisible copy of the empty-state line holds the
@@ -2348,11 +2391,15 @@ export function messagesFeature(ctx) {
           return h('div', { class: 'small faint', style: 'text-align:center' }, t('profNotesNone'));
         return h('div', { class: 'col', style: 'gap:8px' },
           h('div', { class: 'small muted', style: 'padding:0 2px' }, t('profNotesTitle')),
-          h('div', { class: 'card col', style: 'gap:0;padding:2px 14px;max-height:440px;overflow-y:auto' },
+          h('div', { class: 'card col notes-feed', style: 'gap:0' },
             ...c.notes.flatMap((ev, i) => [
               i ? h('div', { style: 'height:1px;background:var(--border,rgba(128,128,128,.18));margin:0 -14px' }) : null,
               noteRow(pk, ev, name),
-            ])));
+            ])),
+          c.loadingMore
+            ? h('div', { class: 'row gap6', style: 'justify-content:center;padding:4px 0' },
+                h('span', { class: 'spinner sm' }))
+            : null);
       })(),
       h('button', { class: 'btn-ghost btn-block', onClick: () => { ui.profilePk = null; ui.profOverThread = false; ui.pubProf = null; ui.profEdit = null; ui.profEditFilled = false; ui.profCompose = null; render(); } }, t('back')),
       mine ? logoutPop() : null);

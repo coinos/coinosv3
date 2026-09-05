@@ -489,6 +489,16 @@ hr.divider { margin: 16px 0; }
 
 /* Profile note feed: inline images stay contained, links wrap. */
 .note-img { display: block; max-width: 100%; max-height: 320px; border-radius: 10px; margin-top: 6px; object-fit: contain; }
+.note-video { display: block; max-width: 100%; max-height: 360px; border-radius: 10px; margin-top: 6px; background: #000; }
+/* the profile notes feed: page-scrolled (no inner scrollbox); on phones it
+   runs edge to edge — the card walls step outside #app's padding */
+.notes-feed { padding: 2px 14px; }
+@media (max-width: 520px) {
+  .notes-feed {
+    margin-left: -16px; margin-right: -16px;
+    border-left: none; border-right: none; border-radius: 0;
+  }
+}
 
 
 /* Inline move-money panel on the balance card. */

@@ -463,6 +463,15 @@ if (import.meta.main) {
     .replaceAll('{{NWC_WAKE_FALLBACK}}', nwcSw ? '' : SW_WAKE_ONLY);
   await Bun.write('dist/sw.js', nwcSw ? swBody + '\n' + await buildSwNwc() : swBody);
   for (const f of STATIC) await Bun.write('dist/' + f, Bun.file('static/' + f));
+  // Android app plumbing: assetlinks.json vouches for the TWA wrapper's
+  // signing cert (URL-bar-less fullscreen), and the wrapper APK itself is
+  // served for sideloading when a build has been dropped in static/.
+  if (await Bun.file('static/.well-known/assetlinks.json').exists()) {
+    await Bun.write('dist/.well-known/assetlinks.json', Bun.file('static/.well-known/assetlinks.json'));
+  }
+  if (await Bun.file('static/coinos.apk').exists()) {
+    await Bun.write('dist/coinos.apk', Bun.file('static/coinos.apk'));
+  }
   // default avatars, self-hosted since coinos.io's copies are half-broken
   const { readdirSync } = await import('node:fs');
   for (const f of readdirSync('static/punks')) await Bun.write('dist/punks/' + f, Bun.file('static/punks/' + f));

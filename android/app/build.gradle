@@ -1,0 +1,36 @@
+apply plugin: 'com.android.application'
+
+def keystoreProps = new Properties()
+def keystoreFile = rootProject.file('keystore.properties')
+if (keystoreFile.exists()) keystoreProps.load(new FileInputStream(keystoreFile))
+
+android {
+  namespace 'io.coinos.app'
+  compileSdk 35
+  defaultConfig {
+    applicationId 'io.coinos.app'
+    minSdk 24
+    targetSdk 35
+    versionCode 1
+    versionName '1.0'
+  }
+  signingConfigs {
+    release {
+      if (keystoreFile.exists()) {
+        storeFile rootProject.file(keystoreProps['storeFile'])
+        storePassword keystoreProps['storePassword']
+        keyAlias keystoreProps['keyAlias']
+        keyPassword keystoreProps['keyPassword']
+      }
+    }
+  }
+  buildTypes {
+    release {
+      minifyEnabled false
+      if (keystoreFile.exists()) signingConfig signingConfigs.release
+    }
+  }
+}
+dependencies {
+  implementation 'com.google.androidbrowserhelper:androidbrowserhelper:2.5.0'
+}

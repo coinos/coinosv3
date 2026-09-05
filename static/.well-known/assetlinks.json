@@ -1,0 +1,8 @@
+[{
+  "relation": ["delegate_permission/common.handle_all_urls"],
+  "target": {
+    "namespace": "android_app",
+    "package_name": "io.coinos.app",
+    "sha256_cert_fingerprints": ["76:64:83:AB:83:72:C0:2F:84:06:D2:95:95:E7:38:9A:28:69:19:0B:42:9E:0F:FD:09:2E:BB:0B:FA:2B:C2:F4"]
+  }
+}]

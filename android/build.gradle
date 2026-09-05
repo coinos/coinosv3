@@ -1,0 +1,9 @@
+// Android TWA wrapper for v3.coinos.io — exists so the app can register OS
+// intent filters for lightning:/bitcoin:/nostr:/lnurl: URIs, which a plain
+// PWA cannot (Chrome's protocol_handlers safelist has no nostr). The web
+// app itself stays the live site; this shell just forwards intents into it.
+buildscript {
+  repositories { google(); mavenCentral() }
+  dependencies { classpath 'com.android.tools.build:gradle:8.7.3' }
+}
+allprojects { repositories { google(); mavenCentral() } }

@@ -4850,6 +4850,21 @@ const ctx = {
     if (restored) { ui.onb = null; try { localStorage.removeItem(ONB_STEP_KEY); } catch {} }
   },
 };
+// Android wrapper intents: the TWA app (android/) registers for lightning:/
+// bitcoin:/nostr:/lnurl: URIs and forwards them here as ?u=<encoded>. Read
+// BEFORE features construct: a nostr npub/nprofile rewrites itself onto the
+// existing /npub… profile deep link (which the messages feature reads at
+// construction); payment URIs stash for dispatch once a wallet is open.
+const INTENT_URI = (() => {
+  try {
+    const u = new URLSearchParams(location.search).get('u');
+    if (!u) return null;
+    history.replaceState(null, '', location.pathname || '/');
+    const m = u.match(/^nostr:((npub|nprofile)1[a-z0-9]+)\/?$/i);
+    if (m) { history.replaceState(null, '', '/' + m[1]); return null; }
+    return u;
+  } catch { return null; }
+})();
 const FEATURES = buildFeatures(ctx);
 // Deferred features (gifts, NWC, hats) hold placeholder slots in FEATURES —
 // hook precedence is position — and arrive as separate chunks right after
@@ -4956,6 +4971,23 @@ document.addEventListener('visibilitychange', () => {
 // Claim a stashed migrated name as soon as a wallet is actually open — a
 // vault unlock or slow boot can put that minutes after 'load'. The stash
 // survives reloads, so an unfinished claim resumes on the next visit too.
+// Dispatch a stashed payment intent (lightning:/bitcoin:/lnurl: from the
+// Android wrapper) once a wallet is actually open — a locked vault or slow
+// boot can put that well after load. handleScanned routes it exactly like a
+// scanned QR: bolt11s and lnurls through the feature chain, bitcoin: through
+// BIP-21 (nostr profile intents already rerouted onto the /npub deep link).
+if (INTENT_URI) {
+  const started = Date.now();
+  const tick = setInterval(() => {
+    if (Date.now() - started > 10 * 60_000) return clearInterval(tick);
+    if (!activeAccount() || !wallet.loaded || ui.screen !== 'wallet') return;
+    clearInterval(tick);
+    ui.tab = 'send';
+    render();
+    handleScanned(INTENT_URI);
+  }, 500);
+}
+
 window.addEventListener('load', () => {
   if (!pendingMigratedName()) return;
   const started = Date.now();

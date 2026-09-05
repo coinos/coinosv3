@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <string name="app_name">coinos</string>
+  <!-- must match the site's /.well-known/assetlinks.json for URL-bar-less TWA -->
+  <string name="asset_statements">
+    [{
+      \"relation\": [\"delegate_permission/common.handle_all_urls\"],
+      \"target\": { \"namespace\": \"web\", \"site\": \"https://v3.coinos.io\" }
+    }]
+  </string>
+</resources>

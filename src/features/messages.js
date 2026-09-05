@@ -36,6 +36,12 @@ const DM_RELAYS = ['wss://relay.coinos.io', 'wss://nos.lol'];
 const NOTIFIER = 'https://nwcpush.coinos.io';
 const APP_BASE = 'https://v3.coinos.io';
 const CACHE_MAX = 50; // messages kept per channel / per DM thread in feature state
+// NIP-89 client attribution on PUBLIC notes (posts + thread replies) — other
+// clients render it as "via coinos". Name-only: the fuller form appends a
+// kind-31990 handler coordinate, which we haven't published. Deliberately
+// absent from anything encrypted (DMs, community wraps) — those are private
+// and need no billboard.
+const CLIENT_TAG = ['client', 'coinos'];
 
 export function messagesFeature(ctx) {
   const { h, ui, render, wallet, toast, hook } = ctx;
@@ -2011,7 +2017,7 @@ export function messagesFeature(ctx) {
     for (const c of caches) c.notes = [temp, ...c.notes];
     render();
     try {
-      const partial = { kind: 1, content: text, created_at: temp.created_at, tags: [] };
+      const partial = { kind: 1, content: text, created_at: temp.created_at, tags: [CLIENT_TAG] };
       const evt = id.signer instanceof Uint8Array ? finalizeEvent(partial, id.signer) : await id.signer.signEvent(partial);
       const relays = [...new Set([...(await notesRelays(id.pubkey)), ...wallet.nostrRelays()])];
       const ok = await publishOn(relays, evt);
@@ -2044,6 +2050,7 @@ export function messagesFeature(ctx) {
         ['e', rootId, '', 'root'],
         ...(target.id !== rootId ? [['e', target.id, '', 'reply']] : []),
         ...pTags.map((pk) => ['p', pk]),
+        CLIENT_TAG,
       ],
     };
     const evt = id.signer instanceof Uint8Array ? finalizeEvent(partial, id.signer) : await id.signer.signEvent(partial);

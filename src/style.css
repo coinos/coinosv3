@@ -399,17 +399,25 @@ hr.divider { margin: 16px 0; }
 .chat-avatar.spacer { background: transparent; height: 0; }
 .chat-body { min-width: 0; flex: 1; }
 .chat-meta { display: flex; align-items: baseline; gap: 7px; margin-bottom: 2px; }
-.chat-name { font-size: 13px; font-weight: 650; }
+.chat-name { font-size: 14px; font-weight: 650; }
 .chat-badge {
   font-size: 10px; font-weight: 650; color: var(--accent-fg); background: var(--accent);
   border-radius: 5px; padding: 1px 5px; margin-left: 5px; vertical-align: 1px;
 }
-.chat-time { font-size: 11px; color: var(--faint); }
+.chat-time { font-size: 12px; color: var(--faint); }
 .chat-bubble {
   position: relative; display: inline-block; max-width: 100%;
   background: var(--paper); border: 1px solid var(--line); border-radius: 12px;
-  padding: 7px 11px; font-size: 14px; line-height: 1.45;
+  padding: 7px 11px; font-size: 15px; line-height: 1.45;
   overflow-wrap: break-word; white-space: pre-wrap;
+}
+/* the messages surfaces run edge to edge on phones, like the notes feed —
+   the card walls step outside #app's padding and the borders/radius go */
+@media (max-width: 520px) {
+  .chat-page {
+    margin-left: -16px; margin-right: -16px;
+    border-left: none; border-right: none; border-radius: 0;
+  }
 }
 .chat-edited { font-size: 11px; color: var(--faint); }
 .chat-del {

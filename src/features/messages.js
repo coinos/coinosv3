@@ -2877,7 +2877,7 @@ export function messagesFeature(ctx) {
           memberCount ? t('msgMembers', { n: memberCount }) : t('msgEncrypted'))));
     })));
 
-    return h('div', { class: 'card col', style: 'gap:10px' }, ...kids);
+    return h('div', { class: 'card col chat-page', style: 'gap:10px' }, ...kids);
   }
 
   function linkInviteCard() {
@@ -2993,7 +2993,7 @@ export function messagesFeature(ctx) {
     keepBeating();
     if (ch) ping(room, ch.id, PRESENCE);
 
-    return h('div', { class: 'card col chat-card' },
+    return h('div', { class: 'card col chat-card chat-page' },
       h('div', { class: 'row between chat-head' },
         h('div', { class: 'row gap6', style: 'align-items:center;min-width:0' },
           backBtn(() => { ui.msgView = 'home'; ui.msgReplyTo = null; ui.msgSheet = null; render(); }),
@@ -3200,7 +3200,7 @@ export function messagesFeature(ctx) {
           h('span', { class: 'small muted chat-quote-text' }, String(m.rumor.content || '').replace(/\s+/g, ' ').slice(0, 90))),
         h('button', { class: 'chat-del', style: 'position:static;display:flex;flex-shrink:0', onClick: () => { ui.msgReplyTo = null; render(); } }, '×'));
     };
-    return h('div', { class: 'card col chat-card' },
+    return h('div', { class: 'card col chat-card chat-page' },
       h('div', { class: 'row chat-head gap6', style: 'align-items:center' },
         backBtn(() => { ui.msgView = 'home'; ui.msgReplyTo = null; ui.msgSheet = null; render(); }),
         avatar(peer),

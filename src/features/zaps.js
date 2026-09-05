@@ -121,6 +121,13 @@ export function zapsFeature(ctx) {
     }
     const params = await fetchPayParams(target.url);
     if (ui.zap !== z) return; // user navigated away
+    // A fixed-price LNURL (min == max — a bolt-card top-up, a paywall, a
+    // static charge) has no amount to ask for: fill it and lock the field,
+    // exactly like a fixed-amount BOLT 12 offer.
+    if (params.minSendable === params.maxSendable && params.minSendable >= 1000) {
+      params.fixedSat = Math.ceil(params.minSendable / 1000);
+      z.amount = getUnit() === 'sats' ? String(params.fixedSat) : (params.fixedSat / 1e8).toFixed(8);
+    }
     z.params = params;
     z.status = 'ready';
     render();

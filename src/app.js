@@ -24,6 +24,7 @@ import {
   timeAgo,
   SATS,
   BITCOIN_ICON,
+  ARK_MARK,
 } from './format.js';
 
 const wallet = new Wallet();
@@ -3347,9 +3348,19 @@ function balanceCard() {
     const viewSpending = view === 'spending';
     return h('div', { class: 'balance-face' },
       h('div', { class: 'row between', style: 'align-items:center' },
-        h('div', { class: 'small faint', style: 'text-transform:uppercase;letter-spacing:.06em' },
-          kindLocked ? viewLabel(acc0, view)
-            : hasSpending ? (viewSpending ? t('spendingLabel') : t('savingLabel')) : t('balance')),
+        h('div', { class: 'row', style: 'gap:7px;align-items:center;min-width:0' },
+          // account identity at a glance (user feedback): spending wears
+          // lightning + the ark mark, savings the bitcoin disc — color says
+          // which rail before the label is read
+          hasSpending && !kindLocked
+            ? h('span', {
+                class: 'face-ico ' + (viewSpending ? 'spend' : 'save'),
+                html: viewSpending ? '\u26a1' + ARK_MARK(12) : BITCOIN_ICON(14),
+              })
+            : null,
+          h('div', { class: 'small faint', style: 'text-transform:uppercase;letter-spacing:.06em' },
+            kindLocked ? viewLabel(acc0, view)
+              : hasSpending ? (viewSpending ? t('spendingLabel') : t('savingLabel')) : t('balance'))),
         manageBtn()),
       h('div', { class: 'amt', style: firstLoad ? 'opacity:.3' : '' },
         firstLoad ? h('span', { class: 'spinner sm', style: 'margin-right:8px' }) : null,
@@ -3631,7 +3642,7 @@ function balanceCard() {
         el._settle = setTimeout(() => settle(el), 130);
       },
     }, ORDER2.map((v) => h('div', {
-      class: 'card balance bal-slide',
+      class: 'card balance bal-slide face-' + v,
       // Tapping the peeking neighbor switches to it outright — the post-render
       // alignment then glides it into place. Guarded against a desktop drag's
       // release click and against buttons riding on the card.
@@ -3657,7 +3668,7 @@ function balanceCard() {
   const heroEl = faceFor(sel);
   applyAnim(heroEl, 'anim-tab-' + (_accDir || 'left'), dtAcc);
   _accDir = null;
-  return h('div', { class: 'card balance' }, heroEl, ...cardExtras());
+  return h('div', { class: 'card balance' + (hasSpending && !kindLocked ? ' face-' + sel : '') }, heroEl, ...cardExtras());
 }
 
 

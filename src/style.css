@@ -156,6 +156,15 @@ input { scroll-margin-top: 12px; }
 .card + .card { margin-top: 16px; }
 
 /* ---- balance card ---- */
+/* Account identity at a glance: a symbol beside the label and a colored
+   hairline across the card's crown — spending wears lightning + the ark
+   mark (violet), savings the bitcoin disc (orange). Inset shadow stacks
+   with the card's own and clips to the radius; no layout shift. */
+.face-ico { display: inline-flex; align-items: center; gap: 3px; font-size: 12px; line-height: 1; flex-shrink: 0; }
+.face-ico.save { color: #f7931a; }
+.face-ico.spend { color: #7c3aed; }
+.balance.face-spending { box-shadow: inset 0 3px 0 rgba(124, 58, 237, .55), var(--shadow); }
+.balance.face-savings { box-shadow: inset 0 3px 0 rgba(247, 147, 26, .6), var(--shadow); }
 .balance .amt { font-size: 34px; font-weight: 700; letter-spacing: -0.02em; font-family: var(--mono); }
 .balance .amt .unit { font-size: 18px; color: var(--muted); margin-left: 6px; font-weight: 600; }
 .balance .usd { color: var(--muted); margin-top: 2px; }

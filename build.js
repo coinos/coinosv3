@@ -242,7 +242,7 @@ export async function buildSwNwc({ minify = true } = {}) {
 }
 
 // Optional-feature selection: HAL_FEATURES is a comma list of enabled
-// features (gifts,swaps,ark,zaps,sp,nwc). Unset means all; "none"/"" means a minimal
+// features (gifts,ark,zaps,nwc,…). Unset means all; "none"/"" means a minimal
 // on-chain-only wallet. A build plugin swaps src/features/index.js for a
 // generated module that only imports the enabled features, so a disabled
 // feature's code (and its network endpoints) never enters the bundle.

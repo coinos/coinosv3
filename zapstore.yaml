@@ -14,7 +14,7 @@ description: |
 
   - **Spending** over Ark: instant, low-fee off-chain payments with
     unilateral exit — your keys, your coins
-  - **Savings** on-chain: a full BIP84 wallet with silent payments support
+  - **Savings** on-chain: a full BIP84 bitcoin wallet
   - **Lightning** sends and receives via the coinos ASP, plus a
     name@coinos.io payment address (BIP-353, LNURL, BOLT 12)
   - **Nostr** built in: encrypted DMs, community chat, posts, zaps

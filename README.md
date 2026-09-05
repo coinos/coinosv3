@@ -66,13 +66,6 @@ dependencies, ~2k lines):
   never take funds (claims/refunds are enforced on-chain). Pick a provider per
   network or point at your own.
 
-### Silent payments (feature: `sp`)
-
-- A static, publicly shareable **BIP-352 silent-payment address** (`sp1…`);
-  every payment lands at a fresh unlinkable on-chain address. Scanning uses a
-  configurable (self-hostable) tweak indexer, with the EC math in a Web Worker
-  and a chunked, resumable catch-up scan.
-
 ### Gifts (feature: `gifts`)
 
 - **Gift links** — presigned bearer transactions claimable by whoever opens
@@ -114,10 +107,10 @@ bun install
 bun run dev      # http://localhost:5173 (rebuilds on each refresh)
 ```
 
-The dev server also proxies local regtest backends (electrum, esplora, boltz,
-SP indexer) so the app works unchanged from a phone on the LAN. End-to-end
+The dev server also proxies local regtest backends (electrum, esplora, boltz)
+so the app works unchanged from a phone on the LAN. End-to-end
 suites in `tools/` drive a headless Chrome through the real flows (boarding,
-ark sends, offboard, unilateral exit, gifts, swaps, silent payments) against a
+ark sends, offboard, unilateral exit, gifts, swaps) against a
 local regtest stack.
 
 ## Build

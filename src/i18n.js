@@ -539,7 +539,6 @@ const STR = {
     silentPaymentNote: 'Silent payment',
     receiveAddressTab: 'Savings',
     receiveLnTab: 'Lightning',
-    receiveSpTab: 'Silent payment',
     arkReceiveIntro: 'Receive instantly and free — straight into Spending.',
     arkTitle: 'Spending balance',
     arkDesc: 'Your Spending balance sends and receives instantly with no mining fees, and stays yours — you can move it back to Savings whenever you like.',

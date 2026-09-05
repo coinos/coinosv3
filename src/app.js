@@ -29,7 +29,7 @@ import {
 const wallet = new Wallet();
 
 // ---- optional features ------------------------------------------------
-// Swaps, Ark, and silent payments plug into fixed seams (receive modes, send
+// Swaps and Ark plug into fixed seams (receive modes, send
 // matchers, history entries, balance lines, settings cards, lifecycle hooks).
 // FEATURES/ctx are assembled near the bottom of this file, once every helper
 // they capture exists; the hooks below are only ever called at runtime.

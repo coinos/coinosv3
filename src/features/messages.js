@@ -1869,14 +1869,19 @@ export function messagesFeature(ctx) {
     prefetchProfilePage(pk); // rows are tap-targets: have the page warm
     const isReply = ev.tags.some((x) => x[0] === 'e');
     const canZap = !isMe(pk) && !!(hook('arkReady') || hook('canLnZap'));
+    // an optimistic post mid-publish: visible but not yet a real event —
+    // dimmed, and no thread/reply/zap until its signed self takes over
+    const pending = !!ev.pending;
+    const openable = open && !pending;
     return h('div', {
       class: 'row',
       style: 'gap:10px;align-items:flex-start;padding:10px 0'
-        + (open ? ';cursor:pointer' : '')
+        + (openable ? ';cursor:pointer' : '')
+        + (pending ? ';opacity:.55' : '')
         + (focus ? ';background:var(--accent-soft,rgba(128,128,128,.08));border-radius:8px;padding-left:8px;padding-right:8px;margin:0 -8px' : ''),
       // closest('button') guard: on touch, a ⚡ tap must never double as a
       // row tap even if propagation quirks let the click reach us
-      onClick: open ? (e) => { if (e.target && e.target.closest && e.target.closest('button')) return; openNoteThread(ev); } : undefined,
+      onClick: openable ? (e) => { if (e.target && e.target.closest && e.target.closest('button')) return; openNoteThread(ev); } : undefined,
     },
       // the avatar is its own tap-target (profile), even inside an openable
       // row — its handler stops propagation, so the row still opens the thread
@@ -1891,7 +1896,7 @@ export function messagesFeature(ctx) {
             }, name),
             h('span', { class: 'small faint', style: 'white-space:nowrap' },
               (isReply ? '↩ ' + t('profReplyTag') + ' · ' : '') + timeLabel(ev.created_at * 1000))),
-          h('div', { class: 'row', style: 'gap:6px;flex-shrink:0' },
+          pending ? null : h('div', { class: 'row', style: 'gap:6px;flex-shrink:0' },
             // Reply on every post: opens (or re-targets) its thread and puts
             // the cursor in the reply box — no hunting for the row tap.
             h('button', {
@@ -1901,6 +1906,7 @@ export function messagesFeature(ctx) {
                   ui.noteThread.focusId = ev.id;
                   render();
                 } else openNoteThread(ev);
+                if (ui.noteThread) ui.noteThread.refocus = true; // survives the box relocating when the thread loads
                 setTimeout(() => document.querySelector('.thread-reply-input')?.focus(), 120);
               },
             }, '↩'),
@@ -1936,7 +1942,17 @@ export function messagesFeature(ctx) {
         .filter((e) => !seen.has(e.id) && seen.add(e.id))
         .sort((a, b) => a.created_at - b.created_at);
       c.status = 'ready';
-      if (ui.noteThread && ui.noteThread.rootId === rootId) render();
+      if (ui.noteThread && ui.noteThread.rootId === rootId) {
+        render();
+        // The inline reply box may have MOVED on this render (it slots under
+        // the focused note once that note exists) — a focus taken before the
+        // load finished died with the old position. Re-take it if the reply
+        // button asked for it.
+        if (ui.noteThread.refocus) {
+          ui.noteThread.refocus = false;
+          setTimeout(() => document.querySelector('.thread-reply-input')?.focus(), 30);
+        }
+      }
     })().catch(() => {
       c.status = 'ready';
       if (ui.noteThread && ui.noteThread.rootId === rootId) render();
@@ -1962,21 +1978,36 @@ export function messagesFeature(ctx) {
   // Publish a kind-1 reply to the focused note (NIP-10 markers), addressed to
   // the conversation's own relays plus ours, and shown optimistically.
   // A new top-level kind-1 note, published to the identity's own relays —
-  // the profile page's compose button. The fresh note is prepended to the
-  // profile's notes cache so it appears immediately.
+  // the profile page's compose button. OPTIMISTIC: a provisional copy sits
+  // at the top of the feed before any signing or relay round-trip (a remote
+  // signer alone can take seconds), swapped for the signed event on success
+  // and withdrawn on failure.
   async function publishPost(text) {
     const id = await identity();
     if (!id) throw new Error(t('msgNoIdentity'));
-    const partial = { kind: 1, content: text, created_at: Math.floor(Date.now() / 1000), tags: [] };
-    const evt = id.signer instanceof Uint8Array ? finalizeEvent(partial, id.signer) : await id.signer.signEvent(partial);
-    const relays = [...new Set([...(await notesRelays(id.pubkey)), ...wallet.nostrRelays()])];
-    const ok = await publishOn(relays, evt);
-    if (!ok) throw new Error(t('msgSendFailed'));
-    for (const pk of new Set([id.pubkey, ui.profilePk].filter(Boolean))) {
-      const c = notesCache.get(pk);
-      if (c && !c.notes.some((e) => e.id === evt.id)) c.notes = [evt, ...c.notes].slice(0, 20);
+    const temp = {
+      id: 'pending:' + Math.random().toString(36).slice(2),
+      pubkey: id.pubkey, content: text, created_at: Math.floor(Date.now() / 1000),
+      tags: [], pending: true,
+    };
+    const caches = [...new Set([id.pubkey, ui.profilePk].filter(Boolean))]
+      .map((pk) => notesCache.get(pk)).filter(Boolean);
+    for (const c of caches) c.notes = [temp, ...c.notes];
+    render();
+    try {
+      const partial = { kind: 1, content: text, created_at: temp.created_at, tags: [] };
+      const evt = id.signer instanceof Uint8Array ? finalizeEvent(partial, id.signer) : await id.signer.signEvent(partial);
+      const relays = [...new Set([...(await notesRelays(id.pubkey)), ...wallet.nostrRelays()])];
+      const ok = await publishOn(relays, evt);
+      if (!ok) throw new Error(t('msgSendFailed'));
+      for (const c of caches) c.notes = c.notes.map((e) => (e.id === temp.id ? evt : e));
+      render();
+      return evt;
+    } catch (e) {
+      for (const c of caches) c.notes = c.notes.filter((e) => e.id !== temp.id);
+      render();
+      throw e;
     }
-    return evt;
   }
 
   async function publishReply(c, s, text) {
@@ -2011,43 +2042,59 @@ export function messagesFeature(ctx) {
     const s = ui.noteThread;
     const c = threadFor(s.seed);
     const row = (ev) => noteRow(ev.pubkey, ev, displayName(ev.pubkey), { open: false, focus: ev.id === s.focusId && ev.id !== c.rootId });
+    // The reply box sits INLINE, right under the note it answers — it used
+    // to live at the bottom of the thread, where nobody scrolled to find it.
+    const replyBox = () => h('div', { class: 'row', style: 'gap:8px;align-items:center;padding:2px 0 10px' },
+      h('input', {
+        type: 'text', class: 'grow thread-reply-input', placeholder: t('threadReplyHint'),
+        value: s.draft || '',
+        onInput: (e) => { s.draft = e.target.value; },
+        onKeydown: (e) => { if (e.key === 'Enter') e.target.parentElement.querySelector('.thread-reply-send')?.click(); },
+      }),
+      h('button', {
+        class: 'btn-primary thread-reply-send', disabled: !!s.sending,
+        onClick: async () => {
+          const text = (s.draft || '').trim();
+          if (!text) return;
+          s.sending = true; render();
+          try {
+            await publishReply(c, s, text);
+            s.draft = '';
+            // the input may still be focused, and the morph won't touch a
+            // focused field's value — clear it by hand
+            const inp = document.querySelector('.thread-reply-input');
+            if (inp) inp.value = '';
+            toast(t('threadReplied'));
+          } catch (e) { toast(e.message); }
+          s.sending = false; render();
+        },
+      }, s.sending ? h('span', { class: 'spinner sm' }) : t('threadReplySend')));
+    // rows with the reply box slotted under the focused note (the root when
+    // nothing narrower is focused; appended at the end if the focused note
+    // hasn't loaded yet, so the box never disappears entirely)
+    const kids = [];
+    let boxPlaced = false;
+    const place = (ev) => {
+      if (boxPlaced) return;
+      if (ev.id === s.focusId || (!s.focusId && c.root && ev.id === c.root.id)) {
+        kids.push(replyBox());
+        boxPlaced = true;
+      }
+    };
+    if (c.root) { kids.push(row(c.root)); place(c.root); }
+    else {
+      kids.push(h('div', { class: 'small faint', style: 'padding:10px 0' },
+        c.status === 'loading' ? '…' : t('threadRootMissing')));
+    }
+    for (const ev of c.replies) { kids.push(noteSep(), row(ev)); place(ev); }
+    if (c.status === 'loading') kids.push(h('div', { class: 'row', style: 'justify-content:center;padding:12px' }, h('span', { class: 'spinner sm' })));
+    else if (!c.replies.length) kids.push(h('div', { class: 'small faint', style: 'text-align:center;padding:10px 0' }, t('threadNoReplies')));
+    if (!boxPlaced) kids.push(replyBox());
     return h('div', { class: 'col', style: 'gap:16px' },
-      ctx.brandHeader(false),
-      h('div', { class: 'card col', style: 'gap:0;padding:2px 14px' },
-        c.root ? row(c.root)
-          : h('div', { class: 'small faint', style: 'padding:10px 0' },
-              c.status === 'loading' ? '…' : t('threadRootMissing')),
-        ...c.replies.flatMap((ev) => [noteSep(), row(ev)]),
-        c.status === 'loading'
-          ? h('div', { class: 'row', style: 'justify-content:center;padding:12px' }, h('span', { class: 'spinner sm' }))
-          : !c.replies.length
-            ? h('div', { class: 'small faint', style: 'text-align:center;padding:10px 0' }, t('threadNoReplies'))
-            : null),
-      h('div', { class: 'card row', style: 'gap:8px;align-items:center' },
-        h('input', {
-          type: 'text', class: 'grow thread-reply-input', placeholder: t('threadReplyHint'),
-          value: s.draft || '',
-          onInput: (e) => { s.draft = e.target.value; },
-          onKeydown: (e) => { if (e.key === 'Enter') e.target.closest('.card').querySelector('.thread-reply-send')?.click(); },
-        }),
-        h('button', {
-          class: 'btn-primary thread-reply-send', disabled: !!s.sending,
-          onClick: async () => {
-            const text = (s.draft || '').trim();
-            if (!text) return;
-            s.sending = true; render();
-            try {
-              await publishReply(c, s, text);
-              s.draft = '';
-              // the input may still be focused, and the morph won't touch a
-              // focused field's value — clear it by hand
-              const inp = document.querySelector('.thread-reply-input');
-              if (inp) inp.value = '';
-              toast(t('threadReplied'));
-            } catch (e) { toast(e.message); }
-            s.sending = false; render();
-          },
-        }, s.sending ? h('span', { class: 'spinner sm' }) : t('threadReplySend'))),
+      // full header: search/chat/settings stay reachable mid-thread (only
+      // the public no-wallet surface drops the action row)
+      ctx.brandHeader(!ui.pubProf && wallet.loaded),
+      h('div', { class: 'card col', style: 'gap:0;padding:2px 14px' }, ...kids),
       h('button', { class: 'btn-ghost btn-block', onClick: () => { ui.noteThread = null; render(); } }, t('back')));
   }
 
@@ -2244,7 +2291,9 @@ export function messagesFeature(ctx) {
       : (full && urlish(full.banner)) || null;
     const draftPic = draft && urlish(draft.picture);
     return h('div', { class: 'col', style: 'gap:16px' },
-      ctx.brandHeader(false),
+      // full header on profiles too — losing the search button here made
+      // finding the NEXT person a trek back home
+      ctx.brandHeader(!ui.pubProf && wallet.loaded),
       h('div', { class: 'card col', style: 'gap:12px' },
         bannerUrl ? h('div', { class: 'profile-banner', style: `background-image:url(${JSON.stringify(bannerUrl)})` }) : null,
         h('div', { class: 'row gap6', style: 'align-items:center' },
@@ -2351,17 +2400,20 @@ export function messagesFeature(ctx) {
                     onInput: (ev) => { ui.profCompose = ev.target.value; },
                   }),
                   h('div', { class: 'row gap6' },
-                    h('button', { class: 'btn-primary grow', disabled: !!ui.profPosting, onClick: async () => {
+                    h('button', { class: 'btn-primary grow', onClick: async () => {
                       const text = (ui.profCompose || '').trim();
                       if (!text) return;
-                      ui.profPosting = true; render();
-                      try {
-                        await publishPost(text);
-                        ui.profCompose = null;
-                        toast(t('profPosted'));
-                      } catch (e) { toast(e.message || String(e)); }
-                      ui.profPosting = false; render();
-                    } }, ui.profPosting ? h('span', { class: 'spinner sm' }) : t('profPostBtn')),
+                      // the post is on screen instantly (publishPost is
+                      // optimistic) — close the composer now; a failure
+                      // reopens it with the text intact
+                      ui.profCompose = null;
+                      try { await publishPost(text); toast(t('profPosted')); }
+                      catch (e) {
+                        ui.profCompose = text;
+                        toast(e.message || String(e));
+                        render();
+                      }
+                    } }, t('profPostBtn')),
                     h('button', { class: 'btn-ghost', onClick: () => { ui.profCompose = null; render(); } }, t('cancel')))),
                 logoutBtn())
             : ui.pubProf
@@ -2431,7 +2483,7 @@ export function messagesFeature(ctx) {
   function userSearchScreen() {
     const s = ui.userSearch;
     return h('div', { class: 'col', style: 'gap:16px' },
-      ctx.brandHeader(false),
+      ctx.brandHeader(!ui.pubProf && wallet.loaded),
       h('div', { class: 'card col', style: 'gap:10px' },
         h('h3', { style: 'margin:0' }, t('searchUsers')),
         h('input', {

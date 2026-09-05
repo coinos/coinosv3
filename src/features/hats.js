@@ -134,6 +134,40 @@ export function hatsFeature(ctx) {
     }, 800);
   };
 
+  // ---- boot stamps ---------------------------------------------------------
+  // This feature is a DEFERRED chunk — for the beat between first paint and
+  // the chunk landing, avatars render bare and hats popped in late. The core
+  // bundle can't hold the hat art, so wrapAvatar leaves a STAMP per head
+  // (art + percent geometry, size-independent) in localStorage, and the
+  // avatar factory replays stamps until this chunk takes over.
+  let stamps = null, stampT = 0;
+  const stampStore = () => {
+    if (stamps === null) { try { stamps = JSON.parse(localStorage.getItem('hat-stamps') || '{}'); } catch { stamps = {}; } }
+    return stamps;
+  };
+  const stamp = (pk, hat) => {
+    const s = stampStore();
+    if (!hat) {
+      // a bare head clears its stamp, or a removed hat would ghost on boot
+      if (s[pk]) { delete s[pk]; saveStamps(); }
+      return;
+    }
+    const next = { s: posStyle(hat), a: hat.art, t: Date.now() };
+    if (!s[pk] || s[pk].a !== next.a || s[pk].s !== next.s) {
+      s[pk] = next;
+      const keys = Object.keys(s);
+      if (keys.length > 40) {
+        keys.sort((a, b) => (s[a].t || 0) - (s[b].t || 0));
+        for (const k of keys.slice(0, keys.length - 40)) delete s[k];
+      }
+      saveStamps();
+    } else s[pk].t = Date.now();
+  };
+  const saveStamps = () => {
+    clearTimeout(stampT);
+    stampT = setTimeout(() => { try { localStorage.setItem('hat-stamps', JSON.stringify(stamps)); } catch {} }, 500);
+  };
+
   const pending = new Set();
   let fetchT = 0, failedAt = 0;
   const queueFetch = (pk) => {
@@ -373,8 +407,12 @@ export function hatsFeature(ctx) {
     id: 'hats',
     // The avatar factory (and the search rows) offer every avatar up for
     // decoration; a bare head comes back null and is used as-is.
+    // Present the moment this chunk lands — the avatar factory stops
+    // replaying boot stamps once a real answer (hat or bare) is available.
+    hatsReady() { return true; },
     wrapAvatar(pk, node) {
       const hat = hatById(hatFor(pk));
+      stamp(pk, hat); // keep the boot stamp current (or clear it)
       if (!hat) return null;
       return h('span', { class: 'hat-wrap' },
         node,

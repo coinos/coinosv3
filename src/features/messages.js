@@ -1592,8 +1592,24 @@ export function messagesFeature(ctx) {
       node.classList.add('clickable');
       node.addEventListener('click', (e) => { e.stopPropagation(); openProfile(pk); });
     }
-    return hook('wrapAvatar', pk, node) || node;
+    return hook('wrapAvatar', pk, node) || hatStamp(pk, node) || node;
   };
+
+  // The hats feature is a deferred chunk — until it lands, replay last
+  // session's boot stamps (hat art + geometry it persisted) so a hat sits on
+  // the head from the FIRST frame instead of popping in a beat later. Once
+  // hatsReady answers, the stamps stand down: a null from wrapAvatar then
+  // genuinely means "bare head".
+  let _hatStamps = null;
+  function hatStamp(pk, node) {
+    if (hook('hatsReady')) return null;
+    if (_hatStamps === null) {
+      try { _hatStamps = JSON.parse(localStorage.getItem('hat-stamps') || '{}'); } catch { _hatStamps = {}; }
+    }
+    const s = _hatStamps[pk];
+    if (!s || !s.a) return null;
+    return h('span', { class: 'hat-wrap' }, node, h('span', { class: 'ava-hat', style: s.s, html: s.a }));
+  }
 
   // ---- profiles: view + own kind-0 editor ---------------------------------
 

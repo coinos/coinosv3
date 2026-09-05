@@ -481,6 +481,10 @@ hr.divider { margin: 16px 0; }
 /* Messages v2 — home lists, DM threads, invite panel. */
 .chat-back { font-size: 22px; line-height: 1; padding: 2px 10px 4px; flex-shrink: 0; }
 .chat-thread-row { display: flex; gap: 10px; align-items: center; cursor: pointer; }
+/* list rows read at message size: names 15, previews/member counts 14 —
+   the generic .small (12px) made the inbox feel like fine print */
+.chat-thread-row .chat-name { font-size: 15px; }
+.chat-thread-row .small { font-size: 14px; }
 .chat-preview { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .thread-when { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; }
 .thread-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--red); flex-shrink: 0; }

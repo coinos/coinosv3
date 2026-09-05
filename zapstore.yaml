@@ -1,0 +1,29 @@
+# Zapstore publishing config for the v3 Android wrapper (android/ TWA).
+# Publish: SIGN_WITH=<coinos nsec> zsp publish zapstore.yaml
+# The identifier comes from the APK package (io.coinos.app), which keeps
+# this a SEPARATE zapstore app from the legacy coinos listing. Rebuild the
+# APK (see android/) and bump versionCode before re-publishing.
+repository: https://github.com/coinos/coinosv3
+release_source: ./static/coinos.apk
+
+name: coinos v3
+summary: Self-custodial bitcoin wallet with instant Ark payments, on-chain savings and nostr chat
+description: |
+  The next generation of coinos — a self-custodial bitcoin wallet that runs
+  entirely on your device.
+
+  - **Spending** over Ark: instant, low-fee off-chain payments with
+    unilateral exit — your keys, your coins
+  - **Savings** on-chain: a full BIP84 wallet with silent payments support
+  - **Lightning** sends and receives via the coinos ASP, plus a
+    name@coinos.io payment address (BIP-353, LNURL, BOLT 12)
+  - **Nostr** built in: encrypted DMs, community chat, posts, zaps
+  - Handles lightning:, bitcoin:, nostr: and lnurl: links and NFC taps
+
+website: https://v3.coinos.io
+tags:
+  - bitcoin
+  - lightning
+  - wallet
+  - nostr
+  - ark

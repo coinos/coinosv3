@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Matches the PWA's launcher look: Chrome plates the (transparent) PWA
+     icon on white, so the adaptive icon does the same — white background,
+     logo scaled into the safe zone, launcher applies its own mask. -->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+  <background android:drawable="@color/ic_launcher_background" />
+  <foreground android:drawable="@drawable/ic_launcher_foreground" />
+</adaptive-icon>

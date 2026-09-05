@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-  <string name="app_name">coinos</string>
+  <string name="app_name">Coinos</string>
   <!-- must match the site's /.well-known/assetlinks.json for URL-bar-less TWA -->
   <string name="asset_statements">
     [{

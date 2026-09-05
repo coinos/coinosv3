@@ -32,9 +32,18 @@
         <category android:name="android.intent.category.BROWSABLE" />
         <data android:scheme="https" android:host="v3.coinos.io" />
       </intent-filter>
-      <!-- the payment + nostr schemes: the reason this wrapper exists.
-           lnurlw/lnurlp ride along — bolt cards and LNURL NFC tags emit
-           those schemes. -->
+    </activity>
+    <!-- Scheme + NFC intents land on this per-intent trampoline, not the
+         launcher: a TWA already on screen ignores a new intent to its
+         launcher, so a second lightning: tap used to do nothing. The
+         trampoline relaunches the TWA with the new URL and finishes.
+         lnurlw/lnurlp ride along — bolt cards and LNURL NFC tags emit
+         those schemes; NDEF dispatch needs no NFC permission. -->
+    <activity
+        android:name="io.coinos.app.IntentActivity"
+        android:exported="true"
+        android:noHistory="true"
+        android:theme="@android:style/Theme.Translucent.NoTitleBar">
       <intent-filter>
         <action android:name="android.intent.action.VIEW" />
         <category android:name="android.intent.category.DEFAULT" />
@@ -46,9 +55,6 @@
         <data android:scheme="lnurlw" />
         <data android:scheme="lnurlp" />
       </intent-filter>
-      <!-- NFC: an NDEF tag carrying one of our URIs (a bolt card tap, an
-           address sticker) dispatches here directly — same forwarding path
-           as a VIEW intent, no NFC permission needed for NDEF dispatch. -->
       <intent-filter>
         <action android:name="android.nfc.action.NDEF_DISCOVERED" />
         <category android:name="android.intent.category.DEFAULT" />

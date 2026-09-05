@@ -4985,6 +4985,23 @@ if (INTENT_URI) {
     ui.tab = 'send';
     render();
     handleScanned(INTENT_URI);
+    // A lightning:lnurl… (or ln-address) intent often lands BEFORE the
+    // feature that pays it is ready — ark connects lazily, so zaps'
+    // matchSendText declines and the raw URI falls through into the
+    // recipient field. Keep re-offering the text to the feature chain for a
+    // while; when a feature finally claims it (the zap amount screen takes
+    // over), sweep the leftover raw text out of the recipient.
+    let tries = 0;
+    const retry = setInterval(() => {
+      const s = ui.send;
+      const pending = s && s.recipients.length === 1 && s.recipients[0].address === INTENT_URI;
+      if (!pending || ++tries > 20) return clearInterval(retry);
+      if (featureMatchSend(INTENT_URI)) {
+        clearInterval(retry);
+        s.recipients[0].address = '';
+        render();
+      }
+    }, 1000);
   }, 500);
 }
 

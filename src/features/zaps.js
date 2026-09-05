@@ -43,6 +43,16 @@ export function zapsFeature(ctx) {
   }
 
   const shortCode = (s) => s.slice(0, 12) + '…' + s.slice(-6);
+  // What a zap target is CALLED on buttons and the amount screen: a human
+  // address when there is one, a shortened bech32 otherwise — a raw
+  // lightning:lnurl1… blob (an intent from the Android wrapper, an NFC tag)
+  // is unreadable and overflows the button it lands on.
+  const zapDisplay = (target, raw) => {
+    if (target.kind === 'npub') return shortNpub(npubOf(target.pk) || String(raw || '').trim());
+    if (target.address) return target.address;
+    const s = String(raw || '').trim().replace(/^lightning:/i, '');
+    return s.length > 24 ? shortCode(s) : s;
+  };
 
   // Begin the amount screen for a decoded offer. Fetching the actual invoice
   // (via the ASP's CLN) and verifying it happens on confirm.
@@ -314,8 +324,7 @@ export function zapsFeature(ctx) {
       // text is complete and advances immediately; npub/lnurl carry a bech32
       // checksum and only ever match when complete.
       if (typed && target.kind === 'lnaddr') return false;
-      const display = target.kind === 'npub' ? shortNpub(npubOf(target.pk) || text.trim()) : (target.address || text.trim());
-      begin(target, display);
+      begin(target, zapDisplay(target, text));
       return true;
     },
     // The typed-lightning-address affordance on the send form.
@@ -323,7 +332,7 @@ export function zapsFeature(ctx) {
       if (!canPay() || !ui.send || ui.send.recipients.length !== 1) return null;
       const target = parseZapTarget(a);
       if (!target || target.kind === 'npub') return null;
-      const display = target.address || String(a || '').trim();
+      const display = zapDisplay(target, a);
       return h('button', {
         type: 'button', class: 'btn-primary btn-block',
         onClick: () => begin(target, display),

@@ -1885,7 +1885,6 @@ export function arkFeature(ctx) {
     let exitFee = 0; try { exitFee = estimateExitFeeSat(mgr); } catch {}
     const feeRate = Math.max(1, (wallet.feeRates && wallet.feeRates.halfHourFee) || 2);
     const afterFee = Math.ceil(530 * feeRate);
-    const depthOf = (v) => { try { return mgr._decoded(v).genesis.length; } catch { return null; } };
     // relative and terse — "14d" / "13h" beside the hourglass — a date says
     // less than a countdown, and a coin past its height says so plainly
     // instead of the shifty "0h" (the server still honors it; the wallet's
@@ -1971,7 +1970,6 @@ export function arkFeature(ctx) {
             }, t('arkCoinsSelectAll')),
             h('span', { class: 'small faint' }, t('arkCoinsSelectAll'))),
           ...spend.map((v) => {
-            const d = depthOf(v);
             const f = feeNowOf(v);
             const xf = exitFeeOf(v);
             return h('label', { class: 'coin' },
@@ -1980,22 +1978,20 @@ export function arkFeature(ctx) {
                 render();
               }),
               h('div', { class: 'col grow', style: 'gap:3px;min-width:0' },
-                h('div', { class: 'row between', style: 'align-items:baseline;gap:8px' },
-                  h('span', {}, fmtAmount(v.amountSat),
-                    h('span', { class: 'small faint' }, ' ' + unitLabel())),
-                  h('span', { class: 'small ' + (f > 0 ? 'muted' : 'faint') },
-                    t('arkCoinsRowRenew', { fee: f > 0 ? fmtAmount(f) : t('arkDepthFree') }))),
+                h('span', {}, fmtAmount(v.amountSat),
+                  h('span', { class: 'small faint' }, ' ' + unitLabel())),
                 // little labeled chips instead of a dot-separated line: each
-                // fact wears its own pill, wrapping freely on narrow screens
+                // fact wears its own pill, wrapping freely on narrow screens —
+                // the renewal price rides here too, a chip like its siblings
                 h('div', { class: 'coin-chips' },
                   h('span', {
                     class: 'coin-chip' + (v.expiryHeight && tip && v.expiryHeight - tip <= 0 ? ' warn' : ''),
                     title: t('arkCoinsChipExpTitle'),
-                  }, '⏳ ' + expiresOf(v)),
-                  h('span', { class: 'coin-chip', title: t('arkCoinsChipDepthTitle') },
-                    t('arkCoinsChipDepth', { d: d == null ? '—' : String(d) })),
+                  }, '⏳ ' + t('arkCoinsChipExp', { d: expiresOf(v) })),
                   h('span', { class: 'coin-chip', title: t('arkCoinsChipExitTitle') },
-                    t('arkCoinsChipExit', { fee: xf == null ? '—' : fmtAmount(xf) })))));
+                    t('arkCoinsChipExit', { fee: xf == null ? '—' : fmtAmount(xf) + ' ' + unitLabel() })),
+                  h('span', { class: 'coin-chip', title: t('arkCoinsChipRenewTitle') },
+                    t('arkCoinsChipRenew', { fee: f > 0 ? fmtAmount(f) + ' ' + unitLabel() : t('arkDepthFree') })))));
           })),
         h('p', { class: 'small faint', style: 'margin:4px 0 0' }, t('arkCoinsExpiryNote'))),
       h('div', { class: 'card col', style: 'gap:8px' },

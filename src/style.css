@@ -485,6 +485,11 @@ hr.divider { margin: 16px 0; }
 .chat-row.dm .chat-body { max-width: 82%; }
 .chat-row.dm.mine .chat-body { text-align: right; }
 .chat-bubble.me { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); text-align: left; }
+/* a link inside the accent-colored own bubble: the page's link color is
+   calibrated against the PAGE background, not the bubble's (in dark mode a
+   near-white link sat on the white bubble) — take the bubble's own
+   foreground and let the underline say "link" */
+.chat-bubble.me a { color: inherit; text-decoration: underline; }
 .chat-row.dm .chat-time { font-size: 10px; color: var(--faint); margin-top: 2px; }
 
 /* Profile note feed: inline images stay contained, links wrap. */

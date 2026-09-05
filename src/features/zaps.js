@@ -121,6 +121,30 @@ export function zapsFeature(ctx) {
     }
     const params = await fetchPayParams(target.url);
     if (ui.zap !== z) return; // user navigated away
+    // Name the payee like a human: LNURL metadata usually carries the
+    // lightning address (text/identifier) — show that instead of a bech32
+    // blob, falling back to the text/plain description. And when the
+    // address is a coinos name, ask the registrar who owns it: with the
+    // pubkey in hand the screen wears their avatar (the profileChip the
+    // npub flow already uses), and a zap request attributes properly.
+    try {
+      const entries = JSON.parse(params.metadata || '[]');
+      const ident = (entries.find((e) => Array.isArray(e) && e[0] === 'text/identifier') || [])[1];
+      const plain = (entries.find((e) => Array.isArray(e) && e[0] === 'text/plain') || [])[1];
+      if (ident && !z.address) { z.address = String(ident); z.name = String(ident); }
+      else if (!z.address && plain) z.name = String(plain).slice(0, 64);
+      const m = /^([a-z0-9._-]{1,30})@coinos\.io$/i.exec(String(z.address || ident || ''));
+      if (m && !z.target.pk) {
+        fetch(`https://names.coinos.io/name/${encodeURIComponent(m[1].toLowerCase())}`)
+          .then((r) => r.json())
+          .then((j) => {
+            if (ui.zap === z && j && j.taken && /^[0-9a-f]{64}$/.test(j.pubkey || '')) {
+              z.target.pk = j.pubkey;
+              render();
+            }
+          }).catch(() => {});
+      }
+    } catch {}
     // A fixed-price LNURL (min == max — a bolt-card top-up, a paywall, a
     // static charge) has no amount to ask for: fill it and lock the field,
     // exactly like a fixed-amount BOLT 12 offer.

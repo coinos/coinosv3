@@ -404,8 +404,8 @@ export function zapsFeature(ctx) {
       return true;
     },
     sendView() { return zapView(); },
-    // Settings → Payments: the one-tap zap amount.
-    settingsCards() {
+    // Settings → Nostr: the one-tap zap amount.
+    nostrSettingsCards() {
       const cur = ctx.zapDefaultSat ? ctx.zapDefaultSat() : 0;
       return [h('div', { class: 'card col', style: 'gap:8px' },
         h('div', { class: 'row between', style: 'align-items:center;gap:10px' },

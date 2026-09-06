@@ -412,66 +412,52 @@ export function namesFeature(ctx) {
       } }, ui.busy ? h('span', { class: 'spinner' }) : t('namesClaim')));
   }
 
-  function namesCard() {
-    if (!available()) return null;
+  // Settings: one card per concern, all laid out (no collapsed sections —
+  // Adam: "I don't like how so much is hidden behind toggles"). The settings
+  // page reverses the collected list, so this returns bottom-to-top.
+  function namesCards() {
+    if (!available()) return [];
     const st = load();
-    if (st.name) {
-      const addr = `${st.name}@${st.domain || DOMAIN()}`;
-      return h('div', { class: 'card col' },
+    if (!st.name) {
+      return [h('div', { class: 'card col', 'data-key': 'names' },
         h('h3', {}, t('namesTitle')),
+        h('p', { class: 'small muted', style: 'margin:0' }, t('namesDesc')),
+        claimForm(false))];
+    }
+    const domain = st.domain || DOMAIN();
+    const addr = `${st.name}@${domain}`;
+    const card = (key, title, how, ...body) => h('div', { class: 'card col', 'data-key': key },
+      h('h3', {}, title),
+      how ? h('p', { class: 'small muted', style: 'margin:0' }, how) : null,
+      ...body);
+    return [
+      card('owndomain', t('namesOwnDomain'), t('namesOwnDomainHow'),
+        h('div', { class: 'addr-box break', style: 'font-size:11px' },
+          `${st.name}.user._bitcoin-payment.yourdomain.com. CNAME ${st.name}.user._bitcoin-payment.${domain}.`)),
+      card('ownnode', t('namesOwnNode'), t('namesOwnNodeMenuHow'), ownNodeSection()),
+      posLinkCard(st),
+      posCard(st),
+      card('custom', t('namesCustom'), t('namesCustomHow'), claimForm(false)),
+      card('names', t('namesTitle'), null,
         h('div', { class: 'addr-box break', style: 'font-size:14px' }, addr),
         h('div', { class: 'row gap6' },
-          copyBtn(`${st.name}@${st.domain || DOMAIN()}`, t('namesCopy')),
+          copyBtn(addr, t('namesCopy')),
           h('button', { class: 'btn-ghost btn-sm', onClick: async () => {
             await release(); toast(t('namesReleased')); render();
-          } }, t('namesRelease'))),
-        h('details', { class: 'small faint', 'data-key': 'custom' },
-          h('summary', {}, t('namesCustom')),
-          h('p', { style: 'margin:4px 0' }, t('namesCustomHow')),
-          claimForm(false)),
-        (() => {
-          const code = hook('nwcOfferString');
-          return code ? h('details', { class: 'small faint', 'data-key': 'zapcode' },
-            h('summary', {}, t('namesZapCode')),
-            h('p', { style: 'margin:4px 0' }, t('namesZapCodeHow')),
-            h('div', { class: 'addr-box break', style: 'font-size:10px' }, code),
-            copyBtn(code, t('namesZapCodeCopy'))) : null;
-        })(),
-        h('details', { class: 'small faint', 'data-key': 'pos' },
-          h('summary', {}, t('namesPos')),
-          h('p', { style: 'margin:4px 0' }, t('namesPosHow')),
-          posSection(st)),
-        h('details', { class: 'small faint', 'data-key': 'ownnode' },
-          h('summary', {}, t('namesOwnNode')),
-          h('p', { style: 'margin:4px 0' }, t('namesOwnNodeMenuHow')),
-          ownNodeSection()),
-        h('details', { class: 'small faint', 'data-key': 'owndomain' },
-          h('summary', {}, t('namesOwnDomain')),
-          h('p', { style: 'margin:4px 0' }, t('namesOwnDomainHow')),
-          h('div', { class: 'addr-box break', style: 'font-size:11px' },
-            `${st.name}.user._bitcoin-payment.yourdomain.com. CNAME ${st.name}.user._bitcoin-payment.${st.domain || DOMAIN()}.`)));
-    }
-    return h('div', { class: 'card col' },
-      h('h3', {}, t('namesTitle')),
-      h('p', { class: 'small muted', style: 'margin:0' }, t('namesDesc')),
-      claimForm(false));
+          } }, t('namesRelease')))),
+    ].filter(Boolean);
   }
 
   // A coinos POS terminal (coinos-pos) takes payments to this name with a
   // bearer token the registrar mints for the owner: the terminal can ring up
   // sales and see them settle, never spend. Shown once, never stored — the
   // token goes straight into the terminal's config at coinos.io/pos.
-  function posSection(st) {
+  function posCard(st) {
     const tok = ui.posToken;
-    const domain = st.domain || DOMAIN();
-    const body = () => ({ name: st.name, domain });
-    // The link the terminal broadcasts over NFC: the name's lnurlp on the
-    // registrar (it pins the sale just rung up), as a bech32 LNURL for
-    // wallet scanners and wrapped in coinos.io/ln/ for phones without one.
-    const payUrl = `${REGISTRAR}/lnurlp/${st.name}${domain === 'coinos.io' ? '' : `?domain=${encodeURIComponent(domain)}`}`;
-    const lnurl = bech32.encode('lnurl', bech32.toWords(new TextEncoder().encode(payUrl)), 2000).toUpperCase();
-    const link = `https://coinos.io/ln/${lnurl.toLowerCase()}`;
-    return h('div', { class: 'col', style: 'gap:6px' },
+    const body = () => ({ name: st.name, domain: st.domain || DOMAIN() });
+    return h('div', { class: 'card col', 'data-key': 'pos' },
+      h('h3', {}, t('namesPos')),
+      h('p', { class: 'small muted', style: 'margin:0' }, t('namesPosHow')),
       tok ? h('div', { class: 'addr-box break', style: 'font-size:10px' }, tok) : null,
       h('div', { class: 'row gap6', style: 'flex-wrap:wrap' },
         h('button', { class: 'btn-ghost btn-sm', onClick: async () => {
@@ -482,15 +468,25 @@ export function namesFeature(ctx) {
         h('button', { class: 'btn-ghost btn-sm', onClick: async () => {
           try { await post('/pos/token', 'DELETE', body()); ui.posToken = null; toast(t('namesPosRevoked')); render(); }
           catch (e) { toast(e.message); }
-        } }, t('namesPosRevoke'))),
-      h('details', { class: 'small faint', style: 'margin-top:6px', 'data-key': 'poslink' },
-        h('summary', {}, t('namesPosLink')),
-        h('p', { style: 'margin:4px 0' }, t('namesPosLinkHow')),
-        h('div', { style: 'align-self:center;max-width:220px', html: qrSvg(lnurl, { ec: 'L', mode: 'Alphanumeric' }) }),
-        h('div', { class: 'addr-box break', style: 'font-size:10px' }, lnurl),
-        h('div', { class: 'row gap6', style: 'flex-wrap:wrap' },
-          copyBtn(lnurl, t('namesPosCopyLnurl')),
-          copyBtn(link, t('namesPosCopyLink')))));
+        } }, t('namesPosRevoke'))));
+  }
+
+  // The link the terminal broadcasts over NFC: the name's lnurlp on the
+  // registrar (it pins the sale just rung up), as a bech32 LNURL for wallet
+  // scanners and wrapped in coinos.io/ln/ for phones without one.
+  function posLinkCard(st) {
+    const domain = st.domain || DOMAIN();
+    const payUrl = `${REGISTRAR}/lnurlp/${st.name}${domain === 'coinos.io' ? '' : `?domain=${encodeURIComponent(domain)}`}`;
+    const lnurl = bech32.encode('lnurl', bech32.toWords(new TextEncoder().encode(payUrl)), 2000).toUpperCase();
+    const link = `https://coinos.io/ln/${lnurl.toLowerCase()}`;
+    return h('div', { class: 'card col', 'data-key': 'poslink' },
+      h('h3', {}, t('namesPosLink')),
+      h('p', { class: 'small muted', style: 'margin:0' }, t('namesPosLinkHow')),
+      h('div', { style: 'align-self:center;max-width:220px', html: qrSvg(lnurl, { ec: 'L', mode: 'Alphanumeric' }) }),
+      h('div', { class: 'addr-box break', style: 'font-size:10px' }, lnurl),
+      h('div', { class: 'row gap6', style: 'flex-wrap:wrap' },
+        copyBtn(lnurl, t('namesPosCopyLnurl')),
+        copyBtn(link, t('namesPosCopyLink'))));
   }
 
   // The Receive tab's default pane: your name, big and scannable.
@@ -889,6 +885,16 @@ export function namesFeature(ctx) {
       }
       return null;
     },
-    settingsCards() { return [namesCard()]; },
+    settingsCards() { return namesCards(); },
+    // Settings → Nostr: the CLINK zap code (a nostr offer, so it lives with
+    // the other nostr settings rather than under the payment address).
+    nostrSettingsCards() {
+      const code = available() && hook('nwcOfferString');
+      return code ? [h('div', { class: 'card col', 'data-key': 'zapcode' },
+        h('h3', {}, t('namesZapCode')),
+        h('p', { class: 'small muted', style: 'margin:0' }, t('namesZapCodeHow')),
+        h('div', { class: 'addr-box break', style: 'font-size:10px' }, code),
+        h('div', { class: 'row gap6' }, copyBtn(code, t('namesZapCodeCopy'))))] : [];
+    },
   };
 }

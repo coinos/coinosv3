@@ -4829,6 +4829,21 @@ const ctx = {
     wallet.saveFeatureState('prefs', p);
     try { wallet.saveCache(); } catch {}
   },
+  // Per-recipient auto-pay budget: a fixed-amount LNURL/address the user
+  // trusts to pay without confirmation, up to this many sats. Keyed by the
+  // recipient's address/lnurl. Synced with the rest of prefs.
+  lnBudget: (key) => {
+    if (!key || !wallet.loadFeatureState) return 0;
+    return (wallet.loadFeatureState('prefs', {}).lnBudgets || {})[key] || 0;
+  },
+  setLnBudget: (key, sat) => {
+    if (!key) return;
+    const p = wallet.loadFeatureState('prefs', {});
+    p.lnBudgets = { ...(p.lnBudgets || {}) };
+    if (sat > 0) p.lnBudgets[key] = Math.floor(sat); else delete p.lnBudgets[key];
+    wallet.saveFeatureState('prefs', p);
+    try { wallet.saveCache(); } catch {}
+  },
   brandHeader, activeAccount, setAccounts: (list) => { accounts = list; },
   getAccounts: () => accounts,
   claimTargets, enterWallet, activateAccount, commitAccount,

@@ -854,7 +854,20 @@ export function arkFeature(ctx) {
     ui.arkLnPay = { invoice, meta: meta || null, amountSat: dec.amountSat, amount: '', feeSat: null, status: 'quote' };
     ui.sendError = '';
     render();
-    quoteArkLnPay(invoice, meta).catch(() => {
+    // An auto-pay recipient (a budget the user set) pays as soon as the quote
+    // lands — no tap. Guarded to the budget and to a single fire; anything
+    // off-script (over budget, no amount, a quote error) falls back to the
+    // normal review with the Pay button.
+    const maybeAutopay = () => {
+      const p2 = ui.arkLnPay;
+      if (!p2 || p2.invoice !== invoice || p2._autopaid) return;
+      if (p2.status !== 'ready' || !p2.meta || !p2.meta.autopay || p2.amountSat == null) return;
+      const budget = p2.meta.budgetKey && ctx.lnBudget ? ctx.lnBudget(p2.meta.budgetKey) : 0;
+      if (!(budget > 0 && p2.amountSat <= budget)) return;
+      p2._autopaid = true;
+      doArkLnPay();
+    };
+    quoteArkLnPay(invoice, meta).then(maybeAutopay).catch(() => {
       // The quote is a nicety — a dead esplora or quote service must not
       // wedge the form at an eternal spinner (it did: "Getting a quote…"
       // above a Failed-to-fetch, Pay unreachable). Price it like the outage
@@ -866,6 +879,7 @@ export function arkFeature(ctx) {
       p2.status = 'ready';
       ui.sendError = '';
       render();
+      maybeAutopay();
     });
     return true;
   }
@@ -943,6 +957,10 @@ export function arkFeature(ctx) {
         if (a.step === 'done') {
           ui.arkLnPaid = { amountSat: a.amountSat, meta: p.meta };
           if (p.meta && p.meta.pk) noteZap('inv:' + p.invoice, p.meta.pk);
+          // the user opted this recipient into auto-pay: remember the budget
+          // so the next fixed charge from them clears without a tap
+          if (p.setBudget && p.meta && p.meta.budgetKey && ctx.setLnBudget)
+            ctx.setLnBudget(p.meta.budgetKey, a.amountSat);
           ui.arkLnPay = null;
         } else if (ui.arkLnPay) {
           if (tries < 2 && lnRetryable(a)) {
@@ -1003,7 +1021,7 @@ export function arkFeature(ctx) {
         onClick: () => { ui.arkLnPaid = null; ui.send = blankSend(); render(); },
       },
         h('div', { class: 'check-badge' }, '⚡'),
-        h('h2', { style: 'margin:0' }, zap ? t('arkZapSentTitle') : t('arkLnPaidTitle')),
+        h('h2', { style: 'margin:0' }, zap && zap.social ? t('arkZapSentTitle') : t('arkLnPaidTitle')),
         zap && zap.name ? h('div', { class: 'small muted' }, zap.name) : null,
         h('div', { class: 'amount-neg', style: 'font-size:18px' }, '-' + fmtAmount(ui.arkLnPaid.amountSat) + u),
         h('div', { class: 'small muted' }, t('tapToProceed')));
@@ -1016,7 +1034,7 @@ export function arkFeature(ctx) {
     const total = (p.amountSat || 0) + (p.feeSat || 0);
     return h('div', { class: 'col', style: 'gap:12px' },
       h('div', { class: 'card col', style: 'gap:10px' },
-        h('h3', { style: 'margin:0' }, '⚡ ' + (zap ? t('lnZapReviewTitle') : t('lnPayTitle'))),
+        h('h3', { style: 'margin:0' }, '⚡ ' + (zap && zap.social ? t('lnZapReviewTitle') : t('lnPayTitle'))),
         h('div', { class: 'small muted' }, t('arkLnPayVia')),
         zap && (zap.name || zap.address) ? h('div', { class: 'small muted', style: 'word-break:break-all' }, zap.name || zap.address) : null,
         zap && zap.comment ? h('div', { class: 'small faint', style: 'font-style:italic;word-break:break-word' }, '“' + zap.comment + '”') : null,
@@ -1039,6 +1057,18 @@ export function arkFeature(ctx) {
           ? [h('div', { style: 'border-top:1px solid var(--line, #ddd);margin:2px 0' }), row(t('lnPayTotal'), total, true)]
           : null),
       ui.sendError ? h('div', { class: 'notice err' }, ui.sendError) : null,
+      // Offer to skip this confirmation next time: a fixed-amount merchant
+      // pay with no budget yet can be trusted up to this amount. Ticking it
+      // stores the budget on a successful pay (see settle); after that the
+      // same recipient auto-pays without this screen.
+      (zap && zap.budgetKey && zap.fixedSat && !zap.autopay
+        && p.status === 'ready'
+        && !(ctx.lnBudget && ctx.lnBudget(zap.budgetKey) > 0))
+        ? h('label', { class: 'row gap6', style: 'align-items:center;cursor:pointer' },
+            h('input', { type: 'checkbox', checked: !!p.setBudget, style: 'flex:0 0 auto;margin:0',
+              onChange: (e) => { p.setBudget = e.target.checked; } }),
+            h('span', { class: 'small muted' }, t('lnAutopayOffer', { name: zap.name || zap.address || '', n: fmtAmount(zap.fixedSat) + ' ' + unitLabel() })))
+        : null,
       p.status === 'paying'
         ? h('div', { class: 'card row gap6', style: 'align-items:center' },
             h('span', { class: 'spinner sm' }),

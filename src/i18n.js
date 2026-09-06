@@ -911,6 +911,7 @@ const STR = {
     lnPayNetworkFee: 'Network fee',
     lnPayTotal: 'Total',
     lnPayConfirm: 'Pay',
+    lnAutopayOffer: 'Auto-pay {name} up to {n} next time',
     lnPaySentTitle: 'Lightning payment sent',
     lnPaySentBody: 'The swap provider pays the invoice once the on-chain lockup confirms.',
     lnZapTitle: 'Zap over Lightning',

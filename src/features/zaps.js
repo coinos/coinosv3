@@ -61,12 +61,24 @@ export function zapsFeature(ctx) {
     return true;
   }
 
+  // A payment is a nostr ZAP only when it targets a person or a note (an
+  // npub, or a note-zap carrying an eventId). Paying a lightning address,
+  // an LNURL, or a merchant is a PAYMENT — even if the endpoint happens to
+  // support nostr zaps. Computed at begin() because resolve() rewrites the
+  // target kind (npub → its lnaddr) but keeps the eventId.
+  const isSocial = (target) => target.kind === 'npub' || !!target.eventId;
+
+  // A stable id for a fixed-amount recipient's auto-pay budget: their
+  // lightning address if we have one, else the LNURL bech32, else their pk.
+  const budgetKeyOf = (z) =>
+    z.address || z.target.lnurlBech32 || (z.target.pk ? 'pk:' + z.target.pk : null);
+
   // Kick off resolution of a parsed target. `display` is what we show as the
   // recipient until a profile name arrives.
   function begin(target, display) {
     ui.arkZap = null; ui.arkZapped = null; // in case we were handed off from ark
     ui.sendError = '';
-    const z = (ui.zap = { status: 'resolving', target, name: display, address: target.address || null, amount: '', comment: '' });
+    const z = (ui.zap = { status: 'resolving', target, name: display, address: target.address || null, amount: '', comment: '', social: isSocial(target) });
     render();
     resolve(z).catch((e) => { if (ui.zap === z) { z.status = 'error'; z.error = e.message; render(); } });
   }
@@ -154,6 +166,22 @@ export function zapsFeature(ctx) {
     }
     z.params = params;
     z.status = 'ready';
+    // A fixed-amount payment (not a social zap) has nothing to type, so the
+    // amount screen is a pointless confirm — go straight to the quote. And
+    // if this recipient carries an auto-pay budget that covers it, pay
+    // outright (confirm() passes autopay through to the review, which fetches
+    // the quote and pays without a tap). Over budget, or funds don't cover
+    // → show the screen so the amount/board handoff is still available.
+    if (!z.social && params.fixedSat) {
+      const ours = hook('lnSpendableSat');
+      const covers = ours == null || params.fixedSat <= ours;
+      if (covers) {
+        const key = budgetKeyOf(z);
+        z.autopay = !!(key && ctx.lnBudget && params.fixedSat <= (ctx.lnBudget(key) || 0));
+        confirm();
+        return;
+      }
+    }
     render();
   }
 
@@ -240,7 +268,16 @@ export function zapsFeature(ctx) {
         });
       }
       const invoice = await requestInvoice(p, { amountMsat: msat, zapRequest, lnurlBech32: z.target.lnurlBech32, comment: z.comment });
-      const meta = { name: z.name, address: z.address, pk: z.target.pk || null, comment: canZap ? z.comment : '', isZap: !!zapRequest };
+      const meta = {
+        name: z.name, address: z.address, pk: z.target.pk || null,
+        comment: canZap ? z.comment : '', isZap: !!zapRequest, social: z.social,
+        // a fixed-amount payment can carry (or offer to set) an auto-pay
+        // budget for this recipient — the review honors autopay and, when
+        // offered, remembers the budget on confirm
+        budgetKey: !z.social && p.fixedSat ? budgetKeyOf(z) : null,
+        fixedSat: p.fixedSat || null,
+        autopay: !!z.autopay,
+      };
       ui.zap = null;
       // Hand the bolt11 to the swaps feature's pay flow (review → confirm).
       hook('startLnPay', invoice, meta);
@@ -253,6 +290,9 @@ export function zapsFeature(ctx) {
   function zapView() {
     const z = ui.zap;
     if (!z) return null;
+    // "Zap" only for a social zap (a person / a note); a plain LNURL or
+    // merchant payment is a "Pay".
+    const heading = '⚡ ' + (z.social ? t('zapTitle') : t('lnPayTitle'));
     const back = () => { ui.zap = null; ui.sendError = ''; ui.send = blankSend(); render(); };
     // Resolution is a background step, not a screen: the send form stays put
     // and shows one inline line (resolvingNote below) until we can render
@@ -260,7 +300,7 @@ export function zapsFeature(ctx) {
     if (z.status === 'resolving') {
       // twin of ark's skeleton: identical shape, so the handoff is invisible
       return h('div', { class: 'card col', style: 'gap:12px' },
-        h('h3', {}, '⚡ ' + t('zapTitle')),
+        h('h3', {}, heading),
         (z.target && z.target.pk && hook('profileChip', z.target.pk, 'lg'))
           || h('div', { class: 'small muted break' }, z.name || z.address || ''),
         h('div', { class: 'row gap6', style: 'align-items:center;padding:6px 0' },
@@ -275,7 +315,7 @@ export function zapsFeature(ctx) {
     }
     if (z.status === 'error') {
       return h('div', { class: 'card col', style: 'gap:12px' },
-        h('h3', {}, '⚡ ' + t('zapTitle')),
+        h('h3', {}, heading),
         (z.target && z.target.pk && hook('profileChip', z.target.pk, 'lg')) || h('div', { class: 'small muted', style: 'word-break:break-all' }, z.name || ''),
         h('div', { class: 'notice err' }, z.error || t('lnZapFailed')),
         h('button', { class: 'btn-ghost btn-block', onClick: back }, t('back')));
@@ -298,7 +338,7 @@ export function zapsFeature(ctx) {
     const boardable = !!hook('arkReady') && ours != null;
     const needsBoard = boardable && (broke || (typedSats > 0 && typedSats > ours && typedSats <= theirMaxSat));
     return h('div', { class: 'card col', style: 'gap:12px' },
-      h('h3', {}, '⚡ ' + t('zapTitle')),
+      h('h3', {}, heading),
       (z.target && z.target.pk && hook('profileChip', z.target.pk, 'lg')) || h('div', { class: 'small muted', style: 'word-break:break-all' }, z.name || z.address || ''),
       h('div', { class: 'col gap6' },
         h('div', { class: 'input-group' },
@@ -323,13 +363,13 @@ export function zapsFeature(ctx) {
               maxlength: p.allowsNostr ? '280' : String(p.commentAllowed || 280),
               onInput: (e) => { z.comment = e.target.value; } })
           : null,
-        h('div', { class: 'small faint' }, p.allowsNostr ? t('lnZapHintNostr') : t('lnZapHintPlain'))),
+        z.social ? h('div', { class: 'small faint' }, p.allowsNostr ? t('lnZapHintNostr') : t('lnZapHintPlain')) : null),
       z.error ? h('div', { class: 'notice err' }, z.error) : null,
       h('div', { class: 'row gap6' },
         h('button', { class: 'btn-ghost', onClick: back }, t('back')),
         needsBoard
           ? h('button', { class: 'btn-primary grow', onClick: () => hook('arkOfferBoard', typedSats || min) }, t('zapBoardBtn'))
-          : h('button', { class: 'btn-primary grow', onClick: confirm, disabled: broke }, t('arkZapBtn'))));
+          : h('button', { class: 'btn-primary grow', onClick: confirm, disabled: broke }, z.social ? t('arkZapBtn') : t('lnPayConfirm'))));
   }
 
   return {

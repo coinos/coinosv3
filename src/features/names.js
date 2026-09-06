@@ -425,27 +425,27 @@ export function namesFeature(ctx) {
           h('button', { class: 'btn-ghost btn-sm', onClick: async () => {
             await release(); toast(t('namesReleased')); render();
           } }, t('namesRelease'))),
-        h('details', { class: 'small faint' },
+        h('details', { class: 'small faint', 'data-key': 'custom' },
           h('summary', {}, t('namesCustom')),
           h('p', { style: 'margin:4px 0' }, t('namesCustomHow')),
           claimForm(false)),
         (() => {
           const code = hook('nwcOfferString');
-          return code ? h('details', { class: 'small faint' },
+          return code ? h('details', { class: 'small faint', 'data-key': 'zapcode' },
             h('summary', {}, t('namesZapCode')),
             h('p', { style: 'margin:4px 0' }, t('namesZapCodeHow')),
             h('div', { class: 'addr-box break', style: 'font-size:10px' }, code),
             copyBtn(code, t('namesZapCodeCopy'))) : null;
         })(),
-        h('details', { class: 'small faint' },
+        h('details', { class: 'small faint', 'data-key': 'pos' },
           h('summary', {}, t('namesPos')),
           h('p', { style: 'margin:4px 0' }, t('namesPosHow')),
           posSection(st)),
-        h('details', { class: 'small faint' },
+        h('details', { class: 'small faint', 'data-key': 'ownnode' },
           h('summary', {}, t('namesOwnNode')),
           h('p', { style: 'margin:4px 0' }, t('namesOwnNodeMenuHow')),
           ownNodeSection()),
-        h('details', { class: 'small faint' },
+        h('details', { class: 'small faint', 'data-key': 'owndomain' },
           h('summary', {}, t('namesOwnDomain')),
           h('p', { style: 'margin:4px 0' }, t('namesOwnDomainHow')),
           h('div', { class: 'addr-box break', style: 'font-size:11px' },
@@ -483,7 +483,7 @@ export function namesFeature(ctx) {
           try { await post('/pos/token', 'DELETE', body()); ui.posToken = null; toast(t('namesPosRevoked')); render(); }
           catch (e) { toast(e.message); }
         } }, t('namesPosRevoke'))),
-      h('details', { class: 'small faint', style: 'margin-top:6px' },
+      h('details', { class: 'small faint', style: 'margin-top:6px', 'data-key': 'poslink' },
         h('summary', {}, t('namesPosLink')),
         h('p', { style: 'margin:4px 0' }, t('namesPosLinkHow')),
         h('div', { style: 'align-self:center;max-width:220px', html: qrSvg(lnurl, { ec: 'L', mode: 'Alphanumeric' }) }),

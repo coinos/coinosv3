@@ -180,8 +180,20 @@ function morph(a, b) {
   // would visibly crossfade the old style into the new one (a dark filled
   // button melting into a text link read as a black flash). Repaints aren't
   // style animations: snap it, restore the transition after the paint.
+  // A node with a data-key is only ever patched into a node with the SAME
+  // key: siblings line up by position, so a conditional sibling appearing or
+  // vanishing would otherwise hand one section's live state (an expanded
+  // <details>) to its neighbour.
+  if (a.getAttribute('data-key') !== b.getAttribute('data-key')) {
+    a.replaceWith(b);
+    return;
+  }
   const snap = a.nodeName === 'BUTTON' && a.getAttribute('class') !== b.getAttribute('class');
-  for (const at of [...a.attributes]) if (!b.hasAttribute(at.name)) a.removeAttribute(at.name);
+  // <details open> is the user's doing (the browser toggles the attribute on
+  // click), like a field's value: a render that doesn't set `open` leaves it
+  // alone instead of collapsing the section on every background repaint.
+  const userOwned = (at) => a.nodeName === 'DETAILS' && at.name === 'open';
+  for (const at of [...a.attributes]) if (!b.hasAttribute(at.name) && !userOwned(at)) a.removeAttribute(at.name);
   for (const at of [...b.attributes]) if (a.getAttribute(at.name) !== at.value) a.setAttribute(at.name, at.value);
   if (snap) {
     a.style.transition = 'none';

@@ -485,7 +485,9 @@ export function namesFeature(ctx) {
       h('div', { style: 'align-self:center;max-width:220px', html: qrSvg(lnurl, { ec: 'L', mode: 'Alphanumeric' }) }),
       h('div', { class: 'addr-box break', style: 'font-size:10px' }, lnurl),
       h('div', { class: 'row gap6', style: 'flex-wrap:wrap' },
-        copyBtn(lnurl, t('namesPosCopyLnurl')),
+        // copied as a lightning: URI so it's tappable/pasteable anywhere;
+        // the QR stays bare uppercase for alphanumeric-mode density
+        copyBtn('lightning:' + lnurl.toLowerCase(), t('namesPosCopyLnurl')),
         copyBtn(link, t('namesPosCopyLink'))));
   }
 

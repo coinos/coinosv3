@@ -169,11 +169,14 @@ async function pushNotify(id, r, reason, extra) {
     }
     log(`notify(${reason}) -> device ${id}`);
   } catch (e) {
-    if (e.statusCode === 404 || e.statusCode === 410) {
+    // 404/410 = gone; 403 = the sub was made against a different VAPID key
+    // and can NEVER receive a push (a stale key rotation), so prune it too —
+    // the client re-subscribes fresh against the current key on next open.
+    if (e.statusCode === 404 || e.statusCode === 410 || e.statusCode === 403) {
       delete notifyRegs[id];
       persist();
       resubscribeNotify();
-      log(`dropped an expired notify endpoint ${id}`);
+      log(`dropped a dead notify endpoint ${id} (${e.statusCode})`);
     } else {
       log(`notify(${reason}) push failed for ${id}: ${e.statusCode || e.message}`);
     }

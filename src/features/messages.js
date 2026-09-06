@@ -1101,10 +1101,23 @@ export function messagesFeature(ctx) {
         if ((await Notification.requestPermission()) !== 'granted') return false;
       }
       const reg = await navigator.serviceWorker.ready;
+      const { publicKey } = await (await fetch(`${NOTIFIER}/vapid`)).json();
+      const wantKey = b64ToBytes(publicKey);
       let sub = await reg.pushManager.getSubscription();
+      // A subscription made against a DIFFERENT VAPID key can never receive a
+      // push — the notifier's sends fail with a permanent 403 and it keeps
+      // reusing the dead sub, so the device goes silent forever (this is what
+      // stranded notifications after the key last rotated). Re-subscribe when
+      // the existing sub's server key doesn't match the current one.
+      const keyMatches = (s) => {
+        try {
+          const cur = new Uint8Array(s.options.applicationServerKey || []);
+          return cur.length === wantKey.length && cur.every((b, i) => b === wantKey[i]);
+        } catch { return false; }
+      };
+      if (sub && !keyMatches(sub)) { try { await sub.unsubscribe(); } catch {} sub = null; }
       if (!sub) {
-        const { publicKey } = await (await fetch(`${NOTIFIER}/vapid`)).json();
-        sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToBytes(publicKey) });
+        sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: wantKey });
       }
       const r = await fetch(`${NOTIFIER}/register`, {
         method: 'POST', headers: { 'content-type': 'application/json' },

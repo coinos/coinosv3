@@ -732,6 +732,8 @@ const STR = {
     receiveNameTab: 'Spending',
     namesCustom: 'Change username',
     namesCustomHow: 'Pick a new name for your payment address. Your old address stops working.',
+    namesMerchantShow: 'I\u2019m a merchant \u2014 show point-of-sale tools',
+    namesMerchantHide: 'Hide point-of-sale tools',
     namesPos: 'Point of sale',
     namesPosHow: 'A coinos POS terminal takes payments to this address. Create a token and enter it as the API token when you flash the terminal at coinos.io/pos. The terminal can ring up sales and see them paid; it can never spend.',
     namesPosCreate: 'Create POS token',

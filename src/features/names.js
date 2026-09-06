@@ -430,13 +430,17 @@ export function namesFeature(ctx) {
       h('h3', {}, title),
       how ? h('p', { class: 'small muted', style: 'margin:0' }, how) : null,
       ...body);
+    // POS surfaces are MERCHANT tools: hidden for everyone else behind a
+    // one-line toggle on the address card. The flag lives in the names
+    // feature state, so it follows the account to every device via sync.
+    const merchant = !!st.merchant;
     return [
       card('owndomain', t('namesOwnDomain'), t('namesOwnDomainHow'),
         h('div', { class: 'addr-box break', style: 'font-size:11px' },
           `${st.name}.user._bitcoin-payment.yourdomain.com. CNAME ${st.name}.user._bitcoin-payment.${domain}.`)),
       card('ownnode', t('namesOwnNode'), t('namesOwnNodeMenuHow'), ownNodeSection()),
-      posLinkCard(st),
-      posCard(st),
+      merchant ? posLinkCard(st) : null,
+      merchant ? posCard(st) : null,
       card('custom', t('namesCustom'), t('namesCustomHow'), claimForm(false)),
       card('names', t('namesTitle'), null,
         h('div', { class: 'addr-box break', style: 'font-size:14px' }, addr),
@@ -444,7 +448,11 @@ export function namesFeature(ctx) {
           copyBtn(addr, t('namesCopy')),
           h('button', { class: 'btn-ghost btn-sm', onClick: async () => {
             await release(); toast(t('namesReleased')); render();
-          } }, t('namesRelease')))),
+          } }, t('namesRelease'))),
+        h('button', {
+          class: 'linklike small', style: 'align-self:flex-start;margin-top:4px',
+          onClick: () => { save({ ...load(), merchant: !merchant }); render(); },
+        }, merchant ? t('namesMerchantHide') : t('namesMerchantShow'))),
     ].filter(Boolean);
   }
 

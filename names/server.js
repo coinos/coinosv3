@@ -22,7 +22,7 @@ import * as nip44 from 'nostr-tools/nip44';
 import { wrapManyEvents } from 'nostr-tools/nip17';
 import { SimplePool } from 'nostr-tools/pool';
 import { npubEncode, decode as nip19Decode } from 'nostr-tools/nip19';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { HDKey } from '@scure/bip32';
 import { mnemonicToSeedSync } from '@scure/bip39';
 import { lnBackend } from '../bridge/ln.js';
@@ -359,6 +359,68 @@ async function forward(name, sat, hash) {
   throw new Error(fwd && dest ? 'insufficient float and the wallet is not listening' : 'no delivery route');
 }
 
+// ---------------------------------------------------------------------------
+// Point of sale — a coinos POS terminal (coinos-pos, an ESP32 keypad) works
+// against a name with a bearer token its owner mints from Settings. The
+// terminal can ring up sales (mint invoices for the name) and learn when they
+// settle; it can never spend. POS invoices are always minted HERE, never via
+// CLINK, so the settle loop sees them and the merchant's phone can be off;
+// delivery is the ordinary forward path (float arkoor), so the sats reach the
+// name's ark address seconds after settlement.
+// ---------------------------------------------------------------------------
+const POS_INVOICE_TTL = 5 * 60_000; // an LNURL tap serves the newest unpaid sale this young
+let ratesCache = { at: 0, rates: null };
+async function fiatRates() {
+  if (ratesCache.rates && Date.now() - ratesCache.at < 60_000) return ratesCache.rates;
+  const r = await fetch('https://coinos.io/api/rates', { signal: AbortSignal.timeout(5000) });
+  if (!r.ok) throw new Error('rates unavailable');
+  ratesCache = { at: Date.now(), rates: await r.json() };
+  return ratesCache.rates;
+}
+const posTokens = () => (state.posTokens ||= {});     // token -> { key, currency, created }
+const posInvoices = () => (state.posInvoices ||= {}); // payment_hash -> { key, sat, fiat, currency, rate, bolt11, created, paid?, received? }
+function posAuth(req, url) {
+  const h = req.headers.get('authorization') || '';
+  const tok = (h.match(/^Bearer\s+(.+)$/i) || [])[1] || url.searchParams.get('token') || '';
+  const rec = tok && posTokens()[tok];
+  if (!rec || !state.names[rec.key]) return null; // a released name takes its tokens with it
+  return { token: tok, ...rec };
+}
+function posMintToken(key, currency) {
+  const token = randomBytes(32).toString('hex');
+  posTokens()[token] = { key, currency: /^[A-Z]{3}$/.test(String(currency || '')) ? currency : 'USD', created: Date.now() };
+  persist();
+  log(`pos token minted for ${key}`);
+  return token;
+}
+// the newest unpaid sale the terminal rang up in the last five minutes, if any
+function posPendingInvoice(key) {
+  let best = null;
+  for (const [hash, v] of Object.entries(posInvoices())) {
+    if (v.key !== key || v.paid || Date.now() - v.created > POS_INVOICE_TTL) continue;
+    if (!best || v.created > best.created) best = { hash, ...v };
+  }
+  return best;
+}
+function sweepPos() {
+  const cutoff = Date.now() - 7 * 86400_000;
+  for (const [h, v] of Object.entries(posInvoices())) if (v.created < cutoff) delete posInvoices()[h];
+}
+const posSockets = new Set();
+const posPaymentMsg = (hash, v) => JSON.stringify({ type: 'payment', data: { iid: hash, amount: v.received ?? v.sat, tip: 0 } });
+function posSettled(hash, sat) {
+  const v = posInvoices()[hash];
+  if (!v) return;
+  v.paid = Date.now();
+  v.received = sat;
+  persist();
+  for (const ws of posSockets) {
+    if (ws.data.key !== v.key || (ws.data.hash && ws.data.hash !== hash)) continue;
+    try { ws.send(posPaymentMsg(hash, v)); } catch {}
+  }
+  log(`pos ${v.key}: ${sat} sat paid`);
+}
+
 // NIP-57: a zap we invoiced is only "a zap" once we publish the receipt,
 // signed by the key our LNURL response advertises.
 async function publishZapReceipt(pending, inv) {
@@ -453,6 +515,7 @@ async function settleLoop() {
     }
     const sat = Math.floor((inv.amount_received_msat?.msat ?? inv.amount_received_msat ?? 0) / 1000);
     if (!sat) continue;
+    if (pending?.pos) posSettled(inv.payment_hash, sat);
     // money has arrived for this name — push-notify their devices (best effort)
     if (CFG.push && CFG.push.url && state.names[name]) {
       fetch(`${CFG.push.url}/notify`, {
@@ -803,10 +866,111 @@ const json = (body, status = 200) => {
 
 Bun.serve({
   port: CFG.port || 8798,
-  async fetch(req) {
+  async fetch(req, server) {
     const url = new URL(req.url);
     if (req.method === 'OPTIONS') return json({});
     const ip = req.headers.get('cf-connecting-ip') || req.headers.get('x-forwarded-for') || 'local';
+
+    // ---- point of sale (helpers above settleLoop) ----
+    if (url.pathname === '/pos/ws') {
+      const a = posAuth(req, url);
+      if (!a) return json({ error: 'bad token' }, 401);
+      if (server.upgrade(req, { data: { key: a.key, hash: null } })) return undefined;
+      return json({ error: 'websocket expected' }, 400);
+    }
+    // The name's owner mints (POST) or revokes all (DELETE) terminal tokens.
+    if (url.pathname === '/pos/token' && (req.method === 'POST' || req.method === 'DELETE')) {
+      if (!rateOk(ip)) return json({ error: 'rate limited' }, 429);
+      const bodyText = await req.text();
+      const a = await checkNip98(req, url, bodyText);
+      if (a.error) return json({ error: a.error }, 401);
+      let body = {};
+      try { body = JSON.parse(bodyText || '{}'); } catch { return json({ error: 'bad body' }, 400); }
+      const name = String(body.name || '').toLowerCase();
+      const domain = String(body.domain || DOMAIN).toLowerCase();
+      const key = `${name}@${domain}`;
+      const rec = state.names[key];
+      if (!rec) return json({ error: 'unknown name' }, 404);
+      if (rec.pubkey !== a.pubkey && rec.manager !== a.pubkey) return json({ error: 'not your name' }, 403);
+      if (req.method === 'DELETE') {
+        let n = 0;
+        for (const [t, v] of Object.entries(posTokens())) if (v.key === key) { delete posTokens()[t]; n++; }
+        persist();
+        log(`pos tokens revoked for ${key} (${n})`);
+        return json({ ok: true, revoked: n });
+      }
+      const token = posMintToken(key, body.currency);
+      return json({ token, name, domain, currency: posTokens()[token].currency });
+    }
+    // Operator bootstrap: mint a terminal token for any name.
+    if (url.pathname === '/admin/pos/token' && req.method === 'POST') {
+      if (!CFG.adminToken || req.headers.get('x-admin-token') !== CFG.adminToken) return json({ error: 'unauthorized' }, 401);
+      const body = await req.json().catch(() => ({}));
+      const key = `${String(body.name || '').toLowerCase()}@${String(body.domain || DOMAIN).toLowerCase()}`;
+      if (!state.names[key]) return json({ error: 'unknown name' }, 404);
+      return json({ token: posMintToken(key, body.currency), key });
+    }
+    // Everything else under /pos/ is the terminal itself, by bearer token.
+    if (url.pathname.startsWith('/pos/')) {
+      const a = posAuth(req, url);
+      if (!a) return json({ error: 'unauthorized' }, 401);
+      const [name] = a.key.split('@');
+      if (url.pathname === '/pos/me' && req.method === 'GET') {
+        return json({ username: name, address: a.key, currency: a.currency });
+      }
+      // Ring up a sale: {invoice:{fiat}} (the terminal's shape) or {amount} in sats.
+      if (url.pathname === '/pos/invoice' && req.method === 'POST') {
+        if (!rateOk(ip, 60)) return json({ error: 'rate limited' }, 429);
+        if (!ln) return json({ error: 'invoicing is closed right now' }, 503);
+        const body = await req.json().catch(() => ({}));
+        const inv = body.invoice || body;
+        const currency = /^[A-Z]{3}$/.test(String(inv.currency || '')) ? inv.currency : a.currency;
+        let rates = null;
+        try { rates = await fiatRates(); } catch {}
+        const rate = rates ? rates[currency] : null;
+        let sat = Math.floor(Number(inv.amount) || 0);
+        let fiat = Number(inv.fiat) || null;
+        if (!sat) {
+          if (!(fiat > 0)) return json({ error: 'fiat or amount required' }, 400);
+          if (!rate) return json({ error: `no rate for ${currency}` }, 503);
+          sat = Math.round((fiat / rate) * 1e8);
+        } else if (rate && fiat == null) {
+          fiat = Math.round((sat / 1e8) * rate * 100) / 100;
+        }
+        if (sat < 1) return json({ error: 'amount too small' }, 400);
+        try {
+          const r = await ln.call('invoice', {
+            amount_msat: sat * 1000,
+            label: `pos-${a.key}-${Date.now()}`,
+            description: lnurlMeta(a.key),
+            deschashonly: true, // LUD-06: the tap's lnurlp metadata hashes to this
+            expiry: 900,
+          });
+          const created = Date.now();
+          state.invoices ||= {};
+          state.invoices[r.payment_hash] = { key: a.key, bolt11: r.bolt11, ts: created, pos: true };
+          posInvoices()[r.payment_hash] = { key: a.key, sat, fiat, currency, rate, bolt11: r.bolt11, created };
+          sweepPos();
+          persist();
+          log(`pos ${a.key}: sale ${sat} sat${fiat ? ` (${fiat} ${currency})` : ''}`);
+          return json({ id: r.payment_hash, hash: r.bolt11, amount: sat, fiat, currency, rate, created });
+        } catch (e) {
+          log('pos invoice failed: ' + e.message);
+          return json({ error: 'could not create an invoice' }, 500);
+        }
+      }
+      // Paid sales, newest first, in the shape the terminal's history browser reads.
+      if (url.pathname === '/pos/payments' && req.method === 'GET') {
+        const limit = Math.min(50, parseInt(url.searchParams.get('limit') || '10', 10) || 10);
+        const payments = Object.entries(posInvoices())
+          .filter(([, v]) => v.key === a.key && v.paid)
+          .sort((x, y) => y[1].paid - x[1].paid)
+          .slice(0, limit)
+          .map(([hash, v]) => ({ id: hash, amount: v.received ?? v.sat, tip: 0, created: v.paid, currency: v.currency, rate: v.rate }));
+        return json({ payments, count: payments.length });
+      }
+      return json({ error: 'not found' }, 404);
+    }
 
     if (url.pathname === '/health') {
       return json({
@@ -1136,6 +1300,19 @@ Bun.serve({
       const rec = state.names[`${name}@${domain}`];
       if (!rec) return json({ status: 'ERROR', reason: 'unknown address' }, 404);
       const address = `${name}@${domain}`;
+      // A terminal that just rang up a sale: the tap pays exactly that
+      // invoice (coinos.io's /p/<name> rule — newest unpaid sale under five
+      // minutes old). Otherwise the payer picks the amount.
+      const pos = posPendingInvoice(address);
+      if (pos) return json({
+        tag: 'payRequest',
+        callback: `${PUBLIC_BASE}/lnurlp/${name}/cb?domain=${encodeURIComponent(domain)}&pos=${pos.hash}`,
+        minSendable: pos.sat * 1000,
+        maxSendable: pos.sat * 1000,
+        metadata: lnurlMeta(address),
+        commentAllowed: 0,
+        allowsNostr: false,
+      });
       return json({
         tag: 'payRequest',
         callback: `${PUBLIC_BASE}/lnurlp/${name}/cb?domain=${encodeURIComponent(domain)}`,
@@ -1156,6 +1333,15 @@ Bun.serve({
       const rec = state.names[key];
       if (!rec) return json({ status: 'ERROR', reason: 'unknown address' }, 404);
       const msat = parseInt(url.searchParams.get('amount') || '0', 10);
+      // a POS sale: hand back the invoice the terminal minted, nothing else
+      const posHash = url.searchParams.get('pos');
+      if (posHash) {
+        const v = posInvoices()[posHash];
+        if (!v || v.key !== key || v.paid || Date.now() - v.created > POS_INVOICE_TTL)
+          return json({ status: 'ERROR', reason: 'that sale has expired — tap again' }, 410);
+        if (msat !== v.sat * 1000) return json({ status: 'ERROR', reason: 'amount must match the sale' }, 400);
+        return json({ pr: v.bolt11, routes: [] });
+      }
       if (!msat || msat < 1000) return json({ status: 'ERROR', reason: 'amount too small' }, 400);
       const sat = Math.floor(msat / 1000);
       const zap = url.searchParams.get('nostr') || null;
@@ -1512,6 +1698,27 @@ Bun.serve({
     }
 
     return json({ error: 'not found' }, 404);
+  },
+  // POS terminals: one socket per device. `subscribe` names the sale it is
+  // waiting on; a `payment` message arrives when that sale settles.
+  // Heartbeats and anything else are ignored.
+  websocket: {
+    open(ws) {
+      posSockets.add(ws);
+      ws.send(JSON.stringify({ type: 'connected', data: ws.data.key }));
+    },
+    message(ws, raw) {
+      let m;
+      try { m = JSON.parse(String(raw)); } catch { return; }
+      if (m?.type !== 'subscribe') return;
+      const id = String(m.data?.id || m.data || '');
+      const v = posInvoices()[id];
+      if (!v || v.key !== ws.data.key) return;
+      ws.data.hash = id;
+      // a sale that settled between the mint and this subscribe is still a sale
+      if (v.paid) { try { ws.send(posPaymentMsg(id, v)); } catch {} }
+    },
+    close(ws) { posSockets.delete(ws); },
   },
 });
 

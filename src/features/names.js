@@ -437,6 +437,10 @@ export function namesFeature(ctx) {
             copyBtn(code, t('namesZapCodeCopy'))) : null;
         })(),
         h('details', { class: 'small faint' },
+          h('summary', {}, t('namesPos')),
+          h('p', { style: 'margin:4px 0' }, t('namesPosHow')),
+          posSection(st)),
+        h('details', { class: 'small faint' },
           h('summary', {}, t('namesOwnNode')),
           h('p', { style: 'margin:4px 0' }, t('namesOwnNodeMenuHow')),
           ownNodeSection()),
@@ -450,6 +454,27 @@ export function namesFeature(ctx) {
       h('h3', {}, t('namesTitle')),
       h('p', { class: 'small muted', style: 'margin:0' }, t('namesDesc')),
       claimForm(false));
+  }
+
+  // A coinos POS terminal (coinos-pos) takes payments to this name with a
+  // bearer token the registrar mints for the owner: the terminal can ring up
+  // sales and see them settle, never spend. Shown once, never stored — the
+  // token goes straight into the terminal's config at coinos.io/pos.
+  function posSection(st) {
+    const tok = ui.posToken;
+    const body = () => ({ name: st.name, domain: st.domain || DOMAIN() });
+    return h('div', { class: 'col', style: 'gap:6px' },
+      tok ? h('div', { class: 'addr-box break', style: 'font-size:10px' }, tok) : null,
+      h('div', { class: 'row gap6', style: 'flex-wrap:wrap' },
+        h('button', { class: 'btn-ghost btn-sm', onClick: async () => {
+          try { ui.posToken = (await post('/pos/token', 'POST', body())).token; render(); }
+          catch (e) { toast(e.message); }
+        } }, t('namesPosCreate')),
+        tok ? copyBtn(tok, t('namesPosCopy')) : null,
+        h('button', { class: 'btn-ghost btn-sm', onClick: async () => {
+          try { await post('/pos/token', 'DELETE', body()); ui.posToken = null; toast(t('namesPosRevoked')); render(); }
+          catch (e) { toast(e.message); }
+        } }, t('namesPosRevoke'))));
   }
 
   // The Receive tab's default pane: your name, big and scannable.

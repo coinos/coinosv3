@@ -331,9 +331,18 @@ const server = Bun.serve({
       if (!CFG.notifyToken || body?.token !== CFG.notifyToken) return json({ error: 'forbidden' }, 403);
       const pk = body?.pubkey;
       if (!/^[0-9a-f]{64}$/.test(pk || '')) return json({ error: 'pubkey required' }, 400);
+      // Network scoping: the same pubkey exists on mainnet and staging, so a
+      // payment goes only to devices on its own network. A device that hasn't
+      // re-registered since this shipped has net=null and still gets it (so
+      // no one goes dark mid-rollout); once both sides send a net, mismatches
+      // are filtered. A caller that omits net pushes to everyone (legacy).
+      const wantNet = typeof body.net === 'string' ? body.net : null;
       let n = 0;
       for (const [id, r] of Object.entries(notifyRegs)) {
-        if ((r.ptags || []).includes(pk)) { pushNotify(id, r, 'payment', { amountSat: Number(body.amountSat) || undefined }).catch(() => {}); n++; }
+        if (!(r.ptags || []).includes(pk)) continue;
+        if (wantNet && r.net && r.net !== wantNet) continue;
+        pushNotify(id, r, 'payment', { amountSat: Number(body.amountSat) || undefined }).catch(() => {});
+        n++;
       }
       return json({ ok: true, devices: n });
     }
@@ -367,6 +376,10 @@ const server = Bun.serve({
           ptags: hex(body.notify.ptags, 8),
           authors: hex(body.notify.authors, 64),
           reasons,
+          // the network this device is on: the same seed yields the same
+          // pubkey on mainnet and staging, so a payment push is delivered
+          // only to devices on the payment's network (see /notify)
+          net: typeof body.notify.net === 'string' ? body.notify.net.slice(0, 16) : null,
         };
         persist();
         resubscribeNotify();

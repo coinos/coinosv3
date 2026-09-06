@@ -520,7 +520,9 @@ async function settleLoop() {
     if (CFG.push && CFG.push.url && state.names[name]) {
       fetch(`${CFG.push.url}/notify`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ token: CFG.push.token, pubkey: state.names[name].pubkey, amountSat: sat }),
+        // this registrar's own network, so the notifier delivers only to the
+        // payee's devices on it (a seed makes the same pubkey on both nets)
+        body: JSON.stringify({ token: CFG.push.token, pubkey: state.names[name].pubkey, amountSat: sat, net: CFG.forwarder?.network || 'mainnet' }),
       }).catch(() => {});
     }
     // ...and POST to their webhook, if they registered one

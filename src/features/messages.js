@@ -999,7 +999,12 @@ export function messagesFeature(ctx) {
     // never sends what the user turned off (a suppressed-but-delivered push
     // would earn Chrome's generic "updated in background" nag instead)
     const reasons = { payment: s.reasons?.payment !== false, dm: s.reasons?.dm !== false };
-    return { ptags: myPubkeys(), authors, reasons };
+    // Stamp the network: the same seed makes the same nostr pubkey on mainnet
+    // AND staging, so without this the notifier fans a mainnet payment push
+    // out to the staging PWA's subscription too — and tapping it opened
+    // staging. The notifier now delivers a payment only to registrations on
+    // the payment's own network.
+    return { ptags: myPubkeys(), authors, reasons, net: getNetwork() };
   }
 
   const roomNotify = (cid) => !!st().notify[cid];

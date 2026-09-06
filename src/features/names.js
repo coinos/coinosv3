@@ -15,6 +15,7 @@ import { resolveBip353, parsePaymentName, parseBip21 } from '../bip353.js';
 import { decodeNoffer } from '../noffer.js';
 import { nip98Header } from '../nip98.js';
 import { qrSvg } from '../qr.js';
+import { bech32 } from '@scure/base';
 import { isArkAddress } from './ark.js';
 import { getNetwork } from '../api.js';
 import { t } from '../i18n.js';
@@ -462,7 +463,14 @@ export function namesFeature(ctx) {
   // token goes straight into the terminal's config at coinos.io/pos.
   function posSection(st) {
     const tok = ui.posToken;
-    const body = () => ({ name: st.name, domain: st.domain || DOMAIN() });
+    const domain = st.domain || DOMAIN();
+    const body = () => ({ name: st.name, domain });
+    // The link the terminal broadcasts over NFC: the name's lnurlp on the
+    // registrar (it pins the sale just rung up), as a bech32 LNURL for
+    // wallet scanners and wrapped in coinos.io/ln/ for phones without one.
+    const payUrl = `${REGISTRAR}/lnurlp/${st.name}${domain === 'coinos.io' ? '' : `?domain=${encodeURIComponent(domain)}`}`;
+    const lnurl = bech32.encode('lnurl', bech32.toWords(new TextEncoder().encode(payUrl)), 2000).toUpperCase();
+    const link = `https://coinos.io/ln/${lnurl.toLowerCase()}`;
     return h('div', { class: 'col', style: 'gap:6px' },
       tok ? h('div', { class: 'addr-box break', style: 'font-size:10px' }, tok) : null,
       h('div', { class: 'row gap6', style: 'flex-wrap:wrap' },
@@ -474,7 +482,15 @@ export function namesFeature(ctx) {
         h('button', { class: 'btn-ghost btn-sm', onClick: async () => {
           try { await post('/pos/token', 'DELETE', body()); ui.posToken = null; toast(t('namesPosRevoked')); render(); }
           catch (e) { toast(e.message); }
-        } }, t('namesPosRevoke'))));
+        } }, t('namesPosRevoke'))),
+      h('details', { class: 'small faint', style: 'margin-top:6px' },
+        h('summary', {}, t('namesPosLink')),
+        h('p', { style: 'margin:4px 0' }, t('namesPosLinkHow')),
+        h('div', { style: 'align-self:center;max-width:220px', html: qrSvg(lnurl, { ec: 'L', mode: 'Alphanumeric' }) }),
+        h('div', { class: 'addr-box break', style: 'font-size:10px' }, lnurl),
+        h('div', { class: 'row gap6', style: 'flex-wrap:wrap' },
+          copyBtn(lnurl, t('namesPosCopyLnurl')),
+          copyBtn(link, t('namesPosCopyLink')))));
   }
 
   // The Receive tab's default pane: your name, big and scannable.

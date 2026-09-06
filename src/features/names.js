@@ -482,7 +482,13 @@ export function namesFeature(ctx) {
     return h('div', { class: 'card col', 'data-key': 'poslink' },
       h('h3', {}, t('namesPosLink')),
       h('p', { class: 'small muted', style: 'margin:0' }, t('namesPosLinkHow')),
-      h('div', { style: 'align-self:center;max-width:220px', html: qrSvg(lnurl, { ec: 'L', mode: 'Alphanumeric' }) }),
+      // the QR is itself a lightning: link — tapping it on the very device
+      // that shows it hands the LNURL to whatever wallet owns the scheme
+      h('a', {
+        href: 'lightning:' + lnurl.toLowerCase(),
+        style: 'align-self:center;max-width:220px;display:block',
+        html: qrSvg(lnurl, { ec: 'L', mode: 'Alphanumeric' }),
+      }),
       h('div', { class: 'addr-box break', style: 'font-size:10px' }, lnurl),
       h('div', { class: 'row gap6', style: 'flex-wrap:wrap' },
         // copied as a lightning: URI so it's tappable/pasteable anywhere;

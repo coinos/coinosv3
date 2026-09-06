@@ -24,7 +24,6 @@ import {
   timeAgo,
   SATS,
   BITCOIN_ICON,
-  ARK_MARK,
 } from './format.js';
 
 const wallet = new Wallet();
@@ -3367,7 +3366,7 @@ function balanceCard() {
           hasSpending && !kindLocked
             ? h('span', {
                 class: 'face-ico ' + (viewSpending ? 'spend' : 'save'),
-                html: viewSpending ? '\u26a1' + ARK_MARK(12) : BITCOIN_ICON(14),
+                html: viewSpending ? '\u26a1' : BITCOIN_ICON(14),
               })
             : null,
           h('div', { class: 'small faint', style: 'text-transform:uppercase;letter-spacing:.06em' },

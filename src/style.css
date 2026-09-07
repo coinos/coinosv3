@@ -677,6 +677,23 @@ hr.divider { margin: 16px 0; }
 @keyframes check-ring { from { box-shadow: 0 0 0 0 color-mix(in srgb, var(--green) 45%, transparent); } to { box-shadow: 0 0 0 30px transparent; } }
 .anim-page .check-badge { animation: check-pop .55s cubic-bezier(.34, 1.56, .64, 1) both, check-ring 1.1s ease-out .25s both; }
 
+/* Auto-pay card: the badge is a spinner ring while paying, then flips to the
+   green success check with a pop — one node, so the transition is smooth and
+   nothing around it shifts. */
+.autopay-badge { position: relative; transition: background .3s ease, color .3s ease; }
+.autopay-card:not(.paid) .autopay-badge { background: var(--accent-soft); color: transparent; animation: none; }
+.autopay-card:not(.paid) .autopay-badge::after {
+  content: ''; position: absolute; inset: -7px; border-radius: 50%;
+  border: 2px solid var(--line-strong); border-top-color: var(--accent);
+  animation: spin .7s linear infinite;
+}
+.autopay-card.paid .autopay-badge { animation: check-pop .5s cubic-bezier(.34, 1.56, .64, 1) both, check-ring 1.1s ease-out .2s both; }
+.autopay-foot { min-height: 1.15em; }
+@media (prefers-reduced-motion: reduce) {
+  .autopay-card:not(.paid) .autopay-badge::after { animation: none; }
+  .autopay-card.paid .autopay-badge { animation: none; }
+}
+
 /* micro-interactions */
 button, .btn { transition: filter .12s, background .15s, border-color .15s, box-shadow .15s, transform .1s; }
 .btn-primary:hover { filter: brightness(1.15); }

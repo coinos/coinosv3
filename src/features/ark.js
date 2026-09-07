@@ -960,7 +960,7 @@ export function arkFeature(ctx) {
       };
       const settle = (a) => {
         if (a.step === 'done') {
-          ui.arkLnPaid = { amountSat: a.amountSat, meta: p.meta };
+          ui.arkLnPaid = { amountSat: a.amountSat, meta: p.meta, autopaid: !!(p._autopaid || p.autopaying) };
           if (p.meta && p.meta.pk) noteZap('inv:' + p.invoice, p.meta.pk);
           // the user opted this recipient into auto-pay: remember the chosen
           // budget so future fixed charges from them clear without a tap
@@ -1016,10 +1016,26 @@ export function arkFeature(ctx) {
   }
   const amountFill = (sat) => (ctx.getUnit() === 'sats' ? String(sat) : (sat / 1e8).toFixed(8));
 
+  // Auto-pay progress + success as ONE structurally identical card, so the
+  // paying → paid step is a class flip (spinner ring settles into the green
+  // check, amount and recipient never move) instead of a text/layout swap. No
+  // "Paying" wording at all — the badge animation carries the state.
+  const autopayCard = (paid, meta, amountSat) =>
+    h('div', {
+      class: 'card col autopay-card' + (paid ? ' paid' : ''),
+      style: 'align-items:center;text-align:center;gap:14px;padding:48px 20px' + (paid ? ';cursor:pointer' : ''),
+      onClick: paid ? () => { ui.arkLnPaid = null; ui.send = blankSend(); render(); } : undefined,
+    },
+      h('div', { class: 'check-badge autopay-badge' }, '⚡'),
+      meta && meta.name ? h('div', { class: 'small muted' }, meta.name) : null,
+      h('div', { class: 'amount-neg', style: 'font-size:18px' }, '-' + fmtAmount(amountSat) + ' ' + unitLabel()),
+      h('div', { class: 'small muted autopay-foot' }, paid ? t('tapToProceed') : ''));
+
   function arkLnPayView() {
     const u = ' ' + unitLabel();
     if (ui.arkLnPaid) {
       const zap = ui.arkLnPaid.meta;
+      if (ui.arkLnPaid.autopaid) return autopayCard(true, zap, ui.arkLnPaid.amountSat);
       return h('div', {
         class: 'card col',
         style: 'align-items:center;text-align:center;gap:14px;cursor:pointer;padding:48px 20px',
@@ -1034,16 +1050,8 @@ export function arkFeature(ctx) {
     const p = ui.arkLnPay;
     if (!p) return null;
     const zap = p.meta;
-    // Auto-pay: show only a paying screen (matching the paid screen's layout, so
-    // it morphs into it) instead of flashing the review card before it pays.
-    if (p.autopaying) {
-      return h('div', { class: 'card col', style: 'align-items:center;text-align:center;gap:14px;padding:48px 20px' },
-        h('div', { class: 'check-badge' }, '⚡'),
-        h('h2', { style: 'margin:0' }, t('arkLnPaying')),
-        zap && zap.name ? h('div', { class: 'small muted' }, zap.name) : null,
-        h('div', { class: 'amount-neg', style: 'font-size:18px' }, '-' + fmtAmount(p.amountSat) + u),
-        h('span', { class: 'spinner' }));
-    }
+    // Auto-pay in flight: the progress half of the same card (see autopayCard).
+    if (p.autopaying) return autopayCard(false, p.meta, p.amountSat);
     const row = (label, sats, bold) => h('div', { class: 'row between' + (bold ? '' : ''), style: bold ? 'font-weight:600' : '' },
       h('span', { class: bold ? '' : 'small muted' }, label), h('span', {}, fmtAmount(sats) + u));
     const total = (p.amountSat || 0) + (p.feeSat || 0);

@@ -427,7 +427,25 @@ export function giftsFeature(ctx) {
     }
     try {
       const rate = (wallet.feeRates && wallet.feeRates.halfHourFee) || 5;
-      const to = wallet.receive[0] ? wallet.receive[0].address : wallet.derive(0, 0).address;
+      // Claim to THIS wallet's own first address, derived fresh from the
+      // active seed — never wallet.receive[0], which can be a stale address
+      // left by a previous account in the session. (A gift once landed at an
+      // address the claimer's backed-up seed didn't control — 5000 sats
+      // stranded — because the claim paid a wallet the shown seed wasn't.)
+      const to = wallet.derive(0, 0).address;
+      // Hard guard: refuse to broadcast unless `to` is provably derivable
+      // from the wallet whose recovery phrase we're about to hand over. This
+      // turns any future seed/wallet divergence into a safe error instead of
+      // money sent to keys the claimer never gets.
+      const ownsTo = (() => {
+        try {
+          for (let i = 0; i < 5; i++) {
+            if (wallet.derive(0, i).address === to || wallet.derive(1, i).address === to) return true;
+          }
+        } catch {}
+        return false;
+      })();
+      if (!ownsTo) { ui.claimError = t('claimFailed'); ui.busy = false; render(); return; }
       const claim = buildClaimTx(ui.claimCode, to, rate, wallet.netCfg.net);
       await wallet.broadcast(claim.hex);
       afterClaim(claim.amount);

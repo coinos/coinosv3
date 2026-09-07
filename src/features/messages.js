@@ -2984,16 +2984,17 @@ export function messagesFeature(ctx) {
             edit ? h('span', { class: 'chat-edited' }, ' ', t('msgEdited')) : null,
             mine
               ? h('button', { class: 'chat-del', title: t('msgDelete'), onClick: () => deleteMessage(room, chId, m) }, '×')
-              : null),
-          counts.size
-            ? h('div', { class: 'chat-reacts' },
-                [...counts.entries()].map(([emoji, n]) =>
-                  h('span', {
-                    class: 'chat-react clickable' + (emoji === myReact ? ' on' : ''),
-                    title: t('msgReact'),
-                    onClick: () => sendReaction(room, chId, m, emoji),
-                  }, emoji, n > 1 ? ' ' + n : '')))
-            : null)
+              : null,
+            // reactions tuck inside the bubble, under the text (Telegram-style)
+            counts.size
+              ? h('div', { class: 'chat-reacts' },
+                  [...counts.entries()].map(([emoji, n]) =>
+                    h('span', {
+                      class: 'chat-react clickable' + (emoji === myReact ? ' on' : ''),
+                      title: t('msgReact'),
+                      onClick: (e) => { e.stopPropagation(); sendReaction(room, chId, m, emoji); },
+                    }, emoji, n > 1 ? ' ' + n : '')))
+              : null))
       );
     });
   }
@@ -3206,7 +3207,7 @@ export function messagesFeature(ctx) {
       return h('div', { class: 'chat-reacts' },
         [...counts.entries()].map(([emoji, n]) => h('span', {
           class: 'chat-react clickable' + (emoji === myReact ? ' on' : ''),
-          onClick: () => sendDmReaction(peer, m, emoji),
+          onClick: (e) => { e.stopPropagation(); sendDmReaction(peer, m, emoji); },
         }, emoji, n > 1 ? ' ' + n : '')));
     };
     const dmReplyBar = () => {
@@ -3246,8 +3247,7 @@ export function messagesFeature(ctx) {
                     ui.msgSheet = ui.msgSheet === m.rumor.id ? null : m.rumor.id;
                     render();
                   },
-                }, dmQuote(m), ...noteBody(m.rumor.content)),
-                dmChips(m),
+                }, dmQuote(m), ...noteBody(m.rumor.content), dmChips(m)),
                 h('div', { class: 'chat-time' }, timeLabel(m.rumor.created_at * 1000)))))
         : [h('div', { class: 'muted small', style: 'text-align:center;padding:24px 0' }, t('msgNoDmsYet'))])),
       dmReplyBar(),

@@ -469,13 +469,17 @@ hr.divider { margin: 16px 0; }
   display: flex; align-items: center; gap: 8px; padding: 7px 12px;
   border-top: 1px solid var(--line); background: var(--surface2); flex: 0 0 auto;
 }
-.chat-reacts { display: flex; gap: 5px; margin-top: 3px; flex-wrap: wrap; }
+/* Reactions sit INSIDE the bubble, tucked under the text (Telegram-style).
+   The pill tint/border derive from the bubble's own text colour, so they read
+   correctly on both the plain bubble and the accent "me" bubble. */
+.chat-reacts { display: flex; gap: 5px; margin-top: 5px; flex-wrap: wrap; }
 .chat-react {
-  font-size: 12px; background: var(--paper); border: 1px solid var(--line);
-  border-radius: 9px; padding: 1px 7px;
+  font-size: 12px; border-radius: 10px; padding: 1px 7px;
+  background: color-mix(in srgb, currentColor 13%, transparent);
+  border: 1px solid transparent;
 }
 .chat-react.clickable { cursor: pointer; }
-.chat-react.on { border-color: var(--accent); color: var(--accent); }
+.chat-react.on { border-color: color-mix(in srgb, currentColor 55%, transparent); font-weight: 600; }
 .chat-compose {
   display: flex; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--line);
   align-items: center; flex: 0 0 auto;

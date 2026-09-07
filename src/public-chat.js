@@ -253,10 +253,10 @@ export function mountPublicChat() {
             m.author === COMMUNITY.owner ? h('span', { class: 'chat-badge' }, t('msgAdmin')) : null,
             h('span', { class: 'chat-time' }, timeAgo(ms / 1000))),
           h('div', { class: 'chat-bubble' }, quote, ...linkedBody(content),
-            edit && edit.author === m.author ? h('span', { class: 'chat-edited' }, ' ' + t('msgEdited')) : null),
-          reacts && reacts.size ? h('div', { class: 'chat-reacts' },
-            ...[...[...reacts.values()].reduce((m2, e) => m2.set(e, (m2.get(e) || 0) + 1), new Map()).entries()]
-              .map(([emoji, n]) => h('span', { class: 'chat-react' }, emoji + (n > 1 ? ' ' + n : '')))) : null)));
+            edit && edit.author === m.author ? h('span', { class: 'chat-edited' }, ' ' + t('msgEdited')) : null,
+            reacts && reacts.size ? h('div', { class: 'chat-reacts' },
+              ...[...[...reacts.values()].reduce((m2, e) => m2.set(e, (m2.get(e) || 0) + 1), new Map()).entries()]
+                .map(([emoji, n]) => h('span', { class: 'chat-react' }, emoji + (n > 1 ? ' ' + n : '')))) : null))));
     }
     if (stick) log.scrollTop = log.scrollHeight;
   }

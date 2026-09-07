@@ -21,6 +21,21 @@
       <meta-data
           android:name="android.support.customtabs.trusted.DEFAULT_URL"
           android:value="https://v3.coinos.io/" />
+      <!-- System-bar colors: without these the TWA status bar defaults to
+           white. Match the PWA's dark theme_color (#15171a). Light + dark
+           variants both dark so it's consistent whatever the system theme. -->
+      <meta-data
+          android:name="android.support.customtabs.trusted.STATUS_BAR_COLOR"
+          android:resource="@color/statusBarColor" />
+      <meta-data
+          android:name="android.support.customtabs.trusted.STATUS_BAR_COLOR_DARK"
+          android:resource="@color/statusBarColor" />
+      <meta-data
+          android:name="android.support.customtabs.trusted.NAVIGATION_BAR_COLOR"
+          android:resource="@color/navigationBarColor" />
+      <meta-data
+          android:name="android.support.customtabs.trusted.NAVIGATION_BAR_COLOR_DARK"
+          android:resource="@color/navigationBarColor" />
       <intent-filter>
         <action android:name="android.intent.action.MAIN" />
         <category android:name="android.intent.category.LAUNCHER" />

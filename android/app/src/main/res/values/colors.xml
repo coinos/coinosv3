@@ -1,4 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
   <color name="ic_launcher_background">#FFFFFF</color>
+  <!-- TWA system-bar colors: match the PWA's theme_color (#15171a) so the
+       status bar isn't the androidbrowserhelper default white. -->
+  <color name="statusBarColor">#15171A</color>
+  <color name="navigationBarColor">#15171A</color>
 </resources>

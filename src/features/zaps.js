@@ -56,8 +56,8 @@ export function zapsFeature(ctx) {
 
   // Begin the amount screen for a decoded offer. Fetching the actual invoice
   // (via the ASP's CLN) and verifying it happens on confirm.
-  function beginBolt12(off, display) {
-    begin({ kind: 'bolt12', offer: off, address: display }, off.description || display);
+  function beginBolt12(off, display, tap = false) {
+    begin({ kind: 'bolt12', offer: off, address: display }, off.description || display, tap);
     return true;
   }
 
@@ -75,10 +75,13 @@ export function zapsFeature(ctx) {
 
   // Kick off resolution of a parsed target. `display` is what we show as the
   // recipient until a profile name arrives.
-  function begin(target, display) {
+  function begin(target, display, tap = false) {
     ui.arkZap = null; ui.arkZapped = null; // in case we were handed off from ark
     ui.sendError = '';
-    const z = (ui.zap = { status: 'resolving', target, name: display, address: target.address || null, amount: '', comment: '', social: isSocial(target) });
+    // `tap`: a scanned/tapped/pasted payment (not a keystroke). Its resolution
+    // shows a minimal paying shell (see zapView) instead of the recipient form,
+    // so a tap flows straight into the pay animation with no form flash.
+    const z = (ui.zap = { status: 'resolving', target, name: display, address: target.address || null, amount: '', comment: '', social: isSocial(target), tap });
     render();
     resolve(z).catch((e) => { if (ui.zap === z) { z.status = 'error'; z.error = e.message; render(); } });
   }
@@ -294,6 +297,16 @@ export function zapsFeature(ctx) {
     // merchant payment is a "Pay".
     const heading = '⚡ ' + (z.social ? t('zapTitle') : t('lnPayTitle'));
     const back = () => { ui.zap = null; ui.sendError = ''; ui.send = blankSend(); render(); };
+    // A tap payment shouldn't flash the recipient form while the LNURL is
+    // fetched: show a minimal centered paying shell (the same autopay-card the
+    // ark pay animation uses, so the handoff is seamless — spinner-ring badge,
+    // no Back button, the resolved name/amount arrive on the next screen).
+    if (z.tap && (z.status === 'resolving' || z.status === 'invoicing')) {
+      return h('div', { class: 'card col autopay-card', style: 'align-items:center;text-align:center;gap:14px;padding:48px 20px' },
+        h('div', { class: 'check-badge autopay-badge' }, '⚡'),
+        z.address ? h('div', { class: 'small muted' }, z.address) : null,
+        h('div', { class: 'small muted autopay-foot' }, ''));
+    }
     // Resolution is a background step, not a screen: the send form stays put
     // and shows one inline line (resolvingNote below) until we can render
     // something the user can act on.
@@ -377,14 +390,15 @@ export function zapsFeature(ctx) {
     // A lightning address / lnurl (always), or an npub that Ark didn't claim.
     matchSendText(text, typed) {
       if (!canPay() || !ui.send || ui.send.recipients.length !== 1) return false;
+      const tap = !typed; // scanned/pasted (a tap), not a keystroke
       const nof = maybeNoffer(text);
       if (nof) {
         const short = shortCode(nof.raw);
-        begin({ kind: 'noffer', noffer: nof, address: short }, short);
+        begin({ kind: 'noffer', noffer: nof, address: short }, short, tap);
         return true;
       }
       const off = maybeOffer(text);
-      if (off) return beginBolt12(off, shortCode(off.raw));
+      if (off) return beginBolt12(off, shortCode(off.raw), tap);
       const target = parseZapTarget(text);
       if (!target) return false;
       // npub with no nostr seam to look up a profile → can't resolve here.
@@ -395,7 +409,7 @@ export function zapsFeature(ctx) {
       // text is complete and advances immediately; npub/lnurl carry a bech32
       // checksum and only ever match when complete.
       if (typed && target.kind === 'lnaddr') return false;
-      begin(target, zapDisplay(target, text));
+      begin(target, zapDisplay(target, text), tap);
       return true;
     },
     // The typed-lightning-address affordance on the send form.
@@ -424,7 +438,7 @@ export function zapsFeature(ctx) {
       if (!canPay() || !ui.send || ui.send.recipients.length !== 1) return false;
       const target = parseZapTarget(text);
       if (!target || target.kind === 'npub') return false;
-      begin(target, target.address || String(text).trim());
+      begin(target, target.address || String(text).trim(), true);
       return true;
     },
     // True when an npub can be zapped over Lightning from this build/wallet —

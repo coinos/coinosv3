@@ -13,3 +13,6 @@ Thumbs.db
 
 # Local scratch: E2E harnesses & perf repros (run against regtest)
 tools/.*.tmp.js
+
+# Local runtime session store (server side, not part of the wallet build)
+/db/

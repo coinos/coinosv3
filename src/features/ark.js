@@ -851,7 +851,12 @@ export function arkFeature(ctx) {
     // pending funds count for the take-over decision: an in-flight payment or
     // revocation frees them in seconds
     if (sum('spendable') < (dec.amountSat || 1) && sum('pending') < (dec.amountSat || 1)) return false;
-    ui.arkLnPay = { invoice, meta: meta || null, amountSat: dec.amountSat, amount: '', feeSat: null, status: 'quote' };
+    // Will this pay itself (an armed budget that covers it)? Known before the
+    // quote — from the invoice amount and the stored budget — so the view can
+    // go straight to a paying screen and never flash the review card first.
+    const armedBudget = meta && meta.autopay && meta.budgetKey && ctx.lnBudget ? ctx.lnBudget(meta.budgetKey) : 0;
+    const autopaying = !!(meta && meta.autopay && dec.amountSat != null && armedBudget > 0 && dec.amountSat <= armedBudget);
+    ui.arkLnPay = { invoice, meta: meta || null, amountSat: dec.amountSat, amount: '', feeSat: null, status: 'quote', autopaying };
     ui.sendError = '';
     render();
     // An auto-pay recipient (a budget the user set) pays as soon as the quote
@@ -957,10 +962,10 @@ export function arkFeature(ctx) {
         if (a.step === 'done') {
           ui.arkLnPaid = { amountSat: a.amountSat, meta: p.meta };
           if (p.meta && p.meta.pk) noteZap('inv:' + p.invoice, p.meta.pk);
-          // the user opted this recipient into auto-pay: remember the budget
-          // so the next fixed charge from them clears without a tap
+          // the user opted this recipient into auto-pay: remember the chosen
+          // budget so future fixed charges from them clear without a tap
           if (p.setBudget && p.meta && p.meta.budgetKey && ctx.setLnBudget)
-            ctx.setLnBudget(p.meta.budgetKey, a.amountSat);
+            ctx.setLnBudget(p.meta.budgetKey, p.setBudget);
           ui.arkLnPay = null;
         } else if (ui.arkLnPay) {
           if (tries < 2 && lnRetryable(a)) {
@@ -1029,6 +1034,16 @@ export function arkFeature(ctx) {
     const p = ui.arkLnPay;
     if (!p) return null;
     const zap = p.meta;
+    // Auto-pay: show only a paying screen (matching the paid screen's layout, so
+    // it morphs into it) instead of flashing the review card before it pays.
+    if (p.autopaying) {
+      return h('div', { class: 'card col', style: 'align-items:center;text-align:center;gap:14px;padding:48px 20px' },
+        h('div', { class: 'check-badge' }, '⚡'),
+        h('h2', { style: 'margin:0' }, t('arkLnPaying')),
+        zap && zap.name ? h('div', { class: 'small muted' }, zap.name) : null,
+        h('div', { class: 'amount-neg', style: 'font-size:18px' }, '-' + fmtAmount(p.amountSat) + u),
+        h('span', { class: 'spinner' }));
+    }
     const row = (label, sats, bold) => h('div', { class: 'row between' + (bold ? '' : ''), style: bold ? 'font-weight:600' : '' },
       h('span', { class: bold ? '' : 'small muted' }, label), h('span', {}, fmtAmount(sats) + u));
     const total = (p.amountSat || 0) + (p.feeSat || 0);
@@ -1057,17 +1072,20 @@ export function arkFeature(ctx) {
           ? [h('div', { style: 'border-top:1px solid var(--line, #ddd);margin:2px 0' }), row(t('lnPayTotal'), total, true)]
           : null),
       ui.sendError ? h('div', { class: 'notice err' }, ui.sendError) : null,
-      // Offer to skip this confirmation next time: a fixed-amount merchant
-      // pay with no budget yet can be trusted up to this amount. Ticking it
-      // stores the budget on a successful pay (see settle); after that the
-      // same recipient auto-pays without this screen.
+      // Offer to skip this confirmation next time: pick a budget and future
+      // fixed charges from this recipient up to it auto-pay without this
+      // screen. The chosen amount is stored on a successful pay (see settle).
       (zap && zap.budgetKey && zap.fixedSat && !zap.autopay
         && p.status === 'ready'
         && !(ctx.lnBudget && ctx.lnBudget(zap.budgetKey) > 0))
-        ? h('label', { class: 'row gap6', style: 'align-items:center;cursor:pointer' },
-            h('input', { type: 'checkbox', checked: !!p.setBudget, style: 'flex:0 0 auto;margin:0',
-              onChange: (e) => { p.setBudget = e.target.checked; } }),
-            h('span', { class: 'small muted' }, t('lnAutopayOffer', { name: zap.name || zap.address || '', n: fmtAmount(zap.fixedSat) + ' ' + unitLabel() })))
+        ? h('div', { class: 'col', style: 'gap:6px' },
+            h('span', { class: 'small muted' }, t('lnAutopaySetLabel', { name: zap.name || zap.address || '' })),
+            h('div', { class: 'row gap6', style: 'flex-wrap:wrap' },
+              ...[1000, 5000, 10000, 100000].map((amt) =>
+                h('button', { type: 'button',
+                  class: (p.setBudget === amt ? 'btn-primary' : 'btn-ghost') + ' btn-sm',
+                  onClick: () => { p.setBudget = p.setBudget === amt ? 0 : amt; render(); } },
+                  fmtAmount(amt) + ' ' + unitLabel()))))
         : null,
       p.status === 'paying'
         ? h('div', { class: 'card row gap6', style: 'align-items:center' },

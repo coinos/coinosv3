@@ -914,6 +914,7 @@ const STR = {
     giftChainWarn: '⚠ This is a bearer link: whoever opens it can claim the gift, so share it privately. It funds a fresh on-chain wallet when claimed.',
     giftRetired: 'This gift link uses an older format that’s no longer safe to claim. Ask the sender to void it and create a new one.',
     lnAutopayOffer: 'Auto-pay {name} up to {n} next time',
+    lnAutopaySetLabel: 'Auto-pay {name} next time, up to:',
     lnPaySentTitle: 'Lightning payment sent',
     lnPaySentBody: 'The swap provider pays the invoice once the on-chain lockup confirms.',
     lnZapTitle: 'Zap over Lightning',

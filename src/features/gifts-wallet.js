@@ -313,16 +313,17 @@ export function installGiftWallet(wallet) {
       const rate = Math.max(1, Math.round(feeRate || (this.feeRates && this.feeRates.halfHourFee) || 5));
       const sum = sel.reduce((s, u) => s + BigInt(u.value), 0n);
       const whole = gift >= sum; // createGiftAll: gift the entire selection
+      const fundFee = (nOut) => BigInt(_giftFundFee(sel.length, nOut, rate));
       let eAmount, change;
       if (whole) {
-        eAmount = sum - _giftFundFee(sel.length, 1, rate);
+        eAmount = sum - fundFee(1);
         change = 0n;
       } else {
-        change = sum - gift - _giftFundFee(sel.length, 2, rate);
+        change = sum - gift - fundFee(2);
         if (change >= DUST) { eAmount = gift; }
         // change would be dust: drop it into the fee, single output, honour the
         // requested amount (fee = sum - gift, which must clear a 1-output fee).
-        else { eAmount = gift; change = 0n; if (sum - gift < _giftFundFee(sel.length, 1, rate)) throw new Error('Not enough to cover the funding fee — try a smaller gift.'); }
+        else { eAmount = gift; change = 0n; if (sum - gift < fundFee(1)) throw new Error('Not enough to cover the funding fee — try a smaller gift.'); }
       }
       if (eAmount < DUST) throw new Error('Gift amount is too small.');
       // the throwaway key that holds the gift until the claimer sweeps it

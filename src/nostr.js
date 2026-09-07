@@ -382,6 +382,27 @@ export class NostrSync {
     return results.some((r) => r.status === 'fulfilled');
   }
 
+  // Prepare synchronously while this wallet's identity is still loaded.
+  // The outbox can deliver this event after logout without retaining a key.
+  stateEvent(stateObj, dtag, created_at) {
+    if (!this.sk || !this.ck) return null;
+    return finalizeEvent({ kind: 30078, created_at, tags: [['d', dtag]],
+      content: nip44.encrypt(JSON.stringify(stateObj), this.ck) }, this.sk);
+  }
+
+  decodeStateEvents(events) {
+    if (!this.ck || !this.pk) return [];
+    const out = [];
+    for (const e of events.sort((a, b) => b.created_at - a.created_at)) {
+      if (e.pubkey !== this.pk || e.kind !== 30078 || !verifyEvent(e)) continue;
+      try {
+        const state = JSON.parse(nip44.decrypt(e.content, this.ck));
+        if (state) out.push({ state, dtag: e.tags.find(t => t[0] === 'd')?.[1] || '', created_at: e.created_at });
+      } catch {}
+    }
+    return out;
+  }
+
   // Publish an arbitrary event (finalized here with our key) to the relays.
   // Used by features that speak their own event kinds (e.g. ark zaps).
   async publishEvent(partial) {
@@ -476,13 +497,6 @@ export class NostrSync {
     if (!this.sk) return [];
     let events;
     try { events = await pool.querySync(this.relays, { kinds: [30078], authors: [this.pk] }, { maxWait: 6000 }); } catch { return []; }
-    const out = [];
-    for (const e of events.sort((a, b) => b.created_at - a.created_at)) {
-      try {
-        const state = JSON.parse(nip44.decrypt(e.content, this.ck));
-        if (state) out.push({ state, dtag: (e.tags.find((t) => t[0] === 'd') || [])[1] || '', created_at: e.created_at });
-      } catch {}
-    }
-    return out;
+    return this.decodeStateEvents(events);
   }
 }

@@ -10,6 +10,28 @@ import {
   finalizeEvent,
 } from '../nostr.js';
 import { t } from '../i18n.js';
+import { sha256 } from '@noble/hashes/sha256';
+import { bytesToHex } from '@noble/hashes/utils';
+import { SyncOutbox } from '../sync-outbox.js';
+
+let sharedOutbox;
+function syncOutbox() {
+  if (sharedOutbox) return sharedOutbox;
+  if (typeof localStorage === 'undefined') return null;
+  sharedOutbox = new SyncOutbox({ storage: localStorage, send: (event, relays) => publishOn(relays, event) });
+  if (typeof window !== 'undefined' && window.addEventListener) {
+    window.addEventListener('online', () => sharedOutbox.wake());
+    window.addEventListener('pageshow', () => sharedOutbox.wake());
+    window.addEventListener('storage', e => { if (e.key?.startsWith('btc-wallet-sync-outbox:')) sharedOutbox.wake(); });
+    document.addEventListener('visibilitychange', () => {
+      // Ark flushes its cache synchronously on hide; the save hook below has
+      // already persisted encrypted events even if the network is suspended.
+      if (document.visibilityState === 'visible') sharedOutbox.wake();
+    });
+  }
+  sharedOutbox.wake();
+  return sharedOutbox;
+}
 
 // Keep a published snapshot under the relay's event-size cap. relay.coinos.io
 // rejects events over 64KB and nip44 expands the plaintext ~1.5x, so the JSON
@@ -51,10 +73,9 @@ export function splitSnapshotDomains(snap, extensions = []) {
   return out;
 }
 
-export function installSyncWallet(wallet) {
+export function installSyncWallet(wallet, { outbox = syncOutbox() } = {}) {
   if (wallet.syncFromNostr) return; // already installed
   wallet.nostr = new NostrSync();
-  wallet._nostrPubTimer = null;
 
   Object.assign(wallet, {
     // Our nostr identity (used to DM a locked gift's claim code to the recipient).
@@ -120,12 +141,19 @@ export function installSyncWallet(wallet) {
       const sync = getSyncConfig();
       if (this.offline || !sync.enabled) return false;
       this.nostr.setRelays(sync.relays);
+      const identity = this.nostr.pk;
+      const network = this.netName;
       let all;
       try {
         all = await this.nostr.fetchAllStates();
       } catch {
-        return false;
+        all = [];
       }
+      if (this.nostr.pk !== identity || this.netName !== network) return false;
+      // A failed publish is still a recoverable encrypted local snapshot.
+      // Merge it even if the relay is down or holds only the old deposits.
+      all = [...all, ...this.nostr.decodeStateEvents(outbox?.events(identity) || [])]
+        .sort((a, b) => b.created_at - a.created_at);
       // Each device publishes to its OWN slot now, so there can be several
       // snapshots for this network. Keep only ours-for-this-network: the
       // netName inside is the real guard against cross-network bleed (legacy
@@ -173,7 +201,7 @@ export function installSyncWallet(wallet) {
   wallet.registerLoadHook(() => {
     if (wallet.mnemonic) wallet.nostr.load(wallet.mnemonic, wallet.passphrase, wallet.accountIndex || 0);
     else wallet.nostr.unload();
-    wallet._syncPubSeen = {}; // a new identity has published nothing yet
+    outbox?.wake();
     adoptSyncRelays().catch(() => {});
   });
 
@@ -233,31 +261,25 @@ export function installSyncWallet(wallet) {
     stop: () => { if (stateUnsub) { try { stateUnsub(); } catch {} stateUnsub = null; } },
   });
 
-  // push every saved snapshot to the relays (debounced) unless sync is off —
-  // split into per-domain slots on THIS DEVICE's tags, publishing only the
-  // domains whose content actually changed since the last publish.
-  wallet._syncPubSeen = {}; // domain -> last published JSON (per identity)
+  // Capture and sign changed domains NOW, under the saving wallet's identity.
+  // The encrypted outbox survives page suspension, logout and relay failure.
+  // Looking up extensions/keys inside a delayed callback could mix accounts;
+  // canceling that callback on stop discarded the only copy of recent change.
   wallet.registerCacheSavedHook((snap) => {
     const sync = getSyncConfig();
-    if (wallet.offline || !sync.enabled) return;
-    wallet.nostr.setRelays(sync.relays);
-    // bind the network now: the debounced publish must keep this snapshot's
-    // network even if the wallet switches networks before the timer fires
-    const net = wallet.netName;
-    clearTimeout(wallet._nostrPubTimer);
-    wallet._nostrPubTimer = setTimeout(async () => {
+    if (wallet.offline || !sync.enabled || !wallet.nostr.pk || !outbox) return;
+    try {
       const domains = splitSnapshotDomains(snap, wallet._cacheExtensions || []);
       domains.core = trimForRelay(domains.core);
       for (const [name, obj] of Object.entries(domains)) {
-        const json = JSON.stringify(obj);
-        const slot = `${net}:${name}`;
-        if (wallet._syncPubSeen[slot] === json) continue; // unchanged
-        const ok = await wallet.nostr.publish(obj, domainDtag(net, name));
-        if (ok) wallet._syncPubSeen[slot] = json; // a refused publish retries next save
+        const { savedAt, ...data } = obj;
+        const digest = bytesToHex(sha256(new TextEncoder().encode(JSON.stringify(data))));
+        const dtag = domainDtag(snap.netName, name);
+        outbox.enqueue({ pubkey: wallet.nostr.pk, dtag, digest, relays: sync.relays,
+          sign: createdAt => wallet.nostr.stateEvent(obj, dtag, createdAt) });
       }
-    }, 2500);
+    } catch (e) { console.warn('wallet sync snapshot could not be queued:', e.message); }
   });
-  wallet.registerRealtimeHook({ stop: () => clearTimeout(wallet._nostrPubTimer) });
 }
 
 export function syncFeature(ctx) {
@@ -266,5 +288,6 @@ export function syncFeature(ctx) {
 
   return {
     id: 'sync',
+    forgetAll: () => sharedOutbox?.clear(),
   };
 }

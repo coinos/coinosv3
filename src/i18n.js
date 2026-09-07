@@ -33,6 +33,11 @@ export const isRTL = (l) => RTL.has(l || lang);
 
 const STR = {
   en: {
+    arkHistoryIncomplete: 'History incomplete',
+    arkDetailsNotSynced: 'Payment details not synced',
+    arkHistoryIncompleteHelp: 'These coins have been used, but the payment details and any remaining change have not synced to this device. Open the wallet that made the payments and let it sync.',
+    arkOriginalCoins: 'Original coin total',
+    arkDetectedAt: 'Detected on this device',
     appTitle: 'coinos',
     home: 'Home',
     lockWallet: 'Lock wallet',

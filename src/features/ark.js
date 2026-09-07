@@ -277,6 +277,26 @@ export function mergeArkStates(a, b) {
   return out;
 }
 
+// Apply sync to a connected manager without restarting payment ceremonies.
+// Drivers retain references across awaits, so preserve the state, coin and
+// action objects they already hold while adding/enriching the remote records.
+export function adoptArkSnapshot(manager, snapshot) {
+  if (!snapshot || !manager.state) return false;
+  const state = manager.state;
+  const merged = mergeArkStates(state, snapshot);
+  if (JSON.stringify(merged) === JSON.stringify(state)) return false;
+  for (const field of ['vtxos', 'actions', 'movements', 'gifts']) {
+    const existing = new Map((state[field] || []).map(item => [item.id, item]));
+    merged[field] = (merged[field] || []).map(item => {
+      const current = existing.get(item.id);
+      return current ? Object.assign(current, item) : item;
+    });
+  }
+  Object.assign(state, merged);
+  manager._save();
+  return true;
+}
+
 export function arkFeature(ctx) {
   const { h, ui, render, wallet, blankSend, fmtAmount, unitLabel, unitTag, copyBtn, toast, openExternal } = ctx;
   installArkWallet(wallet); // ark state storage lives outside the core wallet
@@ -313,8 +333,10 @@ export function arkFeature(ctx) {
         || (wallet.loadArkState(cfg.ark) || {}).serverPubkey || null;
       if (owner && owner !== mine) {
         try {
-          localStorage.setItem(wallet._arkHoldKey(owner),
-            JSON.stringify({ ...d.arkState, serverPubkey: owner }));
+          const key = wallet._arkHoldKey(owner);
+          const held = JSON.parse(localStorage.getItem(key) || 'null');
+          localStorage.setItem(key,
+            JSON.stringify(mergeArkStates(held, { ...d.arkState, serverPubkey: owner })));
         } catch {}
         // `mine` is null on a FRESH restore (no local state, not yet
         // connected), so even our own snapshot lands in the hold. Connecting
@@ -329,15 +351,15 @@ export function arkFeature(ctx) {
       wallet.saveArkState(merged, cfg.ark);
       const mergedN = (merged.vtxos || []).length;
       const remoteN = (d.arkState.vtxos || []).length;
-      const localN = (local && local.vtxos || []).length;
       // We know vtxos this snapshot lacked — push our superset back up so the
       // sender (and the shared slot) learns them. Guarded by mergedN>remoteN so
       // it can't loop once every device has converged to the union.
       if (mergedN > remoteN) { try { wallet.saveCache(); } catch {} }
-      // The merge brought vtxos our live manager doesn't have — (re)connect so
-      // the balance actually shows.
-      const novel = mergedN > localN || (mergedN && (!ark || !ark.state));
-      if (mergedN && novel) setTimeout(() => maybeInitArk(), 0);
+      // maybeInitArk deliberately does nothing when connected. Update that
+      // manager directly or the newly synced change/history stays invisible
+      // until reload, even though storage already contains the right balance.
+      if (ark) adoptArkSnapshot(ark, merged);
+      else if (mergedN) setTimeout(() => maybeInitArk(), 0);
     },
   });
 
@@ -470,6 +492,8 @@ export function arkFeature(ctx) {
     arkConnectPromise = mgr.init().then(() => {
       if (gen !== arkInitGen) throw new Error('superseded'); // wallet switched mid-connect
       ark = mgr;
+      // Sync may have arrived while init awaited the server handshake.
+      adoptArkSnapshot(mgr, wallet.loadArkState(cfg.ark));
       // Boards that died before funding (a failed tx build, a closed tab)
       // used to linger at 'created' forever — and an in-flight-looking
       // action blocks auto-renewal. Anything unfunded after an hour is a
@@ -1145,15 +1169,9 @@ export function arkFeature(ctx) {
       : m.type === 'ln-send' ? t('arkLnPaidHistory') : m.type === 'ln-receive' ? t('arkLnReceivedHistory')
       : m.type === 'offboard' ? t('arkOffboarded') : m.type === 'exit' ? t('arkExited')
       : m.type === 'refresh' ? t('arkRenewedHistory') : t('sent');
-    // coins the server saw spent outside this device's story (another
-    // device, a swept expiry, an adopted renewal) — the row that keeps the
-    // history summing to the balance. Folded per reconcile pass upstream.
-    // Deliberately dressed as an ORDINARY Sent row: the user spent their own
-    // money and doesn't need an alarm about which device did it. (The ASP's
-    // status API returns only a spent bit — no spend time or destination —
-    // so the timestamp is when this wallet found out.) The detail shows the
-    // hard facts: date, amount, and the coin ids that were consumed. The
-    // folded row isn't a stored movement, so the whole thing rides ui state.
+    // A spent input proves neither a payment amount nor its date: it can
+    // contain change, an offboard, or a renewal this device has not synced.
+    // Show the missing history explicitly until its records arrive.
     if (m.type === 'reconcile') {
       return h('div', {
         class: 'item', style: 'cursor:pointer',
@@ -1162,12 +1180,12 @@ export function arkFeature(ctx) {
           render();
         },
       },
-        h('div', { class: 'ico out', html: ARK_MARK(15) }),
+        h('div', { class: 'ico' }, '↻'),
         h('div', { class: 'grow' },
-          h('div', {}, t('sent')),
-          h('div', { class: 'small faint' }, timeAgo(m.ts / 1000))),
+          h('div', {}, t('arkHistoryIncomplete')),
+          h('div', { class: 'small faint' }, t('arkDetailsNotSynced'))),
         h('div', { style: 'text-align:right' },
-          h('div', { class: 'amount-neg' }, '-' + fmtAmount(m.amountSat))));
+          h('div', { class: 'small muted' }, fmtAmount(m.amountSat) + ' ' + unitLabel())));
     }
     // a renewal moves nothing anywhere — its history amount is what it COST
     if (m.type === 'refresh') {
@@ -1277,7 +1295,7 @@ export function arkFeature(ctx) {
           h('span', { class: 'small', style: 'text-align:right;word-break:break-all' }, shortTxid(id)))));
 
   // Detail for a folded reconcile row: the hard facts only — when this wallet
-  // learned of it, how much left, and which coins were consumed.
+  // learned of it, the original coin total, and which coins were consumed.
   function arkReconDetailView(d) {
     const row = (k, v) => h('div', { class: 'row between', style: 'gap:12px' },
       h('span', { class: 'small muted', style: 'flex-shrink:0' }, k),
@@ -1285,9 +1303,10 @@ export function arkFeature(ctx) {
     return h('div', { class: 'card col', style: 'gap:10px' },
       h('div', { class: 'row gap6', style: 'align-items:center' },
         h('span', { html: ARK_ICON(18) }),
-        h('h3', { style: 'margin:0' }, t('sent'))),
-      h('div', { class: 'amount-neg', style: 'font-size:20px' }, '-' + fmtAmount(d.amountSat) + ' ' + unitLabel()),
-      row(t('dateLabel'), new Date(d.ts).toLocaleString()),
+        h('h3', { style: 'margin:0' }, t('arkHistoryIncomplete'))),
+      h('div', { class: 'small muted' }, t('arkHistoryIncompleteHelp')),
+      row(t('arkOriginalCoins'), fmtAmount(d.amountSat) + ' ' + unitLabel()),
+      row(t('arkDetectedAt'), new Date(d.ts).toLocaleString()),
       coinListRows((d.vtxoIds || []).length > 1 ? t('arkVtxoInputs') : t('arkVtxoId'), d.vtxoIds),
       h('button', { class: 'btn-ghost btn-block', onClick: () => ctx.goBack(() => { ui.arkReconDetail = null; }) }, t('back')));
   }

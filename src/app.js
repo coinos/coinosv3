@@ -2728,6 +2728,7 @@ function clearAll() {
   try { localStorage.removeItem(WATCH_KEY); } catch {}
   ui.confirmClear = false;
   lock();
+  featureHook('forgetAll'); // discard encrypted sync recovery copies too
 }
 
 function pwPromptCard() {
@@ -5067,7 +5068,6 @@ loadLocale(getLang()).finally(async () => {
   if (featureHook('bootUrl')) return; // a feature consumed the URL (e.g. a gift claim)
   if (!restoreAccountsState()) render();
 });
-
 
 
 

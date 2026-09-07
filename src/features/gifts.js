@@ -5,7 +5,7 @@
 import { newMnemonic } from '../wallet.js';
 import { getNetwork } from '../api.js';
 import { decryptWithCode, npubOf } from '../nostr.js';
-import { installGiftWallet, previewGift, giftOutpoints, buildClaimTx, giftMinimum, lockGift, previewLockedGift } from './gifts-wallet.js';
+import { installGiftWallet, previewGift, giftOutpoints, giftClaimTxs, isRetiredGift, giftMinimum, lockGift, previewLockedGift } from './gifts-wallet.js';
 import { t } from '../i18n.js';
 import { qrSvg } from '../qr.js';
 import { fmtBtc, timeAgo, shortAddr } from '../format.js';
@@ -303,7 +303,8 @@ export function giftsFeature(ctx) {
     // amount — we surface the estimate on the Claim button so it isn't a
     // surprise. An ark gift sweeps off-chain: no fee at all.
     const rate = Math.max(1, Math.round((wallet.feeRates && wallet.feeRates.halfHourFee) || 5));
-    const estFee = ag ? 0 : pv ? Math.ceil((11 + 68 * pv.inputs + 31 * 2) * rate) : 0;
+    // v2 sweep: pv.inputs (1) inputs, a single output to the claimer.
+    const estFee = ag ? 0 : pv ? Math.ceil((11 + 68 * pv.inputs + 31) * rate) : 0;
     const total = pv ? pv.room : 0;
     return h(
       'div',
@@ -446,8 +447,22 @@ export function giftsFeature(ctx) {
         return false;
       })();
       if (!ownsTo) { ui.claimError = t('claimFailed'); ui.busy = false; render(); return; }
-      const claim = buildClaimTx(ui.claimCode, to, rate, wallet.netCfg.net);
-      await wallet.broadcast(claim.hex);
+      if (isRetiredGift(ui.claimCode)) { ui.claimError = t('giftRetired'); ui.busy = false; render(); return; }
+      // v2 ephemeral-key gift: broadcast the presigned funding tx (sender coin →
+      // ephemeral key E), then our SIGHASH_ALL sweep of E into this wallet. Both
+      // fully commit to their outputs, so neither is redirectable in the mempool
+      // — the front-running vector that drained the old blank-cheque gifts.
+      const claim = giftClaimTxs(ui.claimCode, to, rate, wallet.netCfg.net);
+      // The funding tx is deterministic (fully signed), so a retry — or a
+      // co-holder who already broadcast it — makes this a duplicate; that's
+      // success, not failure. Only a genuinely new broadcast needs to land
+      // before the sweep (which spends the funding output) can relay.
+      try {
+        await wallet.broadcast(claim.funding.hex);
+      } catch (e) {
+        if (!/already|mempool|txn-already|duplicate/i.test(String(e && e.message))) throw e;
+      }
+      await wallet.broadcast(claim.sweep.hex);
       afterClaim(claim.amount);
       wallet.scan().then(() => {
         // The claim credit advances the fresh receive index in the background;
@@ -459,12 +474,11 @@ export function giftsFeature(ctx) {
           render();
         }
       }).catch(() => {});
-      // A broadcast that returns OK is not proof WE won: the on-chain gift's
-      // presigned input is redirectable, so a higher-fee sweep can evict our
-      // claim and the coin lands elsewhere — the "success then empty wallet"
-      // the sweeper bot produced. Watch the funding coin: if it gets spent by
-      // a txid that ISN'T ours, retract the celebration and say it was taken.
-      verifyClaimWon(giftOutpoints(ui.claimCode)[0], claim.txid).catch(() => {});
+      // A claim that broadcasts OK is not absolute proof WE won: another holder
+      // of the same link could have swept E just before us (the bearer property,
+      // not the old theft — you can't win this without the link). Watch E's
+      // output; if a txid that ISN'T ours spent it, retract and say it was taken.
+      verifyClaimWon(claim.outpoint, claim.sweep.txid).catch(() => {});
     } catch (e) {
       // Broadcast failed — most likely someone claimed it in the race window.
       // Re-check the funding coin and, if spent, show the "already claimed" screen.

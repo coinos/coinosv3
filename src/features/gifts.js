@@ -459,6 +459,12 @@ export function giftsFeature(ctx) {
           render();
         }
       }).catch(() => {});
+      // A broadcast that returns OK is not proof WE won: the on-chain gift's
+      // presigned input is redirectable, so a higher-fee sweep can evict our
+      // claim and the coin lands elsewhere — the "success then empty wallet"
+      // the sweeper bot produced. Watch the funding coin: if it gets spent by
+      // a txid that ISN'T ours, retract the celebration and say it was taken.
+      verifyClaimWon(giftOutpoints(ui.claimCode)[0], claim.txid).catch(() => {});
     } catch (e) {
       // Broadcast failed — most likely someone claimed it in the race window.
       // Re-check the funding coin and, if spent, show the "already claimed" screen.
@@ -477,6 +483,29 @@ export function giftsFeature(ctx) {
     }
     ui.busy = false;
     render();
+  }
+
+  // Poll the funding coin after an on-chain claim: if it settles spent by a
+  // DIFFERENT txid than ours, a competing sweep won the race — retract the
+  // false "claimed!" celebration and show the taken screen. Best-effort;
+  // stops as soon as it sees a confirmed spender.
+  async function verifyClaimWon(op, ourTxid) {
+    if (!op || !ourTxid) return;
+    for (let i = 0; i < 6; i++) {
+      await new Promise((r) => setTimeout(r, i < 2 ? 4000 : 12000));
+      let res;
+      try { res = await wallet.api.outspend(op.txid, op.vout); } catch { continue; }
+      if (!res || !res.spent) continue;
+      if (res.txid && res.txid !== ourTxid) {
+        // someone else's tx spent the gift coin — our claim lost
+        ui.giftJustClaimed = null; ui.arkLnPaid = null;
+        ui.claimStep = 'welcome'; ui.claimedAmount = 0;
+        ui.claimTaken = { txid: res.txid };
+        render();
+        return;
+      }
+      if (res.status && res.status.confirmed) return; // ours confirmed — done
+    }
   }
 
   // Re-view a previously created gift's link + QR (from its stored record), so
@@ -642,6 +671,13 @@ export function giftsFeature(ctx) {
               ui.giftSource === 'ark' ? t('giftArkNote')
                 : ui.giftMax ? t('giftAllNote')
                 : t('giftMinNote', { n: fmtAmount(giftMinimum(giftRate())) + ' ' + unitLabel() })),
+            // Interim safety: on-chain gift links are bearer instruments whose
+            // presigned input is currently redirectable (a sweeper bot is
+            // actively front-running shared links). Warn hard until the
+            // ephemeral-key redesign lands; Spending (ark) gifts are unaffected.
+            ui.giftSource === 'chain'
+              ? h('div', { class: 'notice warn small' }, t('giftChainWarn'))
+              : null,
             ui.giftError && h('div', { class: 'notice err' }, ui.giftError),
             ui.busy
               ? h('button', { class: 'btn-block', disabled: true }, h('span', { class: 'spinner sm' }))

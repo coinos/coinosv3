@@ -911,6 +911,7 @@ const STR = {
     lnPayNetworkFee: 'Network fee',
     lnPayTotal: 'Total',
     lnPayConfirm: 'Pay',
+    giftChainWarn: '\u26a0 On-chain gift links are bearer: anyone who gets the link — or sees the claim on the network — can sweep it. Share it privately and have the recipient claim right away. (A safer redesign is coming; Spending gifts aren\u2019t affected.)',
     lnAutopayOffer: 'Auto-pay {name} up to {n} next time',
     lnPaySentTitle: 'Lightning payment sent',
     lnPaySentBody: 'The swap provider pays the invoice once the on-chain lockup confirms.',

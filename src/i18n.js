@@ -43,6 +43,8 @@ const STR = {
     lockWallet: 'Lock wallet',
     accounts: 'Accounts',
     addWallet: 'Add account',
+    signInAnother: 'Sign into another account',
+    signInAnotherNote: 'Add a different identity (Nostr, passkey or Google) without signing out — switch between them here anytime.',
     clearAll: 'Delete all',
     logoutForget: 'Logout & forget all data',
     entropyToggle: 'Entropy',

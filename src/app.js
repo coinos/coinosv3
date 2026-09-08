@@ -2573,6 +2573,15 @@ function accountsScreen() {
         }))
       ),
       h('button', { class: 'btn-block', onClick: () => { ui.addWallet = { kind: 'spending', from: 'new' }; render(); } }, t('addWallet')),
+      // Sign into a DIFFERENT identity (Nostr signer, passkey, Google) without
+      // logging out: the unlock screen carries the sign-in doors, and enterWallet
+      // ADDS the account alongside the current ones (fromWallet keeps them + a
+      // Back). Switching between them afterwards is just tapping a row above.
+      h('div', { class: 'col', style: 'gap:4px' },
+        h('button', { class: 'btn-ghost btn-block', onClick: () => {
+          ui.fromWallet = true; ui.unlockError = ''; ui.unlockTab = 'import'; ui.screen = 'unlock'; render();
+        } }, t('signInAnother')),
+        h('div', { class: 'small faint', style: 'padding:0 2px' }, t('signInAnotherNote'))),
       hasVault() ? h('button', { class: 'btn-ghost btn-block', onClick: startChangePw }, t('changePassword')) : null,
       h('button', { class: 'btn-ghost btn-block', onClick: () => { ui.confirmClear = true; render(); } }, t('clearAll'))
     ),

@@ -212,6 +212,19 @@ export function messagesFeature(ctx) {
     return pks;
   };
   const isMe = (pk) => myPubkeys().includes(pk);
+  // The ONE nostr identity this wallet uses for DMs: the login identity when
+  // signed in (extension/bunker/passkey/Google), else the seed-derived key. A
+  // wallet has two keys (seed + login), but only this one should receive and
+  // advertise DMs — advertising/polling the seed key as a SECOND inbox is what
+  // produced duplicate welcome DMs and split a person's messages across two
+  // identities. isMe/dmDecryptors stay tolerant of both so already-received
+  // messages still thread and align; we just stop treating the seed key as a
+  // live second inbox. (One key here, but kept as a list for the '#p' filters.)
+  const dmSubKeys = () => {
+    const id = hook('nostrLoginIdentity');
+    const pk = (id && id.pubkey) || (wallet.nostr && wallet.nostr.pk) || null;
+    return pk ? [pk] : [];
+  };
   // "No identity" while soft-locked means the keys left with the lock — say
   // that, not "signer disconnected" (which reads as a nostr-login problem).
   const noIdToast = () => {
@@ -1446,7 +1459,9 @@ export function messagesFeature(ctx) {
 
   function startDMs() {
     if (dmStarted) return;
-    const pks = myPubkeys();
+    // Poll/advertise only the single DM identity (see dmSubKeys) — not the seed
+    // key as a phantom second inbox.
+    const pks = dmSubKeys();
     if (!pks.length) return;
     dmStarted = true;
     // warm threads from the local cache. A self-thread of our own messages is
@@ -1490,9 +1505,12 @@ export function messagesFeature(ctx) {
 
   // Publish a kind 10050 DM-relay list for the wallet key if none exists, so
   // other NIP-17 clients can find our inbox. Never touch a login npub's list
-  // — the user's other clients own that.
+  // — the user's other clients own that. And when a login identity IS active,
+  // don't advertise the seed key at all: it's internal, not a second inbox
+  // (advertising it is what let DMs land on a phantom identity).
   async function ensureDmRelayList() {
     if (!wallet.nostr || !wallet.nostr.sk) return;
+    if (hook('nostrLoginIdentity')) return;
     const pk = wallet.nostr.pk;
     const existing = await queryOn(DM_RELAYS, { kinds: [10050], authors: [pk] }, 2500);
     if (existing.length) return;

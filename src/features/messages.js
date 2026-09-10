@@ -245,6 +245,29 @@ export function messagesFeature(ctx) {
   const pendingDirect = new Map(); // rumor id -> { bundle, from }
   const profiles = new Map(); // pubkey -> profile | null while loading
   const seenWraps = new Set();
+  // Wraps this device already opened (or gave up on), remembered ACROSS
+  // boots: relays re-serve their last ~400 wraps on every subscribe, and a
+  // remote-signer wallet paid two NIP-46 round trips (sign + verify each)
+  // per wrap to rediscover DMs it already had — ~4s of a phone's boot.
+  // Keyed by an id prefix (64 bits is plenty for "skip this one").
+  const WRAPS_MAX = 1500;
+  const wrapKey = (id) => String(id).slice(0, 16);
+  let wrapLog = null, wrapsTimer = 0;
+  function loadSeenWraps() {
+    if (wrapLog) return;
+    wrapLog = (st().wraps || []).slice(-WRAPS_MAX);
+    for (const k of wrapLog) seenWraps.add(k);
+  }
+  function rememberWrap(id) {
+    const k = wrapKey(id);
+    if (!wrapLog) wrapLog = [];
+    if (!seenWraps.has(k)) wrapLog.push(k);
+    seenWraps.add(k);
+    clearTimeout(wrapsTimer);
+    wrapsTimer = setTimeout(() => {
+      try { const s = st(); s.wraps = wrapLog.slice(-WRAPS_MAX); wrapLog = s.wraps; save(s); } catch {}
+    }, 1500);
+  }
   let dmStarted = false;
   let allUnsubs = [];
 
@@ -1399,9 +1422,9 @@ export function messagesFeature(ctx) {
   }
 
   async function handleInboxWrap(wrap) {
-    if (seenWraps.has(wrap.id)) return;
+    if (seenWraps.has(wrap.id) || seenWraps.has(wrapKey(wrap.id))) return;
     seenWraps.add(wrap.id);
-    if (await openInboxWrap(wrap)) return;
+    if (await openInboxWrap(wrap)) { rememberWrap(wrap.id); return; }
     if (pendingWraps.size >= PENDING_MAX) pendingWraps.delete(pendingWraps.keys().next().value);
     pendingWraps.set(wrap.id, { wrap, tries: decryptorsComplete() ? 1 : 0 });
     scheduleDrain(8000);
@@ -1436,8 +1459,8 @@ export function messagesFeature(ctx) {
         // full-strength failures would evict messages that were never really
         // tried. Stop here — the slow retry picks the rest up.
         if (complete && !decryptorsComplete()) break;
-        if (await openInboxWrap(p.wrap)) pendingWraps.delete(id);
-        else if (complete && ++p.tries >= PENDING_TRIES) pendingWraps.delete(id);
+        if (await openInboxWrap(p.wrap)) { pendingWraps.delete(id); rememberWrap(id); }
+        else if (complete && ++p.tries >= PENDING_TRIES) { pendingWraps.delete(id); rememberWrap(id); }
         if (performance.now() - chunkStart > 8) {
           await new Promise((r) => setTimeout(r));
           chunkStart = performance.now();
@@ -1464,6 +1487,7 @@ export function messagesFeature(ctx) {
     const pks = dmSubKeys();
     if (!pks.length) return;
     dmStarted = true;
+    loadSeenWraps();
     // warm threads from the local cache. A self-thread of our own messages is
     // the residue of the old sent-copy misthreading (each welcome DM landed
     // under our own key) — sweep it rather than resurrect it; the cached
@@ -3463,7 +3487,7 @@ export function messagesFeature(ctx) {
       rooms.clear();
       threads.clear();
       pendingDirect.clear();
-      seenWraps.clear(); // the next account must decrypt wraps this one couldn't
+      seenWraps.clear(); wrapLog = null; // the next account must decrypt wraps this one couldn't
       clearTimeout(drainTimer);
       pendingWraps.clear();
       dmStarted = false;

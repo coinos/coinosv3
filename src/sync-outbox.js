@@ -52,7 +52,10 @@ export class SyncOutbox {
     const key = PREFIX + pubkey + ':' + dtag;
     let previous;
     try { previous = JSON.parse(this.storage.getItem(key)); } catch {}
-    if (previous?.digest === digest) { this.wake(); return; }
+    // Same content, same route: nothing to do. A record that changed route
+    // (an oversized domain now bound for Blossom, or back inline) is replaced
+    // even for identical content — the stuck relay-only copy must go.
+    if (previous?.digest === digest && !!previous.blob === !!blob) { this.wake(); return; }
     // A pending, never-sent event can be replaced within the same second.
     // Once attempted, use a later timestamp: Nostr resolves equal timestamps
     // by event id, which can otherwise leave the OLD snapshot in the relay.

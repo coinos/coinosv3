@@ -1,0 +1,23 @@
+# blossom.coinos.io — Blossom blob server for oversized wallet-sync domains.
+# Stores nothing but the wallet's encrypted sync envelopes (see server.js).
+# Lives beside the names registrar: ~/arkswap is a coinosv3 checkout on cs.
+services:
+  blossom:
+    image: oven/bun:1
+    container_name: blossom
+    working_dir: /app
+    command: bun blossom/server.js
+    environment:
+      BLOSSOM_DATA: /data
+      BLOSSOM_PORT: "8796"
+      BLOSSOM_HOST: blossom.coinos.io
+    volumes:
+      - /home/adam/arkswap:/app
+      - /home/adam/arkswap/data-blossom:/data
+    ports:
+      - 127.0.0.1:8796:8796
+    networks: [net]
+    restart: unless-stopped
+networks:
+  net:
+    external: true

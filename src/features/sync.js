@@ -12,13 +12,23 @@ import {
 import { t } from '../i18n.js';
 import { sha256 } from '@noble/hashes/sha256';
 import { bytesToHex } from '@noble/hashes/utils';
+import { base64 } from '@scure/base';
 import { SyncOutbox } from '../sync-outbox.js';
+import {
+  sealBlob, openBlob, sha256Hex, blobAuth, uploadBlob, deleteBlob, fetchBlob,
+  blossomServers, getBlossomConfig, setBlossomConfig, DEFAULT_BLOSSOM_SERVERS,
+} from '../sync-blob.js';
 
 let sharedOutbox;
 function syncOutbox() {
   if (sharedOutbox) return sharedOutbox;
   if (typeof localStorage === 'undefined') return null;
-  sharedOutbox = new SyncOutbox({ storage: localStorage, send: (event, relays) => publishOn(relays, event) });
+  sharedOutbox = new SyncOutbox({
+    storage: localStorage,
+    send: (event, relays) => publishOn(relays, event),
+    upload: (server, bytes, auth) => uploadBlob(server, bytes, auth),
+    remove: (server, sha, auth) => deleteBlob(server, sha, auth),
+  });
   if (typeof window !== 'undefined' && window.addEventListener) {
     window.addEventListener('online', () => sharedOutbox.wake());
     window.addEventListener('pageshow', () => sharedOutbox.wake());
@@ -76,6 +86,35 @@ export function splitSnapshotDomains(snap, extensions = []) {
 export function installSyncWallet(wallet, { outbox = syncOutbox() } = {}) {
   if (wallet.syncFromNostr) return; // already installed
   wallet.nostr = new NostrSync();
+
+  // A pointer state ({ blob: { sha256, servers } }) stands in for a domain
+  // that lives on Blossom. Resolve it: our own outbox copy first (no network),
+  // else the servers the pointer names plus the configured ones, verified by
+  // hash and opened with the same self-key. Unresolvable pointers are dropped
+  // — a stale local copy beats applying nothing, and the next boot retries.
+  const blobCache = new Map(); // sha256 -> parsed state (a session's worth)
+  async function resolveStates(list) {
+    const out = [];
+    for (const s of list) {
+      const b = s.state && s.state.blob;
+      if (!b) { out.push(s); continue; }
+      if (!/^[0-9a-f]{64}$/.test(b.sha256 || '')) continue;
+      let state = blobCache.get(b.sha256);
+      if (!state) {
+        let bytes = outbox ? outbox.localBlob(b.sha256) : null;
+        if (!bytes && !wallet.offline) {
+          bytes = await fetchBlob([...new Set([...(Array.isArray(b.servers) ? b.servers : []), ...blossomServers()])], b.sha256);
+        }
+        if (!bytes || !wallet.nostr.ck) continue;
+        try { state = JSON.parse(openBlob(wallet.nostr.ck, bytes)); } catch { continue; }
+        if (!state) continue;
+        blobCache.set(b.sha256, state);
+        if (blobCache.size > 40) blobCache.delete(blobCache.keys().next().value);
+      }
+      out.push({ ...s, state: { netName: s.state.netName, savedAt: s.state.savedAt, ...state } });
+    }
+    return out;
+  }
 
   Object.assign(wallet, {
     // Our nostr identity (used to DM a locked gift's claim code to the recipient).
@@ -152,8 +191,9 @@ export function installSyncWallet(wallet, { outbox = syncOutbox() } = {}) {
       if (this.nostr.pk !== identity || this.netName !== network) return false;
       // A failed publish is still a recoverable encrypted local snapshot.
       // Merge it even if the relay is down or holds only the old deposits.
-      all = [...all, ...this.nostr.decodeStateEvents(outbox?.events(identity) || [])]
-        .sort((a, b) => b.created_at - a.created_at);
+      all = [...all, ...this.nostr.decodeStateEvents(outbox?.events(identity) || [])];
+      all = (await resolveStates(all)).sort((a, b) => b.created_at - a.created_at);
+      if (this.nostr.pk !== identity || this.netName !== network) return false;
       // Each device publishes to its OWN slot now, so there can be several
       // snapshots for this network. Keep only ours-for-this-network: the
       // netName inside is the real guard against cross-network bleed (legacy
@@ -217,8 +257,18 @@ export function installSyncWallet(wallet, { outbox = syncOutbox() } = {}) {
       if (login && /^[0-9a-f]{64}$/.test(login.pubkey || '')) pks.push(login.pubkey);
     } catch {}
     pks.push(wallet.nostr.pk);
-    const evs = await queryOn([...new Set([...PROFILE_RELAYS, ...DEFAULT_SYNC_RELAYS])], { kinds: [10002], authors: pks }, 3500);
-    const newestFor = (pk) => evs.filter((e) => e.pubkey === pk).sort((a, b) => b.created_at - a.created_at)[0];
+    const evs = await queryOn([...new Set([...PROFILE_RELAYS, ...DEFAULT_SYNC_RELAYS])], { kinds: [10002, 10063], authors: pks }, 3500);
+    const newestFor = (pk, kind = 10002) => evs.filter((e) => e.pubkey === pk && e.kind === kind).sort((a, b) => b.created_at - a.created_at)[0];
+    // The user's own Blossom server list (BUD-03) leads for oversized sync
+    // domains, the coinos server stays as a mirror — unless they typed a list
+    // in Settings, which is theirs to keep.
+    if (!getBlossomConfig().manual) {
+      for (const pk of pks) {
+        const e = newestFor(pk, 10063);
+        const servers = e && e.tags.filter((x) => x[0] === 'server' && x[1]).map((x) => x[1]);
+        if (servers && servers.length) { setBlossomConfig({ servers: [...servers, ...DEFAULT_BLOSSOM_SERVERS], manual: false }); break; }
+      }
+    }
     const writeRelays = (e) => e.tags
       .filter((x) => x[0] === 'r' && x[1] && (!x[2] || x[2] === 'write'))
       .map((x) => x[1].trim()).filter((r) => /^wss?:\/\//.test(r)).slice(0, 4);
@@ -255,7 +305,11 @@ export function installSyncWallet(wallet, { outbox = syncOutbox() } = {}) {
         if (!v.netName || v.netName !== wallet.netName) return;
         if (!isOurDtag(dtag, wallet.netName)) return;
         if (isOwnDeviceDtag(dtag, wallet.netName) && (v.savedAt || 0) === (wallet._savedAt || 0)) return; // our own echo
-        wallet._mergeSnapshotExtensions(v);
+        if (!v.blob) { wallet._mergeSnapshotExtensions(v); return; }
+        const pk = wallet.nostr.pk;
+        resolveStates([{ state: v, dtag }]).then((r) => {
+          if (r[0] && wallet.nostr.pk === pk && wallet.netName === r[0].state.netName) wallet._mergeSnapshotExtensions(r[0].state);
+        }).catch(() => {});
       });
     },
     stop: () => { if (stateUnsub) { try { stateUnsub(); } catch {} stateUnsub = null; } },
@@ -271,23 +325,62 @@ export function installSyncWallet(wallet, { outbox = syncOutbox() } = {}) {
     try {
       const domains = splitSnapshotDomains(snap, wallet._cacheExtensions || []);
       domains.core = trimForRelay(domains.core);
+      const { sk, ck, pk } = wallet.nostr;
       for (const [name, obj] of Object.entries(domains)) {
         const { savedAt, ...data } = obj;
-        const digest = bytesToHex(sha256(new TextEncoder().encode(JSON.stringify(data))));
+        const text = JSON.stringify(data);
+        const digest = bytesToHex(sha256(new TextEncoder().encode(text)));
         const dtag = domainDtag(snap.netName, name);
-        outbox.enqueue({ pubkey: wallet.nostr.pk, dtag, digest, relays: sync.relays,
-          sign: createdAt => wallet.nostr.stateEvent(obj, dtag, createdAt) });
+        let blob = null, evtObj = obj;
+        if (text.length > RELAY_JSON_BUDGET) {
+          // Too big for a relay event (and for NIP-44): seal the whole domain
+          // into a Blossom envelope; the event becomes a pointer to its hash.
+          const servers = blossomServers();
+          const bytes = sealBlob(ck, JSON.stringify(obj));
+          const sha = sha256Hex(bytes);
+          blob = { sha256: sha, size: bytes.length, data: base64.encode(bytes), servers,
+            auth: blobAuth(sk, 'upload', [sha]), deleteAuthFor: (old) => blobAuth(sk, 'delete', [old]) };
+          evtObj = { netName: obj.netName, savedAt: obj.savedAt, blob: { v: 1, sha256: sha, size: bytes.length, servers } };
+        }
+        outbox.enqueue({ pubkey: pk, dtag, digest, relays: sync.relays, blob,
+          sign: createdAt => wallet.nostr.stateEvent(evtObj, dtag, createdAt) });
       }
     } catch (e) { console.warn('wallet sync snapshot could not be queued:', e.message); }
   });
 }
 
 export function syncFeature(ctx) {
-  const { h, ui, render, wallet } = ctx;
+  const { h, ui, render, wallet, toast } = ctx;
   installSyncWallet(wallet);
+
+  // Settings → Nostr: which Blossom servers hold this wallet's oversized
+  // sync domains. Self-hosters and the privacy-minded point it elsewhere.
+  function storageCard() {
+    if (ui.syncServersDraft == null) ui.syncServersDraft = blossomServers().join('\n');
+    const pending = (sharedOutbox?.records() || []).filter((r) => r.blob && !(r.uploaded || []).length).length;
+    const save = (servers, manual) => {
+      const list = setBlossomConfig({ servers, manual });
+      if (!list.length) { toast(t('syncStorageInvalid')); return; }
+      ui.syncServersDraft = list.join('\n');
+      toast(t('syncStorageSaved'));
+      // pending blobs pick up the new list on their next save; nudge one
+      try { wallet.saveCache(); } catch {}
+      render();
+    };
+    return h('div', { class: 'card col', 'data-key': 'syncstorage' },
+      h('h3', {}, t('syncStorageTitle')),
+      h('p', { class: 'small muted', style: 'margin:0' }, t('syncStorageHow')),
+      h('textarea', { rows: 3, style: 'font-size:12px', value: ui.syncServersDraft,
+        onInput: (e) => { ui.syncServersDraft = e.target.value; } }),
+      pending ? h('div', { class: 'small faint' }, t('syncStoragePending', { n: pending })) : null,
+      h('div', { class: 'row gap6' },
+        h('button', { class: 'btn-ghost small', onClick: () => save(ui.syncServersDraft.split(/\s+/), true) }, t('syncStorageSave')),
+        h('button', { class: 'btn-ghost small', onClick: () => save(DEFAULT_BLOSSOM_SERVERS, false) }, t('syncStorageReset'))));
+  }
 
   return {
     id: 'sync',
+    nostrSettingsCards: () => [storageCard()],
     forgetAll: () => sharedOutbox?.clear(),
   };
 }

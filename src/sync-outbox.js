@@ -1,11 +1,17 @@
 // Durable, already-encrypted and signed wallet snapshots. No signing keys or
 // plaintext wallet state enter storage. Keep the last acknowledged copy too:
 // it is a local recovery source when an account cache has been cleared.
+//
+// A record may carry a sealed BLOB (an oversized domain bound for Blossom
+// storage) beside its pointer event: the blob uploads first, to at least one
+// server, then the event publishes. Its upload/delete authorizations are
+// signed at enqueue time (kind 24242 with an expiry), so delivery after
+// logout still needs no key.
 const PREFIX = 'btc-wallet-sync-outbox:';
 
 export class SyncOutbox {
-  constructor({ storage, send, now = Date.now, schedule = (fn, ms) => setTimeout(fn, ms), cancel = id => clearTimeout(id), warn = (...args) => console.warn(...args) }) {
-    Object.assign(this, { storage, send, now, schedule, cancel, warn });
+  constructor({ storage, send, upload = async () => false, remove = async () => false, now = Date.now, schedule = (fn, ms) => setTimeout(fn, ms), cancel = id => clearTimeout(id), warn = (...args) => console.warn(...args) }) {
+    Object.assign(this, { storage, send, upload, remove, now, schedule, cancel, warn });
     this.timer = null;
     this.running = false;
     this.retryMs = 5000;
@@ -26,13 +32,23 @@ export class SyncOutbox {
 
   events(pubkey) { return this.records().filter(r => r.event.pubkey === pubkey).map(r => r.event); }
 
+  // The sealed bytes behind one of our own pointer events — local recovery
+  // needs no server round trip.
+  localBlob(sha256) {
+    const r = this.records().find(r => r.blob?.sha256 === sha256 && r.blob.data);
+    return r ? b64decode(r.blob.data) : null;
+  }
+
   clear() {
     if (this.timer != null) this.cancel(this.timer);
     this.timer = null;
     for (const { key } of this.records()) this.storage.removeItem(key);
   }
 
-  enqueue({ pubkey, dtag, digest, relays, sign }) {
+  // blob: { sha256, size, data (base64), servers, auth (upload authorization),
+  //         deleteAuthFor?: sha => authorization } — the last lets a superseded
+  // blob be removed from its servers once the new one is acknowledged.
+  enqueue({ pubkey, dtag, digest, relays, sign, blob = null }) {
     const key = PREFIX + pubkey + ':' + dtag;
     let previous;
     try { previous = JSON.parse(this.storage.getItem(key)); } catch {}
@@ -44,7 +60,16 @@ export class SyncOutbox {
       (previous?.event?.created_at || 0) + (previous?.attempted ? 1 : 0));
     const event = sign(createdAt);
     if (!event || event.pubkey !== pubkey) throw new Error('Cannot sign wallet sync snapshot');
-    this.storage.setItem(key, JSON.stringify({ event, digest, relays, attempted: false, acknowledged: false }));
+    // Superseded blobs still sitting on servers: carry their cleanup forward.
+    const cleanup = (previous?.cleanup || []).slice();
+    const prevBlob = previous?.blob;
+    if (prevBlob?.sha256 && prevBlob.sha256 !== blob?.sha256 && (previous.uploaded || []).length && blob?.deleteAuthFor) {
+      try { cleanup.push({ sha256: prevBlob.sha256, servers: previous.uploaded, auth: blob.deleteAuthFor(prevBlob.sha256) }); } catch {}
+    }
+    const stored = blob ? { sha256: blob.sha256, size: blob.size, data: blob.data, servers: blob.servers, auth: blob.auth } : undefined;
+    // The same blob re-enqueued (e.g. only the pointer changed) keeps its uploads.
+    const uploaded = blob && prevBlob?.sha256 === blob.sha256 ? (previous.uploaded || []) : [];
+    this.storage.setItem(key, JSON.stringify({ event, digest, relays, blob: stored, uploaded, cleanup, attempted: false, acknowledged: false }));
     this.wake();
   }
 
@@ -64,6 +89,20 @@ export class SyncOutbox {
           // Re-read before writing: another tab may have queued a newer copy.
           const current = JSON.parse(this.storage.getItem(r.key));
           if (current?.event?.id !== r.event.id) return;
+          // The blob must land on at least one server before its pointer goes out.
+          if (current.blob && !(current.uploaded || []).length) {
+            const bytes = b64decode(current.blob.data);
+            const ok = [];
+            await Promise.all((current.blob.servers || []).map(async s => {
+              try { if (await this.upload(s, bytes, current.blob.auth)) ok.push(s); } catch {}
+            }));
+            const again = JSON.parse(this.storage.getItem(r.key));
+            if (again?.event?.id !== r.event.id) return;
+            if (!ok.length) { failed = true; this.warn('wallet sync blob upload will retry'); return; }
+            again.uploaded = ok;
+            this.storage.setItem(r.key, JSON.stringify(again));
+            Object.assign(current, again);
+          }
           current.attempted = true;
           this.storage.setItem(r.key, JSON.stringify(current));
           const ok = await this.send(r.event, r.relays);
@@ -75,6 +114,7 @@ export class SyncOutbox {
           }
         } catch (e) { failed = true; this.warn('wallet sync will retry:', e.message); }
       }));
+      await this.cleanup();
     } finally {
       this.running = false;
       const pending = this.records().filter(r => !r.acknowledged);
@@ -85,4 +125,26 @@ export class SyncOutbox {
       } else this.retryMs = 5000;
     }
   }
+
+  // Best-effort removal of superseded blobs once their replacement is
+  // acknowledged. A server that refuses just keeps the blob until its own
+  // quota or expiry drops it.
+  async cleanup() {
+    for (const r of this.records()) {
+      if (!r.acknowledged || !(r.cleanup || []).length) continue;
+      const left = [];
+      for (const c of r.cleanup) {
+        const servers = [];
+        for (const s of c.servers || []) { try { if (!(await this.remove(s, c.sha256, c.auth))) servers.push(s); } catch { servers.push(s); } }
+        if (servers.length && (c.tries || 0) < 5) left.push({ ...c, servers, tries: (c.tries || 0) + 1 });
+      }
+      const latest = JSON.parse(this.storage.getItem(r.key));
+      if (latest?.event?.id === r.event.id) { latest.cleanup = left; this.storage.setItem(r.key, JSON.stringify(latest)); }
+    }
+  }
+}
+
+function b64decode(s) {
+  if (typeof atob === 'function') { const bin = atob(s); const out = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i); return out; }
+  return new Uint8Array(Buffer.from(s, 'base64'));
 }

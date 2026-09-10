@@ -1809,7 +1809,9 @@ export class Wallet {
 
   // The serializable wallet state, shared by the localStorage cache and the
   // Nostr sync. savedAt lets us pick the newest copy across devices.
-  _snapshot() {
+  // forSync: include extensions that keep their own local store (syncOnly)
+  // and only ride the snapshot to reach other devices.
+  _snapshot(forSync = false) {
     return {
       v: 1,
       savedAt: Date.now(),
@@ -1821,7 +1823,7 @@ export class Wallet {
       nextReceiveIndex: this.nextReceiveIndex,
       nextChangeIndex: this.nextChangeIndex,
       feeRates: this.feeRates,
-      ...Object.assign({}, ...this._cacheExtensions.map((e) => { try { return e.save(); } catch { return {}; } })),
+      ...Object.assign({}, ...this._cacheExtensions.filter((e) => forSync || !e.syncOnly).map((e) => { try { return e.save(); } catch { return {}; } })),
     };
   }
 
@@ -1861,7 +1863,10 @@ export class Wallet {
       const xk = this._xpubCacheKey();
       if (xk !== this._cacheKey()) localStorage.setItem(xk, JSON.stringify(snap)); // watch-only mirror
     } catch {}
-    for (const fn of this._cacheSavedHooks) { try { fn(snap); } catch {} }
+    // the sync hooks see the full picture (same savedAt, so echoes still match)
+    const syncOnly = this._cacheExtensions.filter((e) => e.syncOnly);
+    const forSync = syncOnly.length ? Object.assign(snap, ...syncOnly.map((e) => { try { return e.save(); } catch { return {}; } })) : snap;
+    for (const fn of this._cacheSavedHooks) { try { fn(forSync); } catch {} }
   }
 
   restoreCache() {

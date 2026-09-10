@@ -1814,6 +1814,7 @@ function wipeAccountCache(acc) {
     for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k && bases.some((b) => k.startsWith(b))) keys.push(k); }
     keys.forEach((k) => localStorage.removeItem(k));
   } catch {}
+  for (const f of FEATURES) { try { f.wipeCache && f.wipeCache(bases); } catch {} }
 }
 
 // Sign out a single wallet: remove it from the device entirely (session,

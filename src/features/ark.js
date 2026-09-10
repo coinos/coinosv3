@@ -11,6 +11,7 @@ import { loadBg, saveBg, buildBg, disarmSiblingRecords } from '../nwc-bg.js';
 import { boardFee, p2trAddress } from '../ark/board.js';
 import { maybeBolt11, maybeLnInvoice, lnSendFee } from '../ark/lightning.js';
 import { decodeVtxo, getVtxoStatus, VTXO_STATE_SPENT, concatBytes, vtxoBytesFromStr, vtxoBytesToHex } from '../ark/proto.js';
+import { arkStore } from '../ark/store.js';
 import { signedExitTxs, exitTxVsizes, buildBumpChild, buildExitClaim, submitPackage } from '../ark/exit.js';
 import { utxoId } from '../wallet.js';
 import {
@@ -43,7 +44,9 @@ if (typeof document !== 'undefined') {
 // wallet instance so a build without the feature ships none of it.
 export function installArkWallet(wallet) {
   if (wallet.loadArkState) return; // already installed
+  const store = arkStore(); // IndexedDB-backed, memory-fronted; opens now
   Object.assign(wallet, {
+    _arkStore: store,
     // ---- Ark support -------------------------------------------------------
     // Persisted ArkManager state (vtxos, in-flight action checkpoints, movement
     // history — no secrets: vtxo keys are re-derived from the seed).
@@ -76,9 +79,8 @@ export function installArkWallet(wallet) {
       // here is exactly how you get a phantom balance. Pre-namespacing state
       // is claimed via adoptArkState() once we know who cosigned it.
       try {
-        const cur = localStorage.getItem(this._arkKey(url));
-        if (!cur) return null;
-        const st = JSON.parse(cur);
+        const st = store.get(this._arkKey(url));
+        if (!st) return null;
         // Self-repair: an earlier build could stamp state with whichever
         // server happened to be connected, filing one ASP's coins under
         // another. The vtxos themselves settle it — if they disagree with the
@@ -87,10 +89,8 @@ export function installArkWallet(wallet) {
         const owner = this._arkVtxoOwner(st);
         if (owner && st.serverPubkey && owner !== st.serverPubkey) {
           st.serverPubkey = owner;
-          try {
-            localStorage.setItem(this._arkHoldKey(owner), JSON.stringify(st));
-            localStorage.removeItem(this._arkKey(url));
-          } catch {}
+          store.set(this._arkHoldKey(owner), st);
+          store.remove(this._arkKey(url));
           return null;
         }
         return st;
@@ -103,16 +103,14 @@ export function installArkWallet(wallet) {
     adoptArkState(serverPubkey, url) {
       try {
         // state parked by the self-repair above belongs to exactly one server
-        const held = localStorage.getItem(this._arkHoldKey(serverPubkey));
+        const held = store.get(this._arkHoldKey(serverPubkey));
         if (held) {
-          const st = JSON.parse(held);
-          this.saveArkState(st, url);
-          localStorage.removeItem(this._arkHoldKey(serverPubkey));
-          return st;
+          this.saveArkState(held, url);
+          store.remove(this._arkHoldKey(serverPubkey));
+          return held;
         }
-        const raw = localStorage.getItem(this._arkLegacyKey());
-        if (!raw) return null;
-        const st = JSON.parse(raw);
+        const st = store.get(this._arkLegacyKey());
+        if (!st) return null;
         let owner = st.serverPubkey || null;
         if (!owner) {
           const v = (st.vtxos || []).find((x) => x.bytes);
@@ -122,12 +120,12 @@ export function installArkWallet(wallet) {
         if (!owner) return null;                          // can't prove ownership: leave it
         st.serverPubkey = owner;
         this.saveArkState(st, url);
-        localStorage.removeItem(this._arkLegacyKey()); // now safely namespaced
+        store.remove(this._arkLegacyKey()); // now safely namespaced
         return st;
       } catch { return null; }
     },
-    saveArkState(state, url, json = null) {
-      try { localStorage.setItem(this._arkKey(url), json ?? JSON.stringify(state)); } catch {}
+    saveArkState(state, url) {
+      store.set(this._arkKey(url), state);
     },
   });
 }
@@ -316,6 +314,7 @@ export function arkFeature(ctx) {
   wallet.registerCacheExtension({
     domain: 'ark', // published as its own sync slot — see splitSnapshotDomains
     mergeAlways: true, // load() is a commutative merge — apply older snapshots too
+    syncOnly: true, // ark keeps its own store; the local cache blob needn't carry a copy
     save: () => {
       const cfg = getArkConfig();
       const s = cfg && wallet.loadArkState(cfg.ark);
@@ -338,9 +337,7 @@ export function arkFeature(ctx) {
       if (owner && owner !== mine) {
         try {
           const key = wallet._arkHoldKey(owner);
-          const held = JSON.parse(localStorage.getItem(key) || 'null');
-          localStorage.setItem(key,
-            JSON.stringify(mergeArkStates(held, { ...d.arkState, serverPubkey: owner })));
+          wallet._arkStore.set(key, mergeArkStates(wallet._arkStore.get(key), { ...d.arkState, serverPubkey: owner }));
         } catch {}
         // `mine` is null on a FRESH restore (no local state, not yet
         // connected), so even our own snapshot lands in the hold. Connecting
@@ -356,10 +353,9 @@ export function arkFeature(ctx) {
       // brings nothing — not worth rewriting ~1 MB of state or re-adopting
       // it into the manager (profiled at ~200ms per replay, twice per boot).
       // Bytes decide: unchanged means it serializes to what's already stored.
-      const json = JSON.stringify(merged);
       let changed = true;
-      try { changed = json !== localStorage.getItem(wallet._arkKey(cfg.ark)); } catch {}
-      if (changed) wallet.saveArkState(merged, cfg.ark, json);
+      try { changed = JSON.stringify(merged) !== JSON.stringify(local); } catch {}
+      if (changed) wallet.saveArkState(merged, cfg.ark);
       const mergedN = (merged.vtxos || []).length;
       const remoteN = (d.arkState.vtxos || []).length;
       // We know vtxos this snapshot lacked — push our superset back up so the
@@ -3070,6 +3066,8 @@ export function arkFeature(ctx) {
     // Max for any Lightning amount form: spendable minus estimated fees.
     lnMaxSendSat() { return lnMaxSat(); },
     settingsCards() { return [autoWithdrawCard()]; },
+    // a wallet signing out takes its ark state with it, wherever it lives
+    wipeCache(prefixes) { for (const p of prefixes) wallet._arkStore.removePrefix(p); },
     // The onboarding wizard's top-up step borrows the board form wholesale.
     arkBoardForm() {
       if (!arkAvailable() || wallet.watchOnly) return null;

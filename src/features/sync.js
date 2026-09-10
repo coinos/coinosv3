@@ -223,9 +223,19 @@ export function installSyncWallet(wallet, { outbox = syncOutbox() } = {}) {
       // 2026-09-04) while a fat core sat shadowed in an older device slot.
       // Safe because history is append-mostly and every SUCCESSFUL local
       // scan still prunes rows its addresses no longer report.
+      // …but a PENDING row from another device's snapshot is only adopted
+      // while it is fresh. A tx the wallet built that the network never took
+      // (or that was replaced) is pruned by the local scan, yet a stale device
+      // slot keeps publishing it — and this union used to resurrect it on
+      // every boot, then republish it: a phantom "withdrawal" that no explorer
+      // knows, immortal across devices. Confirmed rows are history; pending
+      // ones must prove themselves to the local scan within a day.
+      const FRESH_MS = 24 * 3600_000;
+      const adoptable = (t) => t.confirmed || Date.now() - (t.firstSeen || 0) < FRESH_MS;
       const byId = new Map();
-      for (const list of [this.txs || [], localTxs, ...fulls.map((s) => s.state.txs || [])]) {
-        for (const t of list) if (t && t.txid && !byId.has(t.txid)) byId.set(t.txid, t);
+      for (const t of [...(this.txs || []), ...localTxs]) if (t && t.txid && !byId.has(t.txid)) byId.set(t.txid, t);
+      for (const s of fulls) {
+        for (const t of s.state.txs || []) if (t && t.txid && adoptable(t) && !byId.has(t.txid)) byId.set(t.txid, t);
       }
       if (byId.size > (this.txs || []).length) {
         this.txs = [...byId.values()];

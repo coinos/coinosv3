@@ -1326,6 +1326,48 @@ function signInAnother() {
   ui.profilePk = null; ui.profEdit = null; ui.profEditFilled = false; ui.chatOpen = false;
   render();
 }
+
+// The identities on this device — one per seed (a seed's Spending and
+// Savings faces are the same person), each with the nostr key its header
+// avatar wears: the nostr login when there is one, else the seed's own key.
+// A key is remembered on the account when it's active (saveDirectory) and in
+// the durable directory by xpub, so accounts restored from the vault still
+// show a face; one never opened on this device has no key yet and falls back
+// to its label.
+function identities() {
+  let dir = [];
+  try { dir = JSON.parse(localStorage.getItem(WATCH_KEY) || '[]'); } catch {}
+  const dirPk = (a) => (a.xpub && (dir.find((d) => d.xpub === a.xpub) || {}).nostrPk) || null;
+  const bySeed = new Map();
+  for (const a of accounts) {
+    if (a.provisional) continue;
+    const key = a.type === 'watch' ? 'w:' + a.xpub
+      : a.mnemonic ? 'm:' + a.mnemonic + '\n' + (a.passphrase || '') + '\n' + (a.deriveIndex || 0)
+        : 'x:' + (a.xprv || a.xpub || a.id);
+    const active = a.id === activeId;
+    const pk = a.nostrPk || dirPk(a);
+    const cur = bySeed.get(key);
+    if (!cur) bySeed.set(key, { id: a.id, pk, active, label: seedName(a), network: a.network, watch: a.type === 'watch' });
+    else {
+      if (active) { cur.id = a.id; cur.active = true; }
+      if (!cur.pk && pk) cur.pk = pk;
+    }
+  }
+  const out = [...bySeed.values()];
+  const me = out.find((x) => x.active);
+  if (me) me.pk = ctx.shownPubkey() || me.pk;
+  return out;
+}
+
+// Switch to another identity already signed in on this device: the wallet
+// it opens lands on its own history, out of any profile or chat the previous
+// identity had open.
+function switchIdentity(id) {
+  const acc = accounts.find((a) => a.id === id);
+  if (!acc) return;
+  ui.profilePk = null; ui.profEdit = null; ui.profEditFilled = false; ui.chatOpen = false;
+  switchToView(acc.id, viewsOf(acc)[0]);
+}
 // The working set of wallets you can switch between. Full (seed-bearing)
 // accounts live only in sessionStorage — ephemeral, wiped when the browser
 // closes (no seed on disk by default). Watch-only accounts hold just an xpub,
@@ -2584,13 +2626,6 @@ function accountsScreen() {
         }))
       ),
       h('button', { class: 'btn-block', onClick: () => { ui.addWallet = { kind: 'spending', from: 'new' }; render(); } }, t('addWallet')),
-      // Sign into a DIFFERENT identity (Nostr signer, passkey, Google) without
-      // logging out: the unlock screen carries the sign-in doors, and enterWallet
-      // ADDS the account alongside the current ones (fromWallet keeps them + a
-      // Back). Switching between them afterwards is just tapping a row above.
-      h('div', { class: 'col', style: 'gap:4px' },
-        h('button', { class: 'btn-ghost btn-block', onClick: signInAnother }, t('signInAnother')),
-        h('div', { class: 'small faint', style: 'padding:0 2px' }, t('signInAnotherNote'))),
       hasVault() ? h('button', { class: 'btn-ghost btn-block', onClick: startChangePw }, t('changePassword')) : null,
       h('button', { class: 'btn-ghost btn-block', onClick: () => { ui.confirmClear = true; render(); } }, t('clearAll'))
     ),
@@ -4888,7 +4923,9 @@ const ctx = {
   // Routes through the Delete-all warning — never a single tap.
   // The popup has already shown the delete-everything warning by the time
   // this runs — wipe now and land on the front door.
-  signInAnother,
+  // identity switching lives on the profile page (the Accounts screen is
+  // about Spending/Savings faces, not who you are)
+  signInAnother, identities, switchIdentity,
   logoutForget: () => {
     ui.profilePk = null; ui.profEdit = null; ui.profEditFilled = false; ui.chatOpen = false;
     ui.pubProf = null;

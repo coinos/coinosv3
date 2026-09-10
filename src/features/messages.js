@@ -2314,6 +2314,35 @@ export function messagesFeature(ctx) {
               onClick: () => { ui.logoutConfirm = 'forget'; render(); },
             }, t('logoutForget')) : null,
             h('button', { class: 'btn-ghost btn-block', onClick: () => { ui.logoutConfirm = null; render(); } }, t('back'))));
+    // The identity switcher: every account signed in on this device as an
+    // avatar + name row (tap = switch, nothing logged out), and the door to
+    // add a new one.
+    const switchPop = () => {
+      if (!ui.switchIdPop) return null;
+      const close = () => { ui.switchIdPop = null; render(); };
+      const others = (ctx.identities ? ctx.identities() : []).filter((x) => !x.active);
+      return h('div', {
+        class: 'confirm-pop-backdrop',
+        onClick: (e) => { if (e.target === e.currentTarget) close(); },
+      },
+        h('div', { class: 'card col confirm-pop', style: 'gap:10px' },
+          h('h3', { style: 'margin:0' }, t('switchIdentityTitle')),
+          h('p', { class: 'small muted', style: 'margin:0' }, t('switchIdentityDesc')),
+          h('div', { class: 'col', style: 'gap:0' },
+            others.map((x) => h('div', {
+              class: 'row gap6 clickable', style: 'align-items:center;padding:8px 0;border-bottom:1px solid var(--line)',
+              onClick: () => { ui.switchIdPop = null; ctx.switchIdentity(x.id); },
+            },
+              x.pk ? avatar(x.pk, 'chat-avatar', false) : h('div', { class: 'chat-avatar fallback' }),
+              h('div', { class: 'col grow', style: 'min-width:0;gap:1px' },
+                h('div', { class: 'chat-name', style: 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap' }, x.pk ? displayName(x.pk) : x.label),
+                h('div', { class: 'small muted', style: 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap' },
+                  (x.pk ? x.label : t('identityNoKey'))
+                  + (x.network && x.network !== 'mainnet' ? ' · ' + x.network : '')
+                  + (x.watch ? ' · ' + t('watchOnlyTag') : '')))))),
+          h('button', { class: 'btn-primary btn-block', onClick: () => { ui.switchIdPop = null; ctx.signInAnother(); } }, t('signInNew')),
+          h('button', { class: 'btn-ghost btn-block', onClick: close }, t('back'))));
+    };
     const full = fullProfiles.get(pk);
     // Your own profile reads like anyone else's — npub, bio, latest posts —
     // with the editor behind an explicit Edit button (it used to BE the
@@ -2517,7 +2546,12 @@ export function messagesFeature(ctx) {
                 // on the Accounts screen — logout stays for actually leaving
                 ctx.signInAnother ? h('button', {
                   class: 'btn-block', style: 'display:flex;align-items:center;justify-content:center;gap:8px',
-                  onClick: () => ctx.signInAnother(),
+                  onClick: () => {
+                    // other identities on this device → pick from a list;
+                    // none yet → straight to the sign-in doors
+                    const others = ctx.identities ? ctx.identities().filter((x) => !x.active) : [];
+                    if (others.length) { ui.switchIdPop = true; render(); } else ctx.signInAnother();
+                  },
                 },
                   h('span', { style: 'display:flex', html: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="19" y1="8" x2="19" y2="14"/><line x1="22" y1="11" x2="16" y2="11"/></svg>' }),
                   t('signInAnother')) : null,
@@ -2573,7 +2607,8 @@ export function messagesFeature(ctx) {
             : null);
       })(),
       h('button', { class: 'btn-ghost btn-block', onClick: () => { ui.profilePk = null; ui.profOverThread = false; ui.pubProf = null; ui.profEdit = null; ui.profEditFilled = false; ui.profCompose = null; render(); } }, t('back')),
-      mine ? logoutPop() : null);
+      mine ? logoutPop() : null,
+      mine ? switchPop() : null);
   }
 
   const backBtn = (onClick) => h('button', { class: 'iconbtn chat-back', onClick }, '‹');

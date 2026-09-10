@@ -1316,6 +1316,16 @@ async function activateAccount(acc, opts = {}) {
 }
 
 // --- accounts -------------------------------------------------------------
+
+// Open the unlock screen in ADDITIVE mode: the sign-in doors (Nostr signer,
+// passkey, Google, pasted key/phrase) add the identity alongside the current
+// accounts instead of replacing them, and Back returns to the wallet. Shared
+// by the Accounts screen and the profile page.
+function signInAnother() {
+  ui.fromWallet = true; ui.unlockError = ''; ui.unlockTab = 'import'; ui.screen = 'unlock';
+  ui.profilePk = null; ui.profEdit = null; ui.profEditFilled = false; ui.chatOpen = false;
+  render();
+}
 // The working set of wallets you can switch between. Full (seed-bearing)
 // accounts live only in sessionStorage — ephemeral, wiped when the browser
 // closes (no seed on disk by default). Watch-only accounts hold just an xpub,
@@ -2579,9 +2589,7 @@ function accountsScreen() {
       // ADDS the account alongside the current ones (fromWallet keeps them + a
       // Back). Switching between them afterwards is just tapping a row above.
       h('div', { class: 'col', style: 'gap:4px' },
-        h('button', { class: 'btn-ghost btn-block', onClick: () => {
-          ui.fromWallet = true; ui.unlockError = ''; ui.unlockTab = 'import'; ui.screen = 'unlock'; render();
-        } }, t('signInAnother')),
+        h('button', { class: 'btn-ghost btn-block', onClick: signInAnother }, t('signInAnother')),
         h('div', { class: 'small faint', style: 'padding:0 2px' }, t('signInAnotherNote'))),
       hasVault() ? h('button', { class: 'btn-ghost btn-block', onClick: startChangePw }, t('changePassword')) : null,
       h('button', { class: 'btn-ghost btn-block', onClick: () => { ui.confirmClear = true; render(); } }, t('clearAll'))
@@ -4880,6 +4888,7 @@ const ctx = {
   // Routes through the Delete-all warning — never a single tap.
   // The popup has already shown the delete-everything warning by the time
   // this runs — wipe now and land on the front door.
+  signInAnother,
   logoutForget: () => {
     ui.profilePk = null; ui.profEdit = null; ui.profEditFilled = false; ui.chatOpen = false;
     ui.pubProf = null;

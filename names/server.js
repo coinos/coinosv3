@@ -1540,7 +1540,16 @@ Bun.serve({
       const domain = String(claim.domain || 'halwallet.app').toLowerCase();
       if (!DOMAINS[domain]) return json({ error: 'unknown domain' }, 400);
       if (!NAME_RE.test(name)) return json({ error: 'invalid name (a-z, 0-9, . _ -, max 30)' }, 400);
-      if (RESERVED.has(name)) return json({ error: 'name is reserved' }, 400);
+      // A migration grant (the legacy account's authenticated session told
+      // us where the name is going) trumps BOTH the reserved list and the
+      // legacy reservation: a reserved word that is also a real coinos.io
+      // account (the house account `coinos` itself) can only ever arrive
+      // here through a migration, and the identity check below can never
+      // pass for a v3 wallet key. Reserved without a grant stays reserved.
+      const grant = (state.migrations || {})[`${name}@coinos.io`];
+      const granted = domain === 'coinos.io' && grant
+        && (grant.pubkey === auth.pubkey || (grant.manager && grant.manager === auth.pubkey));
+      if (RESERVED.has(name) && !granted) return json({ error: 'name is reserved' }, 400);
       if (!validUri(claim.uri)) return json({ error: 'uri must be a bitcoin: URI' }, 400);
 
       const key = `${name}@${domain}`;
@@ -1549,12 +1558,6 @@ Bun.serve({
       if (existing && existing.pubkey !== auth.pubkey && existing.manager !== auth.pubkey) {
         return json({ error: 'name is taken' }, 409);
       }
-      // A migration grant (the legacy account's authenticated session told
-      // us where the name is going) trumps the legacy reservation — the
-      // identity check below it can never pass for a v3 wallet key.
-      const grant = (state.migrations || {})[`${name}@coinos.io`];
-      const granted = domain === 'coinos.io' && grant
-        && (grant.pubkey === auth.pubkey || (grant.manager && grant.manager === auth.pubkey));
       if (!existing && !granted && await takenByCoinosUser(domain, name, auth.pubkey)) return json({ error: 'name is taken' }, 409);
       // an npub-shaped name belongs to that identity alone
       if (npubPrefixOwner(name)) {

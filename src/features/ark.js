@@ -10,7 +10,7 @@ import { ArkManager } from '../ark/manager.js';
 import { loadBg, saveBg, buildBg, disarmSiblingRecords } from '../nwc-bg.js';
 import { boardFee, p2trAddress } from '../ark/board.js';
 import { maybeBolt11, maybeLnInvoice, lnSendFee } from '../ark/lightning.js';
-import { decodeVtxo, getVtxoStatus, VTXO_STATE_SPENT, concatBytes } from '../ark/proto.js';
+import { decodeVtxo, getVtxoStatus, VTXO_STATE_SPENT, concatBytes, vtxoBytesFromStr, vtxoBytesToHex } from '../ark/proto.js';
 import { signedExitTxs, exitTxVsizes, buildBumpChild, buildExitClaim, submitPackage } from '../ark/exit.js';
 import { utxoId } from '../wallet.js';
 import {
@@ -65,7 +65,7 @@ export function installArkWallet(wallet) {
     _arkVtxoOwner(st) {
       const v = (st?.vtxos || []).find((x) => x.bytes);
       if (!v) return null;
-      try { return decodeVtxo(hex.decode(v.bytes)).serverPubkey; } catch { return null; }
+      try { return decodeVtxo(vtxoBytesFromStr(v.bytes)).serverPubkey; } catch { return null; }
     },
     // Park state under the server that actually owns it, until the URL for
     // that server is selected and can adopt it.
@@ -116,7 +116,7 @@ export function installArkWallet(wallet) {
         let owner = st.serverPubkey || null;
         if (!owner) {
           const v = (st.vtxos || []).find((x) => x.bytes);
-          if (v) { try { owner = decodeVtxo(hex.decode(v.bytes)).serverPubkey; } catch {} }
+          if (v) { try { owner = decodeVtxo(vtxoBytesFromStr(v.bytes)).serverPubkey; } catch {} }
         }
         if (owner && owner !== serverPubkey) return null; // belongs to another ASP
         if (!owner) return null;                          // can't prove ownership: leave it
@@ -147,7 +147,11 @@ export function slimArkForSync(s) {
     // Spent stubs and done actions are pure history and grow forever — cap
     // them (newest kept) so the sync event's size is bounded for life.
     vtxos: (() => {
-      const live = (s.vtxos || []).filter((v) => v.state !== 'spent');
+      // On the wire the bytes stay HEX for now: a device still on a build
+      // that only reads hex would otherwise fail to decode every coin merged
+      // from this one. Flip to base64 once builds before 2026-09-10 are gone.
+      const live = (s.vtxos || []).filter((v) => v.state !== 'spent')
+        .map((v) => (v.bytes ? { ...v, bytes: vtxoBytesToHex(v.bytes) } : v));
       const stubs = (s.vtxos || []).filter((v) => v.state === 'spent').slice(-200)
         .map((v) => ({ id: v.id, amountSat: v.amountSat, state: 'spent', keyIndex: v.keyIndex, expiryHeight: v.expiryHeight }));
       return [...live, ...stubs];

@@ -7,7 +7,17 @@
 // Wire formats mirrored from github.com/ark-bitcoin/bark:
 //   lib/src/address.rs, lib/src/mailbox.rs, lib/src/encode.rs, lib/src/vtxo/mod.rs
 
-import { bech32m, hex } from '@scure/base';
+import { bech32m, hex, base64 } from '@scure/base';
+
+// Persisted vtxo bytes are base64: a third smaller than hex, and half the
+// UTF-16 cost in localStorage (a deep coin set was 560KB of hex). Readers
+// accept the hex that older builds wrote — states are never migrated in
+// place, they just re-save in the new form.
+const isHexStr = (s) => s.length % 2 === 0 && /^[0-9a-f]*$/.test(s);
+export const vtxoBytesToStr = (bytes) => base64.encode(bytes);
+export const vtxoBytesFromStr = (s) => (isHexStr(s) ? hex.decode(s) : base64.decode(s));
+export const vtxoBytesToHex = (s) => (isHexStr(s) ? s : hex.encode(base64.decode(s)));
+export const vtxoBytesNormalize = (s) => (isHexStr(s) ? base64.encode(hex.decode(s)) : s);
 import { sha256 } from '@noble/hashes/sha256';
 import { schnorr, secp256k1 } from '@noble/curves/secp256k1';
 

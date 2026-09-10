@@ -21,8 +21,7 @@ import {
   getArkInfo, handshake, encodeAddress, decodeAddress, blindMailboxId,
   readMailbox, decodeVtxo, arkIdFromServerPubkey, GrpcError,
   grpcStream, decodeMailboxMessage, mailboxRequestBytes,
-  getVtxoStatus, VTXO_STATE_SPENT,
-} from './proto.js';
+  getVtxoStatus, VTXO_STATE_SPENT, vtxoBytesToStr, vtxoBytesFromStr, vtxoBytesNormalize } from './proto.js';
 import {
   buildArkoorSend, cosignWithServer, cosignPackageWithServer, buildAllSignedVtxos,
   registerVtxoTransactions, postArkoorMessage, txid,
@@ -101,9 +100,12 @@ export function pruneArkState(state, now = Date.now()) {
     for (const id of a.htlcVtxoIds || []) name(id, ts);
   }
   for (const v of state.vtxos || []) {
-    if (v.state !== 'spent' || !v.bytes || inFlight.has(v.id)) continue;
-    const ts = lastNamed.get(v.id);
-    if (ts && now - ts > SPENT_BYTES_AFTER) delete v.bytes;
+    if (!v.bytes) continue;
+    if (v.state === 'spent' && !inFlight.has(v.id)) {
+      const ts = lastNamed.get(v.id);
+      if (ts && now - ts > SPENT_BYTES_AFTER) { delete v.bytes; continue; }
+    }
+    v.bytes = vtxoBytesNormalize(v.bytes); // hex from older builds → base64
   }
   for (const a of actions) {
     if (a.step !== 'done') continue;
@@ -198,7 +200,7 @@ export class ArkManager {
     // spendable here and must not be shown.
     const coinOwner = (() => {
       const v = (this.state.vtxos || []).find((x) => x.bytes);
-      try { return v ? decodeVtxo(hex.decode(v.bytes)).serverPubkey : null; } catch { return null; }
+      try { return v ? decodeVtxo(vtxoBytesFromStr(v.bytes)).serverPubkey : null; } catch { return null; }
     })();
     if ((this.state.serverPubkey && this.state.serverPubkey !== this.info.serverPubkey)
         || (coinOwner && coinOwner !== this.info.serverPubkey)) {
@@ -249,7 +251,7 @@ export class ArkManager {
   _addVtxo(decoded, bytes, keyIndex, state = 'spendable') {
     if (this._vtxo(decoded.id)) return false;
     this.state.vtxos.push({
-      id: decoded.id, bytes: hex.encode(bytes), keyIndex,
+      id: decoded.id, bytes: vtxoBytesToStr(bytes), keyIndex,
       amountSat: decoded.amountSat, expiryHeight: decoded.expiryHeight, state,
     });
     return true;
@@ -259,7 +261,7 @@ export class ArkManager {
     // fee estimates decode every coin on every render without this.
     const hit = this._decodeCache && this._decodeCache.get(v.id);
     if (hit) return hit;
-    const d = decodeVtxo(hex.decode(v.bytes));
+    const d = decodeVtxo(vtxoBytesFromStr(v.bytes));
     (this._decodeCache ||= new Map()).set(v.id, d);
     if (this._decodeCache.size > 200) this._decodeCache.delete(this._decodeCache.keys().next().value);
     return d;
@@ -667,7 +669,7 @@ export class ArkManager {
       const keys = inputRecs.map((v) => this._keyForVtxo(v));
       const spk = hex.decode(action.spkHex);
       const inputIdRaws = decoded.map((d) => d.point.raw);
-      await registerVtxoTransactions(this.arkUrl, inputRecs.map((v) => hex.decode(v.bytes)));
+      await registerVtxoTransactions(this.arkUrl, inputRecs.map((v) => vtxoBytesFromStr(v.bytes)));
       const attestations = keys.map((k) =>
         offboardAttestation({ netSat: action.netSat, spk, inputIdRaws }, k.privkey));
       const { txBytes, serverNonces } = await prepareOffboard(this.arkUrl, {
@@ -1772,7 +1774,7 @@ export class ArkManager {
     const inputRecs = action.inputIds.map((id) => this._vtxo(id));
 
     if (action.step === 'created') {
-      const inputBytes = inputRecs.map((v) => hex.decode(v.bytes));
+      const inputBytes = inputRecs.map((v) => vtxoBytesFromStr(v.bytes));
       await registerVtxoTransactions(this.arkUrl, inputBytes);
       let unlockHash;
       try {

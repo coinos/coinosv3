@@ -605,6 +605,7 @@ export function messagesFeature(ctx) {
   // debounce so typing doesn't hammer storage.
   const sessionDrafts = new Map();
   let draftPersist = 0;
+  const POST_DRAFT = 'post'; // the profile page's new-post composer
   const draftFor = (key) =>
     (sessionDrafts.has(key) ? sessionDrafts.get(key) : (st().drafts || {})[key] || '');
   function setDraft(key, text) {
@@ -2481,25 +2482,31 @@ export function messagesFeature(ctx) {
             ? h('div', { class: 'col', style: 'gap:8px' },
                 h('div', { class: 'row gap6 wrap' },
                   h('button', { class: 'btn-primary grow', onClick: openEditor }, t('profEdit')),
-                  h('button', { class: 'grow', onClick: () => { ui.profCompose = ui.profCompose == null ? '' : null; render(); } }, t('profNewPost'))),
-                ui.profCompose == null ? null : h('div', { class: 'col', style: 'gap:8px' },
+                  h('button', { class: 'grow', onClick: () => { ui.profCompose = ui.profCompose == null ? draftFor(POST_DRAFT) : null; render(); } }, t('profNewPost'))),
+                // The post draft rides the same persisted draft store as DMs
+                // and channels: a reload (say, to reconnect a signer) brings
+                // the half-written post back, composer open. Posting clears
+                // it; Cancel just closes the composer and keeps the text.
+                (ui.profCompose == null && !draftFor(POST_DRAFT)) ? null : h('div', { class: 'col', style: 'gap:8px' },
                   h('textarea', {
                     rows: '3', placeholder: t('profComposePh'),
                     style: 'font-family:var(--sans);min-height:64px',
-                    value: ui.profCompose,
-                    onInput: (ev) => { ui.profCompose = ev.target.value; },
+                    value: ui.profCompose == null ? draftFor(POST_DRAFT) : ui.profCompose,
+                    onInput: (ev) => { ui.profCompose = ev.target.value; setDraft(POST_DRAFT, ev.target.value); },
                   }),
                   h('div', { class: 'row gap6' },
                     h('button', { class: 'btn-primary grow', onClick: async () => {
-                      const text = (ui.profCompose || '').trim();
+                      const text = (ui.profCompose == null ? draftFor(POST_DRAFT) : ui.profCompose || '').trim();
                       if (!text) return;
                       // the post is on screen instantly (publishPost is
                       // optimistic) — close the composer now; a failure
                       // reopens it with the text intact
                       ui.profCompose = null;
+                      setDraft(POST_DRAFT, '');
                       try { await publishPost(text); toast(t('profPosted')); }
                       catch (e) {
                         ui.profCompose = text;
+                        setDraft(POST_DRAFT, text);
                         if (!e.silent) toast(e.message || String(e));
                         render();
                       }

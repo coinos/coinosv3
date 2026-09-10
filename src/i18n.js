@@ -191,6 +191,8 @@ const STR = {
     msgAdmin: 'admin',
     msgEdited: '(edited)',
     msgReact: 'React',
+    msgZap: 'Zap',
+    zapTallyTitle: '{n} sats zapped',
     msgReply: 'Reply',
     profNewPost: 'New post',
     profYourProfile: 'Your profile',

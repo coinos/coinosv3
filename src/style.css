@@ -480,6 +480,11 @@ hr.divider { margin: 16px 0; }
 }
 .chat-react.clickable { cursor: pointer; }
 .chat-react.on { border-color: color-mix(in srgb, currentColor 55%, transparent); font-weight: 600; }
+/* zap tally: a little bolt + sats, amber on both themes; .on = we zapped it */
+.zap-tally { display: inline-flex; align-items: center; gap: 2px; font-size: 11px; font-weight: 650; color: #e6a800; white-space: nowrap; flex-shrink: 0; }
+.zap-tally.chat-react { font-size: 12px; padding: 1px 7px 1px 5px; }
+.zap-tally.clickable { cursor: pointer; }
+.zap-tally.on { text-decoration: underline; text-decoration-color: color-mix(in srgb, #e6a800 60%, transparent); text-underline-offset: 2px; }
 .chat-compose {
   display: flex; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--line);
   align-items: center; flex: 0 0 auto;

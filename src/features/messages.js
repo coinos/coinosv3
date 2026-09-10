@@ -26,6 +26,7 @@ import { makeDMRumor, makeDMReaction, unwrapDM, wrapDM } from '../dm.js';
 import { saveInbox } from '../dm-inbox.js';
 import { makeSearcher, resultRows, fallbackAvatar, warmSearch } from '../recipient-search.js';
 import { getNetwork } from '../api.js';
+import { decodeBolt11 } from '../ark/lightning.js';
 import { hexToBytes, bytesToHex } from '@noble/hashes/utils';
 import { t } from '../i18n.js';
 
@@ -750,6 +751,7 @@ export function messagesFeature(ctx) {
           close();
           setTimeout(() => document.getElementById('msg-draft')?.focus(), 50);
         }),
+        !mine && canZapPk(m.author) ? item('⚡', t('msgZap'), () => { close(); zapMessage(m.author, m.rumor.id); }) : null,
         item('⧉', t('copy'), async () => {
           try { await navigator.clipboard.writeText(msgSnippet(room, m, 100000)); toast(t('copied')); } catch {}
           close();
@@ -1791,6 +1793,102 @@ export function messagesFeature(ctx) {
   // ---- profile notes: latest public posts & replies -----------------------
 
   const NOTE_RELAYS = [...new Set([...PROFILE_RELAYS, ...DM_RELAYS])];
+
+  // ---- zap tallies ---------------------------------------------------------
+  // How much a post or chat message has been zapped: the public receipts
+  // that e-tag it — NIP-57 kind 9735 (the recipient's LNURL server signs one
+  // once the invoice is paid) and coinos' own Ark zap receipt (kind 9737,
+  // the zapper publishes it beside the mailbox delivery). Summed per id,
+  // deduped by receipt, painted as a little bolt + sats. A chat message is a
+  // rumor with an id like any event, so a zap aimed at it e-tags that id —
+  // the receipt reveals nothing but the id itself.
+  const ZAP_KINDS = [9735, 9737];
+  const zapTotals = new Map(); // id -> { sats, seen: Set<receipt id>, mine }
+  const zapAsked = new Set();
+  let zapQueue = new Set(), zapTimer = null, zapLiveUnsub = null, zapRecent = [];
+  const zapRelays = () => [...new Set([...NOTE_RELAYS, ...((wallet.nostrRelays && wallet.nostrRelays()) || [])])];
+  const tagOf = (ev, k) => (ev.tags.find((x) => x[0] === k) || [])[1];
+  function receiptSats(ev) {
+    if (ev.kind === 9737) {
+      const net = tagOf(ev, 'network');
+      if (net && net !== getNetwork()) return 0;
+      return Math.max(0, parseInt(tagOf(ev, 'amount'), 10) || 0);
+    }
+    const b11 = tagOf(ev, 'bolt11');
+    if (b11) { try { const d = decodeBolt11(b11); if (d && d.amountSat) return d.amountSat; } catch {} }
+    // no readable invoice: the zap request inside says what was asked for
+    try {
+      const req = JSON.parse(tagOf(ev, 'description') || 'null');
+      return Math.floor((parseInt(tagOf(req, 'amount'), 10) || 0) / 1000);
+    } catch { return 0; }
+  }
+  function zapperOf(ev) {
+    if (ev.kind === 9737) return ev.pubkey;
+    if (tagOf(ev, 'P')) return tagOf(ev, 'P');
+    try { return (JSON.parse(tagOf(ev, 'description') || 'null') || {}).pubkey || null; } catch { return null; }
+  }
+  function noteReceipt(ev) {
+    const sats = receiptSats(ev);
+    if (!sats) return;
+    const my = myPubkeys();
+    const from = zapperOf(ev);
+    let changed = false;
+    for (const x of ev.tags) {
+      if (x[0] !== 'e' || !x[1]) continue;
+      const cur = zapTotals.get(x[1]) || zapTotals.set(x[1], { sats: 0, seen: new Set(), mine: false }).get(x[1]);
+      if (cur.seen.has(ev.id)) continue;
+      cur.seen.add(ev.id);
+      cur.sats += sats;
+      if (from && my.includes(from)) cur.mine = true;
+      changed = true;
+    }
+    if (changed) scheduleRepaint();
+  }
+  // Ask once per id (batched per paint), and keep ONE live subscription on
+  // the ids most recently on screen, so a zap landing while you watch —
+  // yours included — shows up without a reload.
+  function watchZaps(ids) {
+    let fresh = false;
+    for (const id of ids) if (id && !zapAsked.has(id)) { zapAsked.add(id); zapQueue.add(id); fresh = true; }
+    if (!fresh || zapTimer) return;
+    zapTimer = setTimeout(() => {
+      zapTimer = null;
+      const batch = [...zapQueue]; zapQueue = new Set();
+      const relays = zapRelays();
+      for (let i = 0; i < batch.length; i += 150) {
+        queryOn(relays, { kinds: ZAP_KINDS, '#e': batch.slice(i, i + 150) }, 4000)
+          .then((evs) => evs.forEach(noteReceipt)).catch(() => {});
+      }
+      zapRecent = [...batch.reverse(), ...zapRecent.filter((x) => !batch.includes(x))].slice(0, 200);
+      if (zapLiveUnsub) { try { zapLiveUnsub(); } catch {} }
+      zapLiveUnsub = subscribeOn(relays, { kinds: ZAP_KINDS, '#e': zapRecent, since: Math.floor(Date.now() / 1000) - 60 }, noteReceipt);
+    }, 250);
+  }
+  // After OUR zap the receipt trails the payment by seconds — ask again.
+  function recheckZap(id) {
+    for (const ms of [4000, 12000, 30000]) setTimeout(() => { zapAsked.delete(id); watchZaps([id]); }, ms);
+  }
+  const fmtSats = (n) => n < 1000 ? String(n)
+    : n < 10000 ? (n / 1000).toFixed(1).replace(/\.0$/, '') + 'k'
+      : n < 1e6 ? Math.round(n / 1000) + 'k'
+        : (n / 1e6).toFixed(1).replace(/\.0$/, '') + 'M';
+  const BOLT_SVG = '<svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" stroke="none" style="display:block"><path d="M13 2L4 14h7l-1 8 9-12h-7l1-8z"/></svg>';
+  // The chip: a little bolt + the sats total; absent until the first receipt.
+  function zapChip(id, { onClick, cls = '' } = {}) {
+    const z = zapTotals.get(id);
+    if (!z || !z.sats) return null;
+    return h('span', {
+      class: 'zap-tally' + (z.mine ? ' on' : '') + (onClick ? ' clickable' : '') + (cls ? ' ' + cls : ''),
+      title: t('zapTallyTitle', { n: z.sats.toLocaleString() }),
+      onClick: onClick ? (e) => { e.stopPropagation(); onClick(); } : undefined,
+    }, h('span', { style: 'display:flex', html: BOLT_SVG }), fmtSats(z.sats));
+  }
+  // Zap a chat message or DM: same one-tap flow as a post (ark first,
+  // Lightning fallback, the amount remembered from the first time).
+  function zapMessage(pk, id) {
+    zapNote(pk, { id });
+    recheckZap(id);
+  }
   const notesCache = new Map(); // pk -> { status: 'loading'|'ready', notes: [kind-1 events] }
   // NIP-65: where this author actually writes. Their notes and threads live
   // there first — our default relays are just the common ground.
@@ -1918,6 +2016,9 @@ export function messagesFeature(ctx) {
   // the zap fires instantly (ark first, Lightning fallback) and reports by
   // toast, no form, no leaving the page. Without one, a small setup screen
   // asks once and remembers.
+  // Whether a ⚡ makes sense for this author from this wallet: not
+  // ourselves, and an instant path (Ark) or a Lightning fallback exists.
+  const canZapPk = (pk) => !!pk && !isMe(pk) && !!(hook('arkReady') || hook('canLnZap'));
   function zapNote(pk, ev) {
     const npubStr = npubOf(pk);
     const def = ctx.zapDefaultSat ? ctx.zapDefaultSat() : 0;
@@ -1966,6 +2067,7 @@ export function messagesFeature(ctx) {
     // dimmed, and no thread/reply/zap until its signed self takes over
     const pending = !!ev.pending;
     const openable = open && !pending;
+    if (!pending) watchZaps([ev.id]);
     return h('div', {
       class: 'row',
       style: 'gap:10px;align-items:flex-start;padding:10px 0'
@@ -1988,7 +2090,8 @@ export function messagesFeature(ctx) {
               onClick: (e) => { e.stopPropagation(); openProfile(pk); },
             }, name),
             h('span', { class: 'small faint', style: 'white-space:nowrap' },
-              (isReply ? '↩ ' + t('profReplyTag') + ' · ' : '') + timeLabel(ev.created_at * 1000))),
+              (isReply ? '↩ ' + t('profReplyTag') + ' · ' : '') + timeLabel(ev.created_at * 1000)),
+            zapChip(ev.id, { onClick: canZap ? () => { zapNote(pk, ev); recheckZap(ev.id); } : null })),
           pending ? null : h('div', { class: 'row', style: 'gap:6px;flex-shrink:0' },
             // Reply on every post: opens (or re-targets) its thread and puts
             // the cursor in the reply box — no hunting for the row tap.
@@ -2003,7 +2106,7 @@ export function messagesFeature(ctx) {
                 setTimeout(() => document.querySelector('.thread-reply-input')?.focus(), 120);
               },
             }, '↩'),
-            canZap ? h('button', { class: 'btn-sm', title: t('zapTitle'), onClick: (e) => { e.stopPropagation(); zapNote(pk, ev); } }, '⚡') : null)),
+            canZap ? h('button', { class: 'btn-sm', title: t('zapTitle'), onClick: (e) => { e.stopPropagation(); zapNote(pk, ev); recheckZap(ev.id); } }, '⚡') : null)),
         h('div', { class: 'small', style: 'white-space:pre-wrap;overflow-wrap:anywhere' }, ...noteBody(ev.content))));
   }
 
@@ -3039,6 +3142,7 @@ export function messagesFeature(ctx) {
     if (!msgs.length)
       return [h('div', { class: 'muted small', style: 'text-align:center;padding:24px 0' }, t('msgEmpty'))];
     let lastAuthor = null, lastT = 0;
+    watchZaps(msgs.slice(-150).map((m) => m.rumor.id));
     return msgs.map((m) => {
       const tms = eventMs(m.rumor);
       const mine = my.includes(m.author);
@@ -3085,16 +3189,18 @@ export function messagesFeature(ctx) {
             mine
               ? h('button', { class: 'chat-del', title: t('msgDelete'), onClick: () => deleteMessage(room, chId, m) }, '×')
               : null,
-            // reactions tuck inside the bubble, under the text (Telegram-style)
-            counts.size
+            // reactions tuck inside the bubble, under the text (Telegram-style);
+            // the zap total leads the row, and tapping it zaps again
+            ((zc) => counts.size || zc
               ? h('div', { class: 'chat-reacts' },
+                  zc,
                   [...counts.entries()].map(([emoji, n]) =>
                     h('span', {
                       class: 'chat-react clickable' + (emoji === myReact ? ' on' : ''),
                       title: t('msgReact'),
                       onClick: (e) => { e.stopPropagation(); sendReaction(room, chId, m, emoji); },
                     }, emoji, n > 1 ? ' ' + n : '')))
-              : null))
+              : null)(zapChip(m.rumor.id, { cls: 'chat-react', onClick: !mine && canZapPk(m.author) ? () => zapMessage(m.author, m.rumor.id) : null }))))
       );
     });
   }
@@ -3273,6 +3379,7 @@ export function messagesFeature(ctx) {
           close();
           setTimeout(() => document.getElementById('msg-draft')?.focus(), 50);
         }),
+        !m.mine && canZapPk(m.rumor.pubkey) ? item('⚡', t('msgZap'), () => { close(); zapMessage(m.rumor.pubkey, m.rumor.id); }) : null,
         item('⧉', t('copy'), async () => {
           try { await navigator.clipboard.writeText(m.rumor.content); toast(t('copied')); } catch {}
           close();
@@ -3298,13 +3405,16 @@ export function messagesFeature(ctx) {
         h('span', { class: 'chat-quote-name' }, displayName(src.rumor.pubkey)),
         h('span', { class: 'chat-quote-text' }, String(src.rumor.content || '').replace(/\s+/g, ' ').slice(0, 90)));
     };
+    watchZaps(msgs.slice(-150).map((m) => m.rumor.id));
     const dmChips = (m) => {
       const reacts = dmReacts.get(m.rumor.id);
-      if (!reacts || !reacts.size) return null;
-      const myReact = my.map((pk) => reacts.get(pk)).find(Boolean);
+      const zc = zapChip(m.rumor.id, { cls: 'chat-react', onClick: !m.mine && canZapPk(m.rumor.pubkey) ? () => zapMessage(m.rumor.pubkey, m.rumor.id) : null });
+      if ((!reacts || !reacts.size) && !zc) return null;
+      const myReact = reacts && my.map((pk) => reacts.get(pk)).find(Boolean);
       const counts = new Map();
-      for (const emoji of reacts.values()) counts.set(emoji, (counts.get(emoji) || 0) + 1);
+      if (reacts) for (const emoji of reacts.values()) counts.set(emoji, (counts.get(emoji) || 0) + 1);
       return h('div', { class: 'chat-reacts' },
+        zc,
         [...counts.entries()].map(([emoji, n]) => h('span', {
           class: 'chat-react clickable' + (emoji === myReact ? ' on' : ''),
           onClick: (e) => { e.stopPropagation(); sendDmReaction(peer, m, emoji); },
@@ -3550,6 +3660,9 @@ export function messagesFeature(ctx) {
       pendingWraps.clear();
       dmStarted = false;
       listsSynced = false;
+      if (zapLiveUnsub) { try { zapLiveUnsub(); } catch {} zapLiveUnsub = null; }
+      clearTimeout(zapTimer); zapTimer = null; zapQueue = new Set(); zapRecent = [];
+      zapTotals.clear(); zapAsked.clear(); // 'mine' is per identity — refetch under the next
     },
   };
 }

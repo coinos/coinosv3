@@ -233,6 +233,16 @@ export function messagesFeature(ctx) {
     if (!wallet.watchOnly && hook('nostrReconnectPrompt')) return;
     toast(t(wallet.watchOnly ? 'msgLockedChat' : 'msgNoIdentity'));
   };
+  // Thrown by the publish paths after noIdToast already did the talking
+  // (opened the reconnect screen, or toasted): callers must not toast it
+  // again — a pasted-nsec login that lost its signer on reload used to get
+  // the toast INSTEAD of the screen with the nsec field this way.
+  class NoIdentity extends Error { constructor() { super(t('msgNoIdentity')); this.silent = true; } }
+  const requireIdentity = async () => {
+    const id = await identity();
+    if (!id) { noIdToast(); throw new NoIdentity(); }
+    return id;
+  };
 
   // ---- shared runtime -----------------------------------------------------
 
@@ -2065,8 +2075,7 @@ export function messagesFeature(ctx) {
   // signer alone can take seconds), swapped for the signed event on success
   // and withdrawn on failure.
   async function publishPost(text) {
-    const id = await identity();
-    if (!id) throw new Error(t('msgNoIdentity'));
+    const id = await requireIdentity();
     const temp = {
       id: 'pending:' + Math.random().toString(36).slice(2),
       pubkey: id.pubkey, content: text, created_at: Math.floor(Date.now() / 1000),
@@ -2093,8 +2102,7 @@ export function messagesFeature(ctx) {
   }
 
   async function publishReply(c, s, text) {
-    const id = await identity();
-    if (!id) throw new Error(t('msgNoIdentity'));
+    const id = await requireIdentity();
     const target = c.replies.find((e) => e.id === s.focusId) || c.root || s.seed;
     const rootId = c.rootId;
     const pTags = [...new Set([
@@ -2148,7 +2156,7 @@ export function messagesFeature(ctx) {
             const inp = document.querySelector('.thread-reply-input');
             if (inp) inp.value = '';
             toast(t('threadReplied'));
-          } catch (e) { toast(e.message); }
+          } catch (e) { if (!e.silent) toast(e.message); }
           s.sending = false; render();
         },
       }, s.sending ? h('span', { class: 'spinner sm' }) : t('threadReplySend')));
@@ -2182,8 +2190,7 @@ export function messagesFeature(ctx) {
   }
 
   async function publishProfileFields(fields, opts = {}) {
-      const id = await identity();
-      if (!id) throw new Error(t('msgNoIdentity'));
+      const id = await requireIdentity();
       const evs = await queryOn([...new Set([...PROFILE_RELAYS, ...DM_RELAYS])], { kinds: [0], authors: [id.pubkey] }, 3000);
       const newest = evs.sort((a, b) => b.created_at - a.created_at)[0];
       let base = {};
@@ -2493,7 +2500,7 @@ export function messagesFeature(ctx) {
                       try { await publishPost(text); toast(t('profPosted')); }
                       catch (e) {
                         ui.profCompose = text;
-                        toast(e.message || String(e));
+                        if (!e.silent) toast(e.message || String(e));
                         render();
                       }
                     } }, t('profPostBtn')),

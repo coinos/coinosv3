@@ -63,6 +63,57 @@ const EMPTY_STATE = () => ({
   movements: [],   // { id, type, amountSat, ts, status, detail }
 });
 
+// Local state must not grow forever. Two things did: a spent coin kept its
+// signed bytes (useful only for an exit, which a spent coin can never take)
+// and a done action kept every output vtxo it minted as hex (the change /
+// HTLC coins live in `vtxos` in their own right). Both go once they are
+// safely history — a spend older than SPENT_BYTES_AFTER with no in-flight
+// action naming it, an action done longer than DONE_HEAVY_AFTER ago. Ids,
+// amounts and inputIds stay: history rows and spend dedupe still need them.
+// Mutates in place; idempotent; cheap (no decoding).
+const SPENT_BYTES_AFTER = 30 * 86400_000;
+const DONE_HEAVY_AFTER = 7 * 86400_000;
+const ACTION_HEAVY = ['destBytes', 'changeBytes', 'destBytesList', 'changeBytesList', 'htlcBytesList', 'vtxoBytes', 'txHex', 'fundingTxHex', 'outputVtxos'];
+const actionTs = (a) => Number(String(a.id || '').split('-').pop()) || 0;
+export function pruneArkState(state, now = Date.now()) {
+  if (!state) return state;
+  const actions = state.actions || [];
+  const inFlight = new Set();
+  for (const a of actions) {
+    if (a.step === 'done' || a.step === 'failed') continue;
+    for (const id of a.inputIds || []) inFlight.add(id);
+    for (const p of a.parts || []) if (p.inputId) inFlight.add(p.inputId);
+    if (a.inputId) inFlight.add(a.inputId);
+  }
+  // when was a coin last named by anything? (a spend leaves a movement or a
+  // done action naming it; an unnamed spent coin has no date and is kept)
+  const lastNamed = new Map();
+  const name = (id, ts) => { if (id && ts) lastNamed.set(id, Math.max(lastNamed.get(id) || 0, ts)); };
+  for (const m of state.movements || []) {
+    name(m.vtxoId, m.ts);
+    for (const id of m.inputIds || []) name(id, m.ts);
+  }
+  for (const a of actions) {
+    const ts = actionTs(a);
+    for (const id of a.inputIds || []) name(id, ts);
+    for (const p of a.parts || []) name(p.inputId, ts);
+    name(a.inputId, ts);
+    for (const id of a.htlcVtxoIds || []) name(id, ts);
+  }
+  for (const v of state.vtxos || []) {
+    if (v.state !== 'spent' || !v.bytes || inFlight.has(v.id)) continue;
+    const ts = lastNamed.get(v.id);
+    if (ts && now - ts > SPENT_BYTES_AFTER) delete v.bytes;
+  }
+  for (const a of actions) {
+    if (a.step !== 'done') continue;
+    const ts = actionTs(a);
+    if (!ts || now - ts < DONE_HEAVY_AFTER) continue;
+    for (const k of ACTION_HEAVY) if (k in a) delete a[k];
+  }
+  return state;
+}
+
 export class ArkManager {
   constructor({ account, storage, arkUrl, esploraUrl, network = 'regtest', onUpdate, lnQuoteUrl, statusHint }) {
     this.account = account;       // HDKey node; ark keys derived beneath it
@@ -165,6 +216,7 @@ export class ArkManager {
     // derivations (history build, etc.) invalidate exactly when the data
     // changes instead of on a timer that re-cools between interactions
     this.state._rev = (this.state._rev || 0) + 1;
+    pruneArkState(this.state);
     this.storage.save(this.state);
     this.onUpdate(this);
   }

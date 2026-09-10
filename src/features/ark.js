@@ -11,7 +11,7 @@ import { loadBg, saveBg, buildBg, disarmSiblingRecords } from '../nwc-bg.js';
 import { boardFee, p2trAddress } from '../ark/board.js';
 import { maybeBolt11, maybeLnInvoice, lnSendFee } from '../ark/lightning.js';
 import { decodeVtxo, getVtxoStatus, VTXO_STATE_SPENT, concatBytes } from '../ark/proto.js';
-import { signedExitTxs, buildBumpChild, buildExitClaim, submitPackage } from '../ark/exit.js';
+import { signedExitTxs, exitTxVsizes, buildBumpChild, buildExitClaim, submitPackage } from '../ark/exit.js';
 import { utxoId } from '../wallet.js';
 import {
   getNetwork, setNetwork, getArkProviderId, getArkConfig,
@@ -126,8 +126,8 @@ export function installArkWallet(wallet) {
         return st;
       } catch { return null; }
     },
-    saveArkState(state, url) {
-      try { localStorage.setItem(this._arkKey(url), JSON.stringify(state)); } catch {}
+    saveArkState(state, url, json = null) {
+      try { localStorage.setItem(this._arkKey(url), json ?? JSON.stringify(state)); } catch {}
     },
   });
 }
@@ -348,7 +348,14 @@ export function arkFeature(ctx) {
       }
       const local = wallet.loadArkState(cfg.ark);
       const merged = mergeArkStates(local, d.arkState);
-      wallet.saveArkState(merged, cfg.ark);
+      // Every boot replays the sync slot, and on a converged slot the union
+      // brings nothing — not worth rewriting ~1 MB of state or re-adopting
+      // it into the manager (profiled at ~200ms per replay, twice per boot).
+      // Bytes decide: unchanged means it serializes to what's already stored.
+      const json = JSON.stringify(merged);
+      let changed = true;
+      try { changed = json !== localStorage.getItem(wallet._arkKey(cfg.ark)); } catch {}
+      if (changed) wallet.saveArkState(merged, cfg.ark, json);
       const mergedN = (merged.vtxos || []).length;
       const remoteN = (d.arkState.vtxos || []).length;
       // We know vtxos this snapshot lacked — push our superset back up so the
@@ -358,7 +365,7 @@ export function arkFeature(ctx) {
       // maybeInitArk deliberately does nothing when connected. Update that
       // manager directly or the newly synced change/history stays invisible
       // until reload, even though storage already contains the right balance.
-      if (ark) adoptArkSnapshot(ark, merged);
+      if (ark) { if (changed) adoptArkSnapshot(ark, merged); }
       else if (mergedN) setTimeout(() => maybeInitArk(), 0);
     },
   });
@@ -1976,7 +1983,7 @@ export function arkFeature(ctx) {
     const exitFeeOf = (v) => {
       try {
         let f = Math.ceil(150 * feeRate);
-        for (const txi of signedExitTxs(mgr._decoded(v), mgr.serverPub)) f += Math.ceil((txi.vsize + 130) * feeRate);
+        for (const vsize of exitTxVsizes(mgr._decoded(v), mgr.serverPub)) f += Math.ceil((vsize + 130) * feeRate);
         return f;
       } catch { return null; }
     };
@@ -2201,11 +2208,11 @@ export function arkFeature(ctx) {
   // What a unilateral exit will need from Savings, BEFORE it starts: every
   // chain hop is a zero-fee tx bumped by a ~130 vB CPFP child, plus the
   // final claim. Priced at today's feerate — the driver reprices per hop.
-  // Memoized on the coin set + feerate: signedExitTxs rebuilds every hop of
-  // every coin's exit chain with an elliptic-curve tweak per hop — profiled
-  // at ~200ms of secp256k1 per call on a phone with depth-13 coins — and
-  // the depth advisory asked for it on EVERY wallet render. Same coins at
-  // the same feerate price the same, so pay once per change instead.
+  // Sizes only (exitTxVsizes): building the real signed chain costs several
+  // secp256k1 multiplies per hop, and across 27 coins of depth ~13 that was
+  // 5+ seconds of main-thread work on every boot (idle callback or not).
+  // Fee = size × rate needs none of it. Still memoized on the coin set +
+  // feerate, since the advisory asks on every wallet render.
   let _exitFeeMemo = { key: null, val: 0 };
   function estimateExitFeeSat(mgr) {
     const feeRate = Math.max(1, (wallet.feeRates && wallet.feeRates.halfHourFee) || 2);
@@ -2215,8 +2222,8 @@ export function arkFeature(ctx) {
     let total = 0;
     for (const v of coins) {
       try {
-        for (const txi of signedExitTxs(mgr._decoded(v), mgr.serverPub))
-          total += Math.ceil((txi.vsize + 130) * feeRate);
+        for (const vsize of exitTxVsizes(mgr._decoded(v), mgr.serverPub))
+          total += Math.ceil((vsize + 130) * feeRate);
         total += Math.ceil(150 * feeRate); // the claim tx
       } catch {}
     }

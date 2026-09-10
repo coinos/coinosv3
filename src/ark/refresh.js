@@ -114,7 +114,23 @@ function forfeitClaimTaproot(userPub, serverPub, exitDelta, unlockHash) {
 const otherSum = (item) =>
   item.feeSat + item.otherOutputs.reduce((n, o) => n + o.valueSat, 0);
 
-export function transitionInputTxout(transition, amountSat, serverPub, expiryHeight) {
+// A taproot output script is 34 bytes whatever key sits inside it. Callers
+// that only need transaction SIZES (fee estimates) pass sizeOnly and skip
+// the musig key aggregation — several secp256k1 multiplies per hop, which
+// across a wallet's coins was seconds of main-thread work at boot.
+const DUMMY_P2TR = concatBytes(hex.decode('5120'), new Uint8Array(32));
+// The hark unlock witness's script + control block, shaped for size only.
+export function harkUnlockWitnessShape(unlockHash, gen = 1) {
+  const unlockScript = (gen === 1 ? hashSignScriptV1 : hashSignScript)(unlockHash, new Uint8Array(32));
+  return { unlockScript, controlBlock: new Uint8Array(65) };
+}
+
+export function transitionInputTxout(transition, amountSat, serverPub, expiryHeight, sizeOnly = false) {
+  if (sizeOnly) {
+    const known = ['cosigned', 'hashLockedCosigned', 'hashLockedCosigned_v0', 'arkoor'];
+    if (!known.includes(transition.type)) throw new Error('input_txout unsupported for transition ' + transition.type);
+    return { valueSat: amountSat, scriptPubKey: DUMMY_P2TR };
+  }
   if (transition.type === 'cosigned') {
     const pubkeys = transition.pubkeys.map((p) => hex.decode(p));
     return { valueSat: amountSat, scriptPubKey: cosignedInputTaproot(pubkeys, serverPub, expiryHeight).scriptPubKey };
@@ -140,7 +156,7 @@ export const vtxoAnchorAmount = (vtxo) =>
   vtxo.amountSat + vtxo.genesis.reduce((n, it) => n + otherSum(it), 0);
 
 // Walk the genesis chain, returning [{tx, outputIdx}] like Vtxo::transactions()
-export function vtxoTransactions(vtxo, serverPub) {
+export function vtxoTransactions(vtxo, serverPub, sizeOnly = false) {
   const anchorAmount = vtxoAnchorAmount(vtxo);
   let prev = vtxo.anchorPoint.raw;
   let currentAmount = anchorAmount;
@@ -149,9 +165,9 @@ export function vtxoTransactions(vtxo, serverPub) {
     const item = vtxo.genesis[i];
     const nextAmount = currentAmount - otherSum(item);
     const nextOutput = i + 1 < vtxo.genesis.length
-      ? transitionInputTxout(vtxo.genesis[i + 1].transition, nextAmount, serverPub, vtxo.expiryHeight)
+      ? transitionInputTxout(vtxo.genesis[i + 1].transition, nextAmount, serverPub, vtxo.expiryHeight, sizeOnly)
       : { valueSat: vtxo.amountSat,
-          scriptPubKey: policyTaproot(vtxo.policy, serverPub, vtxo.exitDelta).scriptPubKey };
+          scriptPubKey: sizeOnly ? DUMMY_P2TR : policyTaproot(vtxo.policy, serverPub, vtxo.exitDelta).scriptPubKey };
     // decoded txouts carry hex-string scripts — normalize to bytes
     const others = item.otherOutputs.map((o) => ({ valueSat: o.valueSat, scriptPubKey: hex.decode(o.scriptPubKey) }));
     const outs = [

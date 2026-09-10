@@ -18,7 +18,7 @@ import { schnorr, secp256k1 } from '@noble/curves/secp256k1';
 
 import { concatBytes } from './proto.js';
 import { pubkeyPolicyTaproot, txid } from './send.js';
-import { vtxoTransactions, harkLeafTaproot, tapLeafHash, taprootScriptSighash } from './refresh.js';
+import { vtxoTransactions, harkLeafTaproot, harkUnlockWitnessShape, tapLeafHash, taprootScriptSighash } from './refresh.js';
 
 const u16le = (n) => Uint8Array.of(n & 0xff, (n >> 8) & 0xff);
 const u32le = (n) => Uint8Array.of(n & 0xff, (n >> 8) & 0xff, (n >> 16) & 0xff, (n >>> 24) & 0xff);
@@ -57,8 +57,16 @@ export function serializeTxW(tx, witnesses) {
 
 // The vtxo's chain as broadcastable transactions, oldest first.
 // Throws if any transition lacks its signature (an unsigned chain can't exit).
-export function signedExitTxs(vtxo, serverPub) {
-  const items = vtxoTransactions(vtxo, serverPub);
+export const signedExitTxs = (vtxo, serverPub) => exitChain(vtxo, serverPub, false);
+
+// Just the vsize of each hop's transaction, with the same "can this chain
+// exit at all" checks — but no elliptic-curve work: the output keys are
+// stand-ins of the right length. For fee estimates only; nothing here is
+// broadcastable.
+export const exitTxVsizes = (vtxo, serverPub) => exitChain(vtxo, serverPub, true).map((t) => t.vsize);
+
+function exitChain(vtxo, serverPub, sizeOnly) {
+  const items = vtxoTransactions(vtxo, serverPub, sizeOnly);
   return items.map((it, i) => {
     const t = vtxo.genesis[i].transition;
     let witness;
@@ -70,14 +78,20 @@ export function signedExitTxs(vtxo, serverPub) {
         throw new Error('vtxo chain is missing its unlock preimage — cannot exit');
       }
       const preimage = hex.decode(t.unlock.preimage);
-      const tp = harkLeafTaproot(hex.decode(t.userPubkey), serverPub, vtxo.expiryHeight, sha256(preimage));
-      const cb = concatBytes(Uint8Array.of(0xc0 | tp.outputParity), tp.internalXOnly, tp.expiryLeaf);
-      witness = [hex.decode(t.signature), preimage, tp.unlockScript, cb];
+      if (sizeOnly) {
+        const shape = harkUnlockWitnessShape(sha256(preimage));
+        witness = [hex.decode(t.signature), preimage, shape.unlockScript, shape.controlBlock];
+      } else {
+        const tp = harkLeafTaproot(hex.decode(t.userPubkey), serverPub, vtxo.expiryHeight, sha256(preimage));
+        const cb = concatBytes(Uint8Array.of(0xc0 | tp.outputParity), tp.internalXOnly, tp.expiryLeaf);
+        witness = [hex.decode(t.signature), preimage, tp.unlockScript, cb];
+      }
     } else {
       throw new Error('unsupported genesis transition: ' + t.type);
     }
-    const idInternal = txid(it.tx);
     const { raw, vsize } = serializeTxW(it.tx, [witness]);
+    if (sizeOnly) return { vsize };
+    const idInternal = txid(it.tx);
     return {
       txid: hex.encode(idInternal.slice().reverse()),
       txidInternal: idInternal,

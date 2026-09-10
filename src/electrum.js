@@ -194,6 +194,22 @@ export class ElectrumApi {
     return this._esploraTx(txid, height);
   }
 
+  // A definitive answer for the replaced/evicted-tx pruner: null when neither
+  // the mempool nor the chain knows the txid (Fulcrum relays bitcoind's "No
+  // such mempool or blockchain transaction"), else an esplora-shaped status.
+  // Anything else (timeout, socket churn) throws, so a flaky link never
+  // prunes. Without this method the pruner silently skipped every tx on the
+  // Electrum source, and a never-broadcast send haunted History for days.
+  async txStatus(txid) {
+    let v;
+    try { v = await this.call('blockchain.transaction.get', [txid, true]); } catch (e) {
+      if (/no such mempool or blockchain transaction/i.test(String((e && e.message) || e))) return null;
+      throw e;
+    }
+    const confirmed = !!(v && v.blockhash);
+    return confirmed ? { confirmed: true, block_time: v.blocktime || 0 } : { confirmed: false };
+  }
+
   // Is output (txid:vout) spent? (used to detect an already-claimed gift). Scan
   // the output address's history for a tx that spends this exact outpoint.
   async outspend(txid, vout) {

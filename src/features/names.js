@@ -207,7 +207,14 @@ export function namesFeature(ctx) {
           const r = await withTimeout(
             fetch(`${REGISTRAR}/name/${encodeURIComponent(st.name)}?domain=${encodeURIComponent(st.domain || DOMAIN())}`).then((x) => x.json()),
             8000, 'registrar');
-          const mine = new Set([wallet.nostrPubkey && wallet.nostrPubkey(), (hook('nostrLoginIdentity') || {}).pubkey].filter(Boolean));
+          // The linked login identity counts even while its signer hasn't
+          // resumed yet (a bunker/Google login comes back seconds after
+          // load): its pubkey is on record. Without this, a name owned by
+          // the login identity — every migrated coinos.io name — was judged
+          // "not ours" in that window, dropped, and replaced by the wallet
+          // key's npub-shaped default: the name visibly flipped to npub…
+          const stored = (() => { try { return (wallet.loadFeatureState('nostrlogin', {}) || {}).pubkey; } catch { return null; } })();
+          const mine = new Set([wallet.nostrPubkey && wallet.nostrPubkey(), (hook('nostrLoginIdentity') || {}).pubkey, stored].filter(Boolean));
           const ours = r && r.taken && (mine.has(r.pubkey) || mine.has(r.manager));
           if (r && !ours) { save({}); st = load(); render(); }
         } catch {}

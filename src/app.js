@@ -2879,10 +2879,16 @@ function onboardScreen() {
   // After the identity niceties: offer a first top-up when Savings can fund
   // one and Spending is empty-handed — a spending account with nothing in it
   // is a demo, not a wallet.
-  const nextAfterAvatar = () =>
-    (featureHook('arkReady') && wallet.spendable > 1000
+  // A function declaration, not a const: the spend step above calls this
+  // while advancing past the avatar ask, i.e. BEFORE this line runs — a
+  // const there is in its temporal dead zone and threw "Cannot access
+  // before initialization", crashing onboarding right after a name claim or
+  // a coinos.io migration landed (a profile with a picture took this path).
+  function nextAfterAvatar() {
+    return (featureHook('arkReady') && wallet.spendable > 1000
       && (featureHook('spendingSat') || 0) + (featureHook('spendingBoardingSat') || 0) < 1000)
       ? 'board' : 'success';
+  }
 
   if (o.step === 'legacy') {
     // The migrate link carries this wallet's payment address, which the

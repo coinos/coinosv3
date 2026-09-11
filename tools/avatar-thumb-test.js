@@ -19,18 +19,19 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let ok = true;
 const check = (n, c, d = '') => { console.log(` ${c ? '✓' : '✗'} ${n}${d ? ' — ' + d : ''}`); if (!c) ok = false; };
 
-// a big-ish PNG (1024x1024 of noise) served with CORS, and a request counter
-const big = await (async () => {
-  const px = 512, head = Buffer.alloc(0);
-  // a real image is needed (the canvas has to decode it): build a PNG via a data URI in the page instead
-  return { px, head };
-})();
+// Generate a real PNG in the test browser; no external scratchpad fixture.
+let big;
 const html = await buildHtml({ minify: true, pwa: false });
 let originalHits = 0;
+let failedCorsHits = 0;
 const server = Bun.serve({
   port: 5235,
   async fetch(req) {
     const u = new URL(req.url);
+    if (u.pathname === '/fail.png') {
+      if (req.headers.get('sec-fetch-mode') === 'cors') failedCorsHits++;
+      return new Response('unavailable', { status: 503, headers: { 'access-control-allow-origin': '*' } });
+    }
     if (u.pathname.startsWith('/punks')) {
       const f = Bun.file('dist' + u.pathname);
       if (await f.exists()) return new Response(await f.arrayBuffer(), { headers: { 'content-type': 'image/webp' } });
@@ -43,8 +44,7 @@ const server = Bun.serve({
     if (u.pathname === '/redir.png') return new Response(null, { status: 302, headers: { location: '/big.png', 'access-control-allow-origin': '*' } });
     if (u.pathname === '/big.png') {
       originalHits++;
-      const bytes = await Bun.file('/tmp/claude-1000/-home-adam-coinosv3/61dea255-d26d-411d-be8b-92dfb0a75887/scratchpad/big.png').arrayBuffer();
-      return new Response(bytes, { headers: { 'content-type': 'image/png', 'access-control-allow-origin': '*', 'cache-control': 'no-store' } });
+      return new Response(big, { headers: { 'content-type': 'image/png', 'access-control-allow-origin': '*', 'cache-control': 'no-store' } });
     }
     return new Response(html, { headers: { 'content-type': 'text/html' } });
   },
@@ -54,6 +54,20 @@ const page = await browser.newPage();
 const click = (t) => page.evaluate((x) => { const e = [...document.querySelectorAll('button')].find((n) => n.textContent.trim().toLowerCase().includes(x)); if (e) { e.click(); return true; } return false; }, t);
 const waitText = async (x, ms = 25000) => { for (let i = 0; i < ms / 250; i++) { if ((await page.evaluate(() => document.body.innerText)).toLowerCase().includes(x)) return true; await sleep(250); } return false; };
 try {
+  big = Buffer.from(await page.evaluate(() => {
+    const c = document.createElement('canvas');
+    c.width = c.height = 1024;
+    const ctx = c.getContext('2d');
+    const pixels = ctx.createImageData(c.width, c.height);
+    for (let i = 0; i < pixels.data.length; i += 4) {
+      pixels.data[i] = (i * 13) % 251;
+      pixels.data[i + 1] = (i * 29) % 253;
+      pixels.data[i + 2] = (i * 7) % 255;
+      pixels.data[i + 3] = 255;
+    }
+    ctx.putImageData(pixels, 0, 0);
+    return c.toDataURL('image/png').split(',')[1];
+  }), 'base64');
   await page.setViewport({ width: 390, height: 844 });
   await page.goto('http://localhost:5235/', { waitUntil: 'domcontentloaded' });
   await page.evaluate(() => localStorage.setItem('btc-wallet-network', 'regtest'));
@@ -163,7 +177,8 @@ try {
   await page.evaluate((pkHex) => {
     for (const k of Object.keys(localStorage).filter((x) => /^btc-wallet-cache:[0-9a-f]+$/.test(x)))
       localStorage.setItem(k + ':profiles', JSON.stringify({
-        [pkHex]: { name: 'Redirect Test', picture: 'http://localhost:5235/redir.png', t: Date.now() },
+        [pkHex]: { name: 'Redirect Test', picture: 'http://127.0.0.1:5235/redir.png', t: Date.now(),
+          thumbFail: 'http://127.0.0.1:5235/redir.png', thumbFailAt: Date.now(), thumbFails: 5 },
       }));
   }, pk);
   await page.reload({ waitUntil: 'domcontentloaded' });
@@ -175,8 +190,31 @@ try {
     const r = rows.find((x) => x && /redir/.test(x.picture || '')) || {};
     return { thumb: (r.thumb || '').length, fail: !!r.thumbFail };
   });
-  check('a picture behind a redirect still gets a thumbnail', redirThumb.thumb > 0 && !redirThumb.fail,
+  check('an old thumbnail failure retries immediately and clears on success', redirThumb.thumb > 0 && !redirThumb.fail,
     redirThumb.thumb ? redirThumb.thumb + ' chars' : 'failed');
+
+  // If the corrected path also fails, start a new backoff and keep it
+  // across boots rather than repeatedly downloading a broken picture.
+  await page.evaluate((pkHex) => {
+    for (const k of Object.keys(localStorage).filter((x) => /^btc-wallet-cache:[0-9a-f]+$/.test(x)))
+      localStorage.setItem(k + ':profiles', JSON.stringify({
+        [pkHex]: { name: 'Failure Test', picture: 'http://127.0.0.1:5235/fail.png', t: Date.now(),
+          thumbFail: 'http://127.0.0.1:5235/fail.png', thumbFailAt: Date.now(), thumbFails: 5 },
+      }));
+  }, pk);
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await waitText('receive', 20000);
+  await sleep(1500);
+  const failure = await page.evaluate(() => Object.keys(localStorage)
+    .filter((k) => /^btc-wallet-cache:[0-9a-f]+:profiles$/.test(k))
+    .flatMap((k) => Object.values(JSON.parse(localStorage.getItem(k) || '{}')))
+    .find((r) => r.thumbFailVersion === 1));
+  check('a fresh failure starts a new backoff', failedCorsHits === 1 && failure?.thumbFails === 1);
+  failedCorsHits = 0;
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await waitText('receive', 20000);
+  await sleep(1500);
+  check('current failures still respect backoff after reload', failedCorsHits === 0);
 } finally { await browser.close(); server.stop(true); }
 console.log(ok ? '\n✅ faces come back instantly' : '\n❌ failed');
 process.exit(ok ? 0 : 1);

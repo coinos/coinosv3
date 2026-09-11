@@ -311,7 +311,8 @@ export function messagesFeature(ctx) {
     const s = wallet.loadFeatureState('profiles', {});
     s[pk] = { name: p.name || null, picture: p.picture || null, nip05: p.nip05 || null, lud16: p.lud16 || null, t: Date.now(),
       ...(p.thumbFor === p.picture && p.thumb ? { thumb: p.thumb, thumbFor: p.thumbFor } : {}),
-      ...(p.thumbFail ? { thumbFail: p.thumbFail, thumbFailAt: p.thumbFailAt || 0, thumbFails: p.thumbFails || 1 } : {}) };
+      ...(p.thumbFail ? { thumbFail: p.thumbFail, thumbFailAt: p.thumbFailAt || 0, thumbFails: p.thumbFails || 1,
+        thumbFailVersion: p.thumbFailVersion || 0 } : {}) };
     // Thumbnails are the bulk of this blob, so they live on a budget: the
     // least recently seen faces give theirs up first. The row itself stays —
     // that face just paints the way it used to.
@@ -357,6 +358,7 @@ export function messagesFeature(ctx) {
       entry.thumbFail = prev.thumbFail;
       entry.thumbFailAt = prev.thumbFailAt || 0;
       entry.thumbFails = prev.thumbFails || 1;
+      entry.thumbFailVersion = prev.thumbFailVersion || 0;
     }
     return entry;
   };
@@ -384,6 +386,9 @@ export function messagesFeature(ctx) {
   const THUMB_SLOW = 20_000; // a host that won't answer must not hold a slot
   const THUMB_RETRY = 6 * 3600_000; // ...and must not be written off for good
   const THUMB_RETRY_MAX = 14 * 24 * 3600_000; // a host that never works, backed off
+  // Older crossOrigin <img> attempts could fail on a cached no-CORS response.
+  // Those failures must not suppress the corrected fetch/blob path.
+  const THUMB_VERSION = 1;
   const thumbing = new Set();
   function makeThumb(pk, p) {
     if (!p || !p.picture || typeof document === 'undefined') return;
@@ -393,7 +398,7 @@ export function messagesFeature(ctx) {
     // on CDNs that answer in 700ms one minute and time out the next. So every
     // failure is tried again — backing off each time, so a host that truly
     // won't have us is asked about twice a month rather than every boot.
-    if (p.thumbFail === p.picture
+    if (p.thumbFailVersion === THUMB_VERSION && p.thumbFail === p.picture
       && Date.now() - (p.thumbFailAt || 0) < Math.min(THUMB_RETRY * 2 ** ((p.thumbFails || 1) - 1), THUMB_RETRY_MAX)) return;
     if (thumbing.has(pk) || thumbing.size >= 3) return; // a few at a time
     // Making the thumbnail costs one more fetch of the original today to
@@ -405,11 +410,16 @@ export function messagesFeature(ctx) {
     const done = (patch) => {
       thumbing.delete(pk);
       const entry = { ...(profiles.get(pk) || p), ...patch };
+      if (patch.thumb) {
+        delete entry.thumbFail; delete entry.thumbFailAt;
+        delete entry.thumbFails; delete entry.thumbFailVersion;
+      }
       profiles.set(pk, entry);
       persistProfile(pk, entry);
       if (patch.thumb) scheduleRepaint();
     };
-    const failed = () => done({ thumbFail: url, thumbFailAt: Date.now(), thumbFails: (p.thumbFails || 0) + 1 });
+    const failed = () => done({ thumbFail: url, thumbFailAt: Date.now(), thumbFailVersion: THUMB_VERSION,
+      thumbFails: (p.thumbFailVersion === THUMB_VERSION && p.thumbFail === url ? p.thumbFails || 0 : 0) + 1 });
     // Fetch the bytes rather than pointing a crossOrigin <img> at the URL.
     // The avatar itself is painted as a plain background-image, so the
     // picture is already in the HTTP cache as a no-CORS entry — and a

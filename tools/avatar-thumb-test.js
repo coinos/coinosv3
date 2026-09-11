@@ -36,6 +36,11 @@ const server = Bun.serve({
       if (await f.exists()) return new Response(await f.arrayBuffer(), { headers: { 'content-type': 'image/webp' } });
       return new Response('no', { status: 404 });
     }
+    // the shape that broke a real avatar: the picture is behind a redirect,
+    // so the bytes land in the HTTP cache under the FINAL url when the plain
+    // background-image loads them — and a crossOrigin <img> for the same
+    // picture then reuses that no-CORS entry and fails the CORS check
+    if (u.pathname === '/redir.png') return new Response(null, { status: 302, headers: { location: '/big.png', 'access-control-allow-origin': '*' } });
     if (u.pathname === '/big.png') {
       originalHits++;
       const bytes = await Bun.file('/tmp/claude-1000/-home-adam-coinosv3/61dea255-d26d-411d-be8b-92dfb0a75887/scratchpad/big.png').arrayBuffer();
@@ -152,6 +157,26 @@ try {
     return i ? i.getAttribute('src') : '';
   });
   check('an uncached face is drawn straight away, not left blank', /^punks-sm\//.test(strangerSrc), strangerSrc || 'blank circle');
+
+  // A picture behind a redirect, loaded plainly first (as the avatar always
+  // is) and only then thumbnailed.
+  await page.evaluate((pkHex) => {
+    for (const k of Object.keys(localStorage).filter((x) => /^btc-wallet-cache:[0-9a-f]+$/.test(x)))
+      localStorage.setItem(k + ':profiles', JSON.stringify({
+        [pkHex]: { name: 'Redirect Test', picture: 'http://localhost:5235/redir.png', t: Date.now() },
+      }));
+  }, pk);
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await waitText('receive', 20000);
+  await sleep(3000);
+  const redirThumb = await page.evaluate(() => {
+    const rows = Object.keys(localStorage).filter((k) => /^btc-wallet-cache:[0-9a-f]+:profiles$/.test(k))
+      .flatMap((k) => Object.values(JSON.parse(localStorage.getItem(k) || '{}')));
+    const r = rows.find((x) => x && /redir/.test(x.picture || '')) || {};
+    return { thumb: (r.thumb || '').length, fail: !!r.thumbFail };
+  });
+  check('a picture behind a redirect still gets a thumbnail', redirThumb.thumb > 0 && !redirThumb.fail,
+    redirThumb.thumb ? redirThumb.thumb + ' chars' : 'failed');
 } finally { await browser.close(); server.stop(true); }
 console.log(ok ? '\n✅ faces come back instantly' : '\n❌ failed');
 process.exit(ok ? 0 : 1);

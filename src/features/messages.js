@@ -311,7 +311,7 @@ export function messagesFeature(ctx) {
     const s = wallet.loadFeatureState('profiles', {});
     s[pk] = { name: p.name || null, picture: p.picture || null, nip05: p.nip05 || null, lud16: p.lud16 || null, t: Date.now(),
       ...(p.thumbFor === p.picture && p.thumb ? { thumb: p.thumb, thumbFor: p.thumbFor } : {}),
-      ...(p.thumbFail ? { thumbFail: p.thumbFail, thumbFailAt: p.thumbFailAt || 0, ...(p.thumbHard ? { thumbHard: true } : {}) } : {}) };
+      ...(p.thumbFail ? { thumbFail: p.thumbFail, thumbFailAt: p.thumbFailAt || 0, thumbFails: p.thumbFails || 1 } : {}) };
     // Thumbnails are the bulk of this blob, so they live on a budget: the
     // least recently seen faces give theirs up first. The row itself stays —
     // that face just paints the way it used to.
@@ -356,7 +356,7 @@ export function messagesFeature(ctx) {
     if (prev.thumbFail === entry.picture) {
       entry.thumbFail = prev.thumbFail;
       entry.thumbFailAt = prev.thumbFailAt || 0;
-      if (prev.thumbHard) entry.thumbHard = true;
+      entry.thumbFails = prev.thumbFails || 1;
     }
     return entry;
   };
@@ -383,17 +383,18 @@ export function messagesFeature(ctx) {
   const THUMB_BUDGET = 180_000; // ...and for all of them together
   const THUMB_SLOW = 20_000; // a host that won't answer must not hold a slot
   const THUMB_RETRY = 6 * 3600_000; // ...and must not be written off for good
+  const THUMB_RETRY_MAX = 14 * 24 * 3600_000; // a host that never works, backed off
   const thumbing = new Set();
   function makeThumb(pk, p) {
     if (!p || !p.picture || typeof document === 'undefined') return;
     if (p.thumbFor === p.picture) return;
     if (localPunk(p.picture)) return; // our own art, already the right size on disk
     // A failed attempt is usually the network, not the host: these images sit
-    // on CDNs that answer in 700ms one minute and time out the next. Only a
-    // tainted canvas (no CORS header, and there's nothing to be done about
-    // that) is remembered for good; everything else is tried again later —
-    // one slow minute used to cost a face its thumbnail permanently.
-    if (p.thumbFail === p.picture && (p.thumbHard || Date.now() - (p.thumbFailAt || 0) < THUMB_RETRY)) return;
+    // on CDNs that answer in 700ms one minute and time out the next. So every
+    // failure is tried again — backing off each time, so a host that truly
+    // won't have us is asked about twice a month rather than every boot.
+    if (p.thumbFail === p.picture
+      && Date.now() - (p.thumbFailAt || 0) < Math.min(THUMB_RETRY * 2 ** ((p.thumbFails || 1) - 1), THUMB_RETRY_MAX)) return;
     if (thumbing.has(pk) || thumbing.size >= 3) return; // a few at a time
     // Making the thumbnail costs one more fetch of the original today to
     // save every fetch after it — but not on a connection someone is
@@ -408,31 +409,35 @@ export function messagesFeature(ctx) {
       persistProfile(pk, entry);
       if (patch.thumb) scheduleRepaint();
     };
-    const failed = (hard) => done({ thumbFail: url, thumbFailAt: Date.now(), ...(hard ? { thumbHard: true } : {}) });
-    const img = new Image();
-    img.crossOrigin = 'anonymous';
-    img.decoding = 'async';
-    const slow = setTimeout(() => { img.onload = img.onerror = null; failed(false); }, THUMB_SLOW);
-    img.onload = () => {
-      clearTimeout(slow);
+    const failed = () => done({ thumbFail: url, thumbFailAt: Date.now(), thumbFails: (p.thumbFails || 0) + 1 });
+    // Fetch the bytes rather than pointing a crossOrigin <img> at the URL.
+    // The avatar itself is painted as a plain background-image, so the
+    // picture is already in the HTTP cache as a no-CORS entry — and a
+    // crossOrigin <img> for the same URL reuses that entry and fails the CORS
+    // check, which is how a host that allows us perfectly well (verified: the
+    // same fetch succeeds) came to be written off. Drawing from a blob also
+    // keeps the canvas untainted, so nothing here depends on the element's
+    // CORS bookkeeping at all.
+    (async () => {
+      let bmp = null;
       try {
+        const res = await fetch(url, { mode: 'cors', cache: 'reload', signal: AbortSignal.timeout(THUMB_SLOW) });
+        if (!res.ok) throw new Error('http ' + res.status);
+        bmp = await createImageBitmap(await res.blob());
         // centre-crop to a square, the way background-size:cover paints it
-        const side = Math.min(img.naturalWidth, img.naturalHeight);
-        if (!side) return failed(true);
+        const side = Math.min(bmp.width, bmp.height);
+        if (!side) throw new Error('empty');
         const c = document.createElement('canvas');
         c.width = c.height = THUMB_PX;
-        c.getContext('2d').drawImage(img, (img.naturalWidth - side) / 2, (img.naturalHeight - side) / 2,
+        c.getContext('2d').drawImage(bmp, (bmp.width - side) / 2, (bmp.height - side) / 2,
           side, side, 0, 0, THUMB_PX, THUMB_PX);
-        // toDataURL is what throws on a tainted canvas, so a failure from
-        // here down is the host's CORS policy, not the picture.
         let data = c.toDataURL('image/webp', 0.75);
         if (!data.startsWith('data:image/webp')) data = c.toDataURL('image/jpeg', 0.7);
         if (data.length > THUMB_MAX) data = c.toDataURL('image/webp', 0.5); // a busy picture, leaned on harder
-        done(data.length <= THUMB_MAX ? { thumb: data, thumbFor: url } : { thumbFail: url, thumbFailAt: Date.now(), thumbHard: true });
-      } catch { failed(true); } // tainted canvas — this host sends no CORS header
-    };
-    img.onerror = () => { clearTimeout(slow); failed(false); };
-    img.src = url;
+        if (data.length > THUMB_MAX) throw new Error('too big');
+        done({ thumb: data, thumbFor: url });
+      } catch { failed(); } finally { try { bmp && bmp.close(); } catch {} }
+    })();
   }
 
   // A profile that came back EMPTY is usually a cold boot's 5s query racing

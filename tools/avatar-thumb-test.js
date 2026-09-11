@@ -139,6 +139,19 @@ try {
     return i ? i.getAttribute('src') : '';
   });
   check('the default face is the small punk', /^punks-sm\//.test(punkSrc), punkSrc);
+
+  // And someone we have never cached at all — the case that used to sit as a
+  // blank circle until a relay answered — is drawn from their pubkey alone.
+  await page.evaluate(() => {
+    for (const k of Object.keys(localStorage).filter((x) => /^btc-wallet-cache:[0-9a-f]+:profiles$/.test(x))) localStorage.removeItem(k);
+  });
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await waitText('receive', 20000);
+  const strangerSrc = await page.evaluate(() => {
+    const i = document.querySelector('.header-avatar img.punk') || document.querySelector('img.punk');
+    return i ? i.getAttribute('src') : '';
+  });
+  check('an uncached face is drawn straight away, not left blank', /^punks-sm\//.test(strangerSrc), strangerSrc || 'blank circle');
 } finally { await browser.close(); server.stop(true); }
 console.log(ok ? '\n✅ faces come back instantly' : '\n❌ failed');
 process.exit(ok ? 0 : 1);

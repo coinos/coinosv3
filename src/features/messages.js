@@ -337,7 +337,9 @@ export function messagesFeature(ctx) {
   // the legacy coinos.io copies 502 for a third of the set — so painting
   // those from the local files means no network, no broken faces, and the
   // right size for the circle being drawn.
-  const PUNK_PIC_RE = /^https?:\/\/(?:[a-z0-9-]+\.)*coinos\.io\/punks\/(\d{1,2})\.webp$/i;
+  // Absolute (what the wizard publishes) or the bare relative path an older
+  // build wrote into a few profiles.
+  const PUNK_PIC_RE = /^(?:https?:\/\/(?:[a-z0-9-]+\.)*coinos\.io\/)?punks\/(\d{1,2})\.webp$/i;
   const localPunk = (url, big) => {
     const m = PUNK_PIC_RE.exec(url || '');
     return m ? (big ? `punks/${m[1]}.webp` : `punks-sm/${m[1]}.webp`) : null;
@@ -1761,12 +1763,22 @@ export function messagesFeature(ctx) {
 
   const avatar = (pk, cls = 'chat-avatar', clickable = true) => {
     const p = profileOf(pk);
-    // While the profile is in flight, a quiet empty circle — the punk is a
-    // statement about having no picture, not a loading state. (`loading` on
-    // an entry marks a provisional seed: name known, picture still unknown.)
-    const node = p === null || (p && p.loading && !p.picture)
+    // Someone we've never cached used to get an empty circle until a relay
+    // answered — seconds of blankness on every boot, and for anyone whose
+    // kind 0 carries no picture (or none at all, which never gets cached)
+    // that repeated forever. The punk is derived from the pubkey alone, so
+    // it can be drawn in the first frame: it's already the right answer for
+    // everyone without a picture, and for a coinos user who kept the default
+    // it IS their published picture. A real photo replaces it when it lands.
+    //
+    // `loading` is different and still gets the quiet circle: a name lookup
+    // is in flight for that specific person, so a picture is expected and
+    // punk art must not flash in front of it.
+    const node = p && p.loading && !p.picture
       ? h('div', { class: cls + ' fallback loading' })
-      : p.picture
+      : p === null
+        ? fallbackAvatar(h, pk, null, cls)
+      : p.picture 
         // A background paints synchronously from cache; a fresh <img> decodes
         // async, so recreating one per render made avatars visibly flash.
         //

@@ -1499,16 +1499,26 @@ export function arkFeature(ctx) {
     ui.sendError = '';
     render();
     const live = () => ui.arkZap === z;
+    // The tap already put a pulsing chip on the note being zapped: whichever
+    // way this goes, say so, so the chip settles instead of pulsing until it
+    // times out. (A handover to the Lightning flow doesn't report — that flow
+    // is still carrying the same zap, and reports for itself.)
+    const bail = () => {
+      if (!z.autoSat) return; // a form zap: the card keeps the screen and its own status
+      ctx.hook('zapSettled', z.eventId, false);
+      z.autoSat = 0; ui.tab = 'send';
+    };
     // an instant zap: resolution succeeded — pay the default amount now, no
     // form, and report by toast; failures fall back to the classic form
     const auto = async (label) => {
       try {
         await performArkZap(z, z.autoSat);
         if (ui.arkZap === z) ui.arkZap = null;
+        ctx.hook('zapSettled', z.eventId, true, z.autoSat);
         toast('⚡ ' + t('zapSentShort', { n: fmtAmount(z.autoSat) + ' ' + unitLabel() }));
         render();
       } catch (e) {
-        z.autoSat = 0; ui.tab = 'send'; ui.sendError = e.message; render();
+        bail(); ui.sendError = e.message; render();
       }
     };
     (async () => {
@@ -1517,7 +1527,7 @@ export function arkFeature(ctx) {
       const adv = await lookupArkZapTarget(pk).catch(() => ({ status: 'noark' }));
       if (!live()) return;
       if (adv.status === 'ready') { Object.assign(z, adv); if (z.autoSat) return auto(); render(); return; }
-      if (adv.status === 'wrongnet') { Object.assign(z, adv); if (z.autoSat) { z.autoSat = 0; ui.tab = 'send'; } render(); return; }
+      if (adv.status === 'wrongnet') { Object.assign(z, adv); bail(); render(); return; }
       // 1b. BIP-353 with an ark instruction; remember on-chain as last resort
       const uris = [];
       try {
@@ -1557,12 +1567,12 @@ export function arkFeature(ctx) {
       if (onchain) {
         ui.arkZap = null;
         ui.send.recipients[0].address = onchain;
-        if (z.autoSat) ui.tab = 'send';
+        bail();
         render();
         return;
       }
-      if (live()) { z.status = 'noark'; if (z.autoSat) { z.autoSat = 0; ui.tab = 'send'; } render(); }
-    })().catch((e) => { if (live()) { z.status = 'noark'; if (z.autoSat) { z.autoSat = 0; ui.tab = 'send'; } ui.sendError = e.message; render(); } });
+      if (live()) { z.status = 'noark'; bail(); render(); }
+    })().catch((e) => { if (live()) { z.status = 'noark'; bail(); ui.sendError = e.message; render(); } });
   }
 
   // shared by the ark and lightning zap flows (see zaps.js for the twin)
@@ -1614,6 +1624,7 @@ export function arkFeature(ctx) {
     ui.busy = true; ui.sendError = ''; render();
     try {
       await performArkZap(z, sats);
+      ctx.hook('zapSettled', z.eventId, true, sats); // the tally shows it now, not when the receipt lands
       ui.arkZapped = { amountSat: sats, npub: z.npub };
       ui.arkZap = null;
     } catch (e) {

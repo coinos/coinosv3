@@ -450,10 +450,14 @@ export function zapsFeature(ctx) {
     lnZapNpub(pk, npub, eventId, autoSat) {
       if (!canPay() || !wallet.nostrProfile) return false;
       if (autoSat && hook('arkReady')) {
+        // the chip on the zapped note is pulsing since the tap — tell it how
+        // this went, either way
         autoZap({ kind: 'npub', pk, eventId: eventId || null }, autoSat)
-          .catch((e) => toast('⚡ ' + e.message));
+          .then(() => hook('zapSettled', eventId, true, autoSat))
+          .catch((e) => { hook('zapSettled', eventId, false); toast('⚡ ' + e.message); });
         return true;
       }
+      if (autoSat) hook('zapSettled', eventId, false); // one tap couldn't serve it — the form takes over
       begin({ kind: 'npub', pk, eventId: eventId || null }, shortNpub(npub || npubOf(pk)));
       return true;
     },

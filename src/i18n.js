@@ -193,6 +193,7 @@ const STR = {
     msgReact: 'React',
     msgZap: 'Zap',
     zapTallyTitle: '{n} sats zapped',
+    zapSending: 'Sending your zap…',
     msgReply: 'Reply',
     profNewPost: 'New post',
     profYourProfile: 'Your profile',

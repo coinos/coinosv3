@@ -1839,7 +1839,9 @@ export function messagesFeature(ctx) {
       if (cur.seen.has(ev.id)) continue;
       cur.seen.add(ev.id);
       cur.sats += sats;
-      if (from && my.includes(from)) cur.mine = true;
+      // our own zap's receipt: the real thing has landed, so the optimistic
+      // amount the chip has been carrying since the tap steps aside
+      if (from && my.includes(from)) { cur.mine = true; zapPending.delete(x[1]); }
       changed = true;
     }
     if (changed) scheduleRepaint();
@@ -1873,15 +1875,53 @@ export function messagesFeature(ctx) {
       : n < 1e6 ? Math.round(n / 1000) + 'k'
         : (n / 1e6).toFixed(1).replace(/\.0$/, '') + 'M';
   const BOLT_SVG = '<svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" stroke="none" style="display:block"><path d="M13 2L4 14h7l-1 8 9-12h-7l1-8z"/></svg>';
-  // The chip: a little bolt + the sats total; absent until the first receipt.
+
+  // A tapped zap takes a few seconds to pay, and its public receipt trails
+  // the payment by seconds more — long enough that the tap looked ignored.
+  // So the chip appears the instant you tap, carrying your amount and
+  // pulsing while the payment is in flight; it goes solid when the payment
+  // lands and hands over to the real receipt when that arrives. A failure
+  // takes it straight back off.
+  const ZAP_FLIGHT_MS = 45_000; // nothing reported back: assume it's gone
+  const ZAP_PAID_MS = 5 * 60_000; // paid, but the receipt never showed
+  const zapPending = new Map(); // id -> { sats, at, paid }
+  const pendingLive = (p) => p && Date.now() - p.at < (p.paid ? ZAP_PAID_MS : ZAP_FLIGHT_MS);
+  function pendingOf(id) {
+    const p = zapPending.get(id);
+    if (p && !pendingLive(p)) { zapPending.delete(id); return null; }
+    return p || null;
+  }
+  function markZapPending(id, sats) {
+    if (!id || !sats) return;
+    zapPending.set(id, { sats, at: Date.now(), paid: false });
+    scheduleRepaint();
+    // repaint when the in-flight chip would expire, so a zap nobody ever
+    // reported on doesn't pulse forever
+    setTimeout(scheduleRepaint, ZAP_FLIGHT_MS + 200);
+  }
+  // A zap flow reporting back: paid (keep the amount, stop pulsing) or
+  // failed (the chip was never real — take it off).
+  function settleZap(id, ok, sats) {
+    if (!id) return;
+    if (!ok) { if (zapPending.delete(id)) scheduleRepaint(); return; }
+    const p = zapPending.get(id) || { sats: sats || 0, at: Date.now() };
+    zapPending.set(id, { ...p, at: Date.now(), paid: true, sats: sats || p.sats });
+    scheduleRepaint();
+  }
+  // The chip: a little bolt + the sats total. Absent until the first receipt
+  // — or until you zap it yourself, which is its own kind of receipt.
   function zapChip(id, { onClick, cls = '' } = {}) {
     const z = zapTotals.get(id);
-    if (!z || !z.sats) return null;
+    const p = pendingOf(id);
+    const sats = (z ? z.sats : 0) + (p ? p.sats : 0);
+    if (!sats) return null;
+    const flying = p && !p.paid;
     return h('span', {
-      class: 'zap-tally' + (z.mine ? ' on' : '') + (onClick ? ' clickable' : '') + (cls ? ' ' + cls : ''),
-      title: t('zapTallyTitle', { n: z.sats.toLocaleString() }),
+      class: 'zap-tally' + ((z && z.mine) || p ? ' on' : '') + (flying ? ' flying' : '')
+        + (onClick ? ' clickable' : '') + (cls ? ' ' + cls : ''),
+      title: flying ? t('zapSending') : t('zapTallyTitle', { n: sats.toLocaleString() }),
       onClick: onClick ? (e) => { e.stopPropagation(); onClick(); } : undefined,
-    }, h('span', { style: 'display:flex', html: BOLT_SVG }), fmtSats(z.sats));
+    }, h('span', { style: 'display:flex', html: BOLT_SVG }), fmtSats(sats));
   }
   // Zap a chat message or DM: same one-tap flow as a post (ark first,
   // Lightning fallback, the amount remembered from the first time).
@@ -2023,8 +2063,10 @@ export function messagesFeature(ctx) {
     const npubStr = npubOf(pk);
     const def = ctx.zapDefaultSat ? ctx.zapDefaultSat() : 0;
     if (!def) { ui.zapSetup = { pk, npub: npubStr, eventId: ev.id, amount: '21' }; render(); return; }
+    markZapPending(ev.id, def); // the chip answers the tap; the flow reports back
     if (!hook('zapNpub', pk, npubStr, ev.id, def) && !hook('lnZapNpub', pk, npubStr, ev.id, def)) {
       // no instant path in this build — the classic form flow
+      settleZap(ev.id, false);
       ui.profilePk = null;
       ui.chatOpen = false;
       ui.tab = 'send';
@@ -2051,7 +2093,9 @@ export function messagesFeature(ctx) {
           const { pk, npub, eventId } = s;
           ui.zapSetup = null;
           render();
-          if (!hook('zapNpub', pk, npub, eventId, n)) hook('lnZapNpub', pk, npub, eventId, n);
+          markZapPending(eventId, n);
+          if (!hook('zapNpub', pk, npub, eventId, n) && !hook('lnZapNpub', pk, npub, eventId, n)) settleZap(eventId, false);
+          recheckZap(eventId);
         } }, t('zapSetupSave'))),
       h('button', { class: 'btn-ghost btn-block', onClick: () => { ui.zapSetup = null; render(); } }, t('back')));
   }
@@ -3475,6 +3519,11 @@ export function messagesFeature(ctx) {
 
   return {
     id: 'messages',
+    // A zap flow reporting how its payment went, so the chip that appeared
+    // on tap can stop pulsing (paid) or disappear (failed / never fired).
+    // Also the way a zap sent from a form reaches the tally right away,
+    // without waiting on its receipt.
+    zapSettled(eventId, ok, sats) { settleZap(eventId, ok, sats); return true; },
     // Chat lives behind a header button and takes over the whole screen —
     // no balance card, no tabs; each view carries its own way back.
     // The bare avatar node for the app header's identity menu.
@@ -3662,7 +3711,7 @@ export function messagesFeature(ctx) {
       listsSynced = false;
       if (zapLiveUnsub) { try { zapLiveUnsub(); } catch {} zapLiveUnsub = null; }
       clearTimeout(zapTimer); zapTimer = null; zapQueue = new Set(); zapRecent = [];
-      zapTotals.clear(); zapAsked.clear(); // 'mine' is per identity — refetch under the next
+      zapTotals.clear(); zapAsked.clear(); zapPending.clear(); // 'mine' is per identity — refetch under the next
     },
   };
 }

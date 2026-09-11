@@ -1841,7 +1841,7 @@ export function messagesFeature(ctx) {
       cur.sats += sats;
       // our own zap's receipt: the real thing has landed, so the optimistic
       // amount the chip has been carrying since the tap steps aside
-      if (from && my.includes(from)) { cur.mine = true; zapPending.delete(x[1]); }
+      if (from && my.includes(from)) { cur.mine = true; voidPending(x[1], ev.created_at * 1000); }
       changed = true;
     }
     if (changed) scheduleRepaint();
@@ -1884,16 +1884,27 @@ export function messagesFeature(ctx) {
   // takes it straight back off.
   const ZAP_FLIGHT_MS = 45_000; // nothing reported back: assume it's gone
   const ZAP_PAID_MS = 5 * 60_000; // paid, but the receipt never showed
-  const zapPending = new Map(); // id -> { sats, at, paid }
-  const pendingLive = (p) => p && Date.now() - p.at < (p.paid ? ZAP_PAID_MS : ZAP_FLIGHT_MS);
+  // id -> { sats, at, state }, where state is:
+  //   flying — tapped, payment in the air: counted on top, chip pulses
+  //   paid   — the flow reported success: counted on top, chip solid
+  //   void   — one of OUR receipts has been counted into the real total for
+  //            this id, so the optimistic amount must not be added again.
+  //            Kept rather than deleted, because the receipt usually beats
+  //            the flow's own report: an ark zap publishes that receipt
+  //            itself, and it returns over the live subscription before the
+  //            send call resolves. Deleting would let the later settle
+  //            resurrect the amount — which is how a 21-sat zap displayed 42.
+  const zapPending = new Map();
+  const pendTtl = (p) => (p.state === 'flying' ? ZAP_FLIGHT_MS : ZAP_PAID_MS);
   function pendingOf(id) {
     const p = zapPending.get(id);
-    if (p && !pendingLive(p)) { zapPending.delete(id); return null; }
-    return p || null;
+    if (!p) return null;
+    if (Date.now() - p.at > pendTtl(p)) { zapPending.delete(id); return null; }
+    return p;
   }
   function markZapPending(id, sats) {
     if (!id || !sats) return;
-    zapPending.set(id, { sats, at: Date.now(), paid: false });
+    zapPending.set(id, { sats, at: Date.now(), state: 'flying' });
     scheduleRepaint();
     // repaint when the in-flight chip would expire, so a zap nobody ever
     // reported on doesn't pulse forever
@@ -1903,21 +1914,36 @@ export function messagesFeature(ctx) {
   // failed (the chip was never real — take it off).
   function settleZap(id, ok, sats) {
     if (!id) return;
-    if (!ok) { if (zapPending.delete(id)) scheduleRepaint(); return; }
-    const p = zapPending.get(id) || { sats: sats || 0, at: Date.now() };
-    zapPending.set(id, { ...p, at: Date.now(), paid: true, sats: sats || p.sats });
+    const p = pendingOf(id);
+    if (!ok) {
+      if (p && p.state !== 'void') { zapPending.delete(id); scheduleRepaint(); }
+      return;
+    }
+    if (p && p.state === 'void') return; // the receipt is already carrying it
+    zapPending.set(id, { sats: sats || (p && p.sats) || 0, at: Date.now(), state: 'paid' });
     scheduleRepaint();
+  }
+  // One of our own receipts has been counted for this id: the real total
+  // speaks for the zap now, so the optimistic amount stands down.
+  function voidPending(id, evMs) {
+    const p = zapPending.get(id);
+    // ...unless it's the receipt of an OLDER zap of ours arriving (the first
+    // paint fetches every receipt a message has). That one is already in the
+    // total and says nothing about the zap currently in the air.
+    if (p && p.state !== 'void' && evMs && evMs < p.at - 120_000) return;
+    zapPending.set(id, { sats: 0, at: Date.now(), state: 'void' });
   }
   // The chip: a little bolt + the sats total. Absent until the first receipt
   // — or until you zap it yourself, which is its own kind of receipt.
   function zapChip(id, { onClick, cls = '' } = {}) {
     const z = zapTotals.get(id);
     const p = pendingOf(id);
-    const sats = (z ? z.sats : 0) + (p ? p.sats : 0);
+    const optimistic = p && p.state !== 'void' ? p.sats : 0;
+    const sats = (z ? z.sats : 0) + optimistic;
     if (!sats) return null;
-    const flying = p && !p.paid;
+    const flying = !!p && p.state === 'flying';
     return h('span', {
-      class: 'zap-tally' + ((z && z.mine) || p ? ' on' : '') + (flying ? ' flying' : '')
+      class: 'zap-tally' + ((z && z.mine) || optimistic ? ' on' : '') + (flying ? ' flying' : '')
         + (onClick ? ' clickable' : '') + (cls ? ' ' + cls : ''),
       title: flying ? t('zapSending') : t('zapTallyTitle', { n: sats.toLocaleString() }),
       onClick: onClick ? (e) => { e.stopPropagation(); onClick(); } : undefined,

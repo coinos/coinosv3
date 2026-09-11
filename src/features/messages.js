@@ -2609,6 +2609,7 @@ export function messagesFeature(ctx) {
     const id = await identity();
     if (!id) { noIdToast(); return; }
     const e = ui.profEdit;
+    e.migrationName = null;
     ui.profSaving = true;
     render();
     try {
@@ -2649,6 +2650,7 @@ export function messagesFeature(ctx) {
       ui.profEdit = null; ui.profEditFilled = false;
       toast(t('profSaved'));
     } catch (err) {
+      if (ui.profEdit === e && e.uname === err.migrationName) e.migrationName = err.migrationName;
       toast(err.message || String(err));
     } finally {
       ui.profSaving = false;
@@ -2839,12 +2841,16 @@ export function messagesFeature(ctx) {
                     type: 'text', style: 'flex:1;min-width:0',
                     autocapitalize: 'none', autocomplete: 'off', spellcheck: 'false',
                     value: ui.profEdit.uname,
-                    onInput: (ev) => { ui.profEdit.uname = ev.target.value.toLowerCase().replace(/[^a-z0-9._-]/g, ''); ev.target.value = ui.profEdit.uname; },
+                    onInput: (ev) => {
+                      ui.profEdit.uname = ev.target.value.toLowerCase().replace(/[^a-z0-9._-]/g, '');
+                      ev.target.value = ui.profEdit.uname;
+                      if (ui.profEdit.migrationName) { ui.profEdit.migrationName = null; render(); }
+                    },
                   }),
                   h('span', { class: 'muted', style: 'white-space:nowrap;padding:0 8px' }, '@' + myAddr.split('@')[1]))) : null,
-              // the migrate door, right where a coinos.io veteran is looking
-              // at the name they want to bring over (mainnet names only)
-              myAddr && myAddr.split('@')[1] === 'coinos.io' ? h('button', {
+              // Offered only for a submitted name confirmed as legacy-only.
+              ui.profEdit.migrationName && ui.profEdit.migrationName === ui.profEdit.uname
+                && myAddr && myAddr.split('@')[1] === 'coinos.io' ? h('button', {
                 type: 'button', class: 'linklike small', style: 'align-self:flex-start',
                 onClick: () => {
                   location.href = `https://coinos.io/migrate?to=${encodeURIComponent(myAddr)}&back=${encodeURIComponent(location.origin + '/')}`;

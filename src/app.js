@@ -3087,9 +3087,6 @@ function onboardScreen() {
         try { localStorage.removeItem(ONB_STEP_KEY); } catch {}
         render();
       } }, t('onbNotNow')),
-      // Most people are new. The ones who aren't know it, and can say so here
-      // rather than everyone being asked first.
-      h('button', { class: 'linklike small', onClick: () => { ui.onbError = ''; o.step = 'legacy'; render(); } }, t('onbHaveCoinos')),
     ]);
   }
   if (o.step === 'avatar') {

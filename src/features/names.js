@@ -138,6 +138,30 @@ export function namesFeature(ctx) {
     save({});
   }
 
+  // Only an explicit, rejected name submission can offer migration. A legacy
+  // account still exists after moving to v3, and its `migrated` flag predates
+  // v3, so the registrar record is what tells us the name has already moved.
+  async function claimRequestedName(name, opts = {}) {
+    const domain = DOMAIN();
+    try { return await claim(name, opts); }
+    catch (err) {
+      if (domain === 'coinos.io' && ['name is taken', 'name is reserved'].includes(err.message)) {
+        try {
+          const r = await fetch(`${REGISTRAR}/name/${encodeURIComponent(name)}?domain=${encodeURIComponent(domain)}`,
+            { signal: AbortSignal.timeout(8000), cache: 'no-store' });
+          const record = r.ok ? await r.json() : null;
+          if (record?.name === name && record.domain === domain && record.reserved === true && !record.pubkey) {
+            const legacy = await fetch(`https://coinos.io/api/users/${encodeURIComponent(name)}`,
+              { signal: AbortSignal.timeout(8000), cache: 'no-store' });
+            const user = legacy.ok ? await legacy.json() : null;
+            if (user?.username?.toLowerCase() === name) err.migrationName = name;
+          }
+        } catch {} // An unavailable lookup leaves the original claim error.
+      }
+      throw err;
+    }
+  }
+
   // An imported seed (or a new browser) doesn't know its username — the
   // registrar does. Ask by the wallet's nostr pubkey and adopt the answer
   // before deciding whether anything needs claiming.
@@ -398,25 +422,45 @@ export function namesFeature(ctx) {
           type: 'text', placeholder: t('namesPlaceholder'), style: 'flex:1' + (big ? ';font-size:18px' : ''),
           autocapitalize: 'none', autocomplete: 'off', spellcheck: 'false',
           value: ui.nameClaim || '',
-          onInput: (e) => { ui.nameClaim = e.target.value.toLowerCase().trim(); },
+          onInput: (e) => {
+            ui.nameClaim = e.target.value.toLowerCase().trim();
+            if (ui.nameClaimMigration) { ui.nameClaimMigration = null; render(); }
+          },
         }),
         h('span', { class: 'muted', style: 'align-self:center' }, '@' + DOMAIN())),
       h('button', { class: 'btn-primary btn-block', disabled: ui.busy, onClick: async () => {
         const name = (ui.nameClaim || '').toLowerCase().trim();
         if (!name) return;
-        ui.busy = true; ui.nameClaimError = null; render();
+        ui.busy = true; ui.nameClaimError = null; ui.nameClaimMigration = null; render();
         try {
           // Sign with the login identity when one can be (re)attached: the
           // registrar lets a migrated coinos user's own identity take their
           // name back, which the wallet key alone could never prove.
           const signer = await Promise.resolve(hook('nostrLoginResume')).catch(() => null);
-          await claim(name, signer ? { signer, manager: wallet.nostrPubkey() } : {});
+          await claimRequestedName(name, signer ? { signer, manager: wallet.nostrPubkey() } : {});
           ui.nameClaim = '';
           ui.nameEditOpen = false;
           toast(t('namesClaimed', { name: `${name}@${DOMAIN()}` }));
-        } catch (e) { ui.nameClaimError = e.message; }
+        } catch (e) {
+          ui.nameClaimError = e.message;
+          if (ui.nameClaim === name) ui.nameClaimMigration = e.migrationName || null;
+        }
         ui.busy = false; render();
-      } }, ui.busy ? h('span', { class: 'spinner' }) : t('namesClaim')));
+      } }, ui.busy ? h('span', { class: 'spinner' }) : t('namesClaim')),
+      ui.nameClaimMigration && ui.nameClaimMigration === ui.nameClaim && DOMAIN() === 'coinos.io'
+        ? h('button', {
+            type: 'button', class: 'linklike small',
+            onClick: () => {
+              if (ui.onb?.step === 'spend') {
+                ui.onbError = ''; ui.onb.step = 'legacy'; render();
+              } else {
+                const st = load();
+                if (!st.name) return;
+                const addr = `${st.name}@${st.domain || DOMAIN()}`;
+                location.href = `https://coinos.io/migrate?to=${encodeURIComponent(addr)}&back=${encodeURIComponent(location.origin + '/')}`;
+              }
+            },
+          }, t('onbHaveCoinos')) : null);
   }
 
   // Settings: one card per concern, all laid out (no collapsed sections —
@@ -796,7 +840,7 @@ export function namesFeature(ctx) {
       checked = false; lastError = null;
       // The claim field is a draft for THIS account — a name typed before a
       // logout used to greet the next account that opened on this device.
-      ui.nameClaim = null; ui.nameClaimError = null; suggestedFor = null;
+      ui.nameClaim = null; ui.nameClaimError = null; ui.nameClaimMigration = null; suggestedFor = null;
       refresh();
     },
     // The pencil by the address opens this: choosing a name gets a page of
@@ -811,18 +855,7 @@ export function namesFeature(ctx) {
           h('h3', {}, t('namesCustom')),
           addr ? h('div', { class: 'addr-box break', style: 'font-size:14px' }, addr) : null,
           h('p', { class: 'small muted', style: 'margin:0' }, t('namesCustomHow')),
-          claimForm(true),
-          // The same door the onboarding wizard offers — a coinos.io veteran
-          // who skipped it there shouldn't have to make a new account to find
-          // it again. Round trip: coinos.io sweeps + releases, the ?migrated=
-          // return claims the name into this wallet. Mainnet only — staging
-          // names have no legacy counterpart.
-          addr && DOMAIN() === 'coinos.io' ? h('button', {
-            class: 'linklike small', style: 'align-self:center;margin-top:6px',
-            onClick: () => {
-              location.href = `https://coinos.io/migrate?to=${encodeURIComponent(addr)}&back=${encodeURIComponent(location.origin + '/')}`;
-            },
-          }, t('onbHaveCoinos')) : null),
+          claimForm(true)),
         h('button', { class: 'btn-ghost btn-block', onClick: () => goBack(() => { ui.nameEditOpen = null; ui.nameClaimError = null; }) }, t('back')));
     },
     namesAdoptIdentity(signer, npub) { return adoptIdentity(signer, npub); },
@@ -869,7 +902,7 @@ export function namesFeature(ctx) {
     // the onboarding wizard renders the same claim form on its username step
     namesClaimForm() { return claimForm(true); },
     // claim a specific name (the migration flow, after coinos.io released it)
-    namesClaimName(name, opts) { return claim(String(name).toLowerCase(), opts || {}); },
+    namesClaimName(name, opts) { return claimRequestedName(String(name).toLowerCase(), opts || {}); },
     stop() { clearTimeout(retryTimer); clearTimeout(deadline); deadline = null; },
     receiveModes() {
       if (!available()) return [];

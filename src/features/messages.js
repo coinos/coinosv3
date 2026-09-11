@@ -308,7 +308,19 @@ export function messagesFeature(ctx) {
     // spreads a cold-relay miss across sessions.
     if (!p || (!p.name && !p.picture)) return;
     const s = wallet.loadFeatureState('profiles', {});
-    s[pk] = { name: p.name || null, picture: p.picture || null, nip05: p.nip05 || null, lud16: p.lud16 || null, t: Date.now() };
+    s[pk] = { name: p.name || null, picture: p.picture || null, nip05: p.nip05 || null, lud16: p.lud16 || null, t: Date.now(),
+      ...(p.thumbFor === p.picture && p.thumb ? { thumb: p.thumb, thumbFor: p.thumbFor } : {}),
+      ...(p.thumbFail ? { thumbFail: p.thumbFail } : {}) };
+    // Thumbnails are the bulk of this blob, so they live on a budget: the
+    // least recently seen faces give theirs up first. The row itself stays —
+    // that face just paints the way it used to.
+    if (JSON.stringify(s).length > THUMB_BUDGET) {
+      const oldestFirst = Object.keys(s).filter((k) => s[k].thumb).sort((a, b) => (s[a].t || 0) - (s[b].t || 0));
+      for (const k of oldestFirst) {
+        delete s[k].thumb; delete s[k].thumbFor;
+        if (JSON.stringify(s).length <= THUMB_BUDGET) break;
+      }
+    }
     const keys = Object.keys(s);
     if (keys.length > 150) {
       // the user's own faces never churn out — their avatar going punk over
@@ -320,10 +332,75 @@ export function messagesFeature(ctx) {
     }
     wallet.saveFeatureState('profiles', s);
   }
+  // A refreshed profile whose picture hasn't changed keeps the thumbnail we
+  // already made of it — otherwise every relay refresh throws the local copy
+  // away and the original gets downloaded all over again.
+  const keepThumb = (pk, entry) => {
+    const prev = profiles.get(pk);
+    if (!prev || !entry || !entry.picture) return entry;
+    if (prev.thumb && prev.thumbFor === entry.picture) { entry.thumb = prev.thumb; entry.thumbFor = prev.thumbFor; }
+    if (prev.thumbFail === entry.picture) entry.thumbFail = prev.thumbFail;
+    return entry;
+  };
+
   // Pull the picture bytes into the HTTP cache the moment we learn the URL —
   // an avatar div then paints instantly instead of holding its quiet circle
   // while the image downloads.
   const preloadPicture = (p) => { try { if (p && p.picture) new Image().src = p.picture; } catch {} };
+
+  // A profile picture is whatever its owner uploaded, and that is very often
+  // the full-size original: among the faces this wallet had cached, one was a
+  // 5MB JPEG and another 3.9MB — megabytes fetched and decoded to paint a
+  // 30px circle, which is the second of blank circles you see after a
+  // refresh. So the first time we see a picture we downscale it ONCE and keep
+  // the thumbnail beside the profile. Every later boot paints the face from
+  // localStorage in the first frame, with no network at all.
+  //
+  // Reading the pixels needs CORS (a tainted canvas can't be exported). Most
+  // avatar hosts allow it; the ones that don't are remembered as failures and
+  // keep today's behaviour rather than being retried every boot.
+  const THUMB_PX = 96;       // 30px circles at 3x; the 64px profile avatar
+                             // layers the original over it anyway
+  const THUMB_MAX = 9000;    // chars of data URL for one face
+  const THUMB_BUDGET = 180_000; // ...and for all of them together
+  const thumbing = new Set();
+  function makeThumb(pk, p) {
+    if (!p || !p.picture || typeof document === 'undefined') return;
+    if (p.thumbFor === p.picture || p.thumbFail === p.picture) return;
+    if (thumbing.has(pk) || thumbing.size >= 3) return; // a few at a time
+    // Making the thumbnail costs one more fetch of the original today to
+    // save every fetch after it — but not on a connection someone is
+    // nursing. Data Saver keeps today's behaviour.
+    try { if (navigator.connection && navigator.connection.saveData) return; } catch {}
+    thumbing.add(pk);
+    const url = p.picture;
+    const done = (patch) => {
+      thumbing.delete(pk);
+      const entry = { ...(profiles.get(pk) || p), ...patch };
+      profiles.set(pk, entry);
+      persistProfile(pk, entry);
+      if (patch.thumb) scheduleRepaint();
+    };
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.decoding = 'async';
+    img.onload = () => {
+      try {
+        // centre-crop to a square, the way background-size:cover paints it
+        const side = Math.min(img.naturalWidth, img.naturalHeight);
+        if (!side) return done({ thumbFail: url });
+        const c = document.createElement('canvas');
+        c.width = c.height = THUMB_PX;
+        c.getContext('2d').drawImage(img, (img.naturalWidth - side) / 2, (img.naturalHeight - side) / 2,
+          side, side, 0, 0, THUMB_PX, THUMB_PX);
+        let data = c.toDataURL('image/webp', 0.75);
+        if (!data.startsWith('data:image/webp')) data = c.toDataURL('image/jpeg', 0.7);
+        done(data.length <= THUMB_MAX ? { thumb: data, thumbFor: url } : { thumbFail: url });
+      } catch { done({ thumbFail: url }); } // tainted canvas — this host sends no CORS header
+    };
+    img.onerror = () => done({ thumbFail: url });
+    img.src = url;
+  }
 
   // A profile that came back EMPTY is usually a cold boot's 5s query racing
   // relays that were still dialing — not proof there's no kind 0. Trusting it
@@ -342,7 +419,7 @@ export function messagesFeature(ctx) {
       // punk — keep the stale fields and just refresh the clock, so the
       // known avatar holds while the full-profile fetch does its rounds.
       const prev = profiles.get(pk);
-      const entry = p ? { ...p, t: Date.now() } : { ...(prev || {}), t: Date.now() };
+      const entry = keepThumb(pk, p ? { ...p, t: Date.now() } : { ...(prev || {}), t: Date.now() });
       profiles.set(pk, entry);
       persistProfile(pk, entry);
       preloadPicture(entry);
@@ -1665,8 +1742,21 @@ export function messagesFeature(ctx) {
       : p.picture
         // A background paints synchronously from cache; a fresh <img> decodes
         // async, so recreating one per render made avatars visibly flash.
-        ? h('div', { class: cls + ' ava-img', style: `background-image:url(${JSON.stringify(p.picture)})` })
+        //
+        // The thumbnail we keep locally is the whole picture at this size, so
+        // a 30px circle never asks the network for the original again. The
+        // 64px profile avatar layers them: CSS paints the first layer that
+        // has arrived, so the thumbnail shows instantly and the full-size
+        // original takes over on top when it lands.
+        ? h('div', {
+            class: cls + ' ava-img',
+            style: 'background-image:' + (p.thumb && p.thumbFor === p.picture
+              ? (cls.includes('profile-avatar') ? `url(${JSON.stringify(p.picture)}),` : '') + `url(${JSON.stringify(p.thumb)})`
+              : `url(${JSON.stringify(p.picture)})`),
+          })
         : fallbackAvatar(h, pk, p.name, cls);
+    // A face we keep painting is one worth keeping a thumbnail of.
+    if (p && p.picture) makeThumb(pk, p);
     if (clickable) {
       node.classList.add('clickable');
       node.addEventListener('click', (e) => { e.stopPropagation(); openProfile(pk); });
@@ -1745,6 +1835,7 @@ export function messagesFeature(ctx) {
         nip05: m.nip05 || null, lud16: typeof m.lud16 === 'string' ? m.lud16.trim() : null,
         t: Date.now(),
       };
+      keepThumb(pk, entry);
       profiles.set(pk, entry);
       persistProfile(pk, entry);
       preloadPicture(entry);

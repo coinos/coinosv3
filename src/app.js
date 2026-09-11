@@ -4914,6 +4914,11 @@ async function importSnapshotFile(e) {
 const ctx = {
   h, ui, render, wallet, toast, copy, copyBtn, pasteBtn, blankSend, goBack, goHome, openExternal,
   fmtAmount, unitLabel, unitTag, parseAmount, getUnit: () => unit, toggleUnit, download,
+  // "The next balance isn't a change, it's the first real value" — state
+  // arriving late (the ark store opening past boot's patience) must not read
+  // as money landing: without this the balance counts up from 0 in green,
+  // which is the celebration a received payment gets.
+  forgetAmountAnim: () => _amtLast.clear(),
   // the one-tap zap amount, synced across devices with the rest of the state
   zapDefaultSat: () => (wallet.loadFeatureState ? (wallet.loadFeatureState('prefs', {}).zapSat || 0) : 0),
   setZapDefaultSat: (n) => {
@@ -5161,6 +5166,15 @@ loadLocale(getLang()).finally(async () => {
   // the URL, or the claim would fall through to a normal boot and be lost.
   if (/^\/(g|ag|lg)\//.test(location.pathname)) await _deferredReady;
   if (featureHook('bootUrl')) return; // a feature consumed the URL (e.g. a gift claim)
+  // The Spending balance and its history are read from an IndexedDB-backed
+  // store, which is synchronous to read but asynchronous to OPEN. Opening a
+  // wallet before it lands paints a Spending card with nothing in it, and the
+  // real numbers arrive a beat later — a visible jump, and the balance
+  // counted itself up in green as if money had just come in. The shell is on
+  // screen either way; waiting shows it a moment longer rather than showing a
+  // wrong balance. The hook caps its own wait.
+  const storeReady = featureHook('arkStoreReady');
+  if (storeReady) await storeReady;
   if (!restoreAccountsState()) render();
 });
 

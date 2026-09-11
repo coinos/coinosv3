@@ -417,6 +417,16 @@ export function arkFeature(ctx) {
     stopArk();
     ui.arkError = '';
     lastAutoInit = Date.now();
+    // The ark store is IndexedDB — asynchronous to OPEN, synchronous to read
+    // once it has. A boot that beats it open reads no state at all: no
+    // Spending balance, no Spending history, and nothing here that looks
+    // worth connecting for. Wait for it and run again, so what the store
+    // holds is on screen the moment it can be.
+    const store = wallet._arkStore;
+    if (store && !store.ready) {
+      store.open().then(() => { ctx.forgetAmountAnim && ctx.forgetAmountAnim(); render(); initArk(); }).catch(() => {});
+      return;
+    }
     if (arkAvailable() && arkWanted()) connectArk().catch(() => {});
   }
 
@@ -2998,6 +3008,21 @@ export function arkFeature(ctx) {
     id: 'ark',
     init() { _autoSelected = false; ui.accountUserChosen = false; initArk(); },
     stop() { stopArk(); },
+    // Boot waits on this before opening a wallet: the Spending balance and
+    // its history live in the ark store, which is IndexedDB and therefore
+    // opens asynchronously. Painting first meant painting an empty Spending
+    // wallet and filling it in a beat later — a 0 that counted itself up,
+    // green, as if money had just arrived. Capped, because a store that
+    // won't open must not hold the whole app hostage; the retry in initArk
+    // catches up if it lands after the cap.
+    arkStoreReady() {
+      const store = wallet._arkStore;
+      if (!store || store.ready) return null;
+      return Promise.race([
+        store.open().catch(() => {}),
+        new Promise((r) => setTimeout(r, 800)),
+      ]);
+    },
     screenView() { return ui.arkCoinsPage ? arkCoinsPage() : ui.arkExitPage ? arkExitPage() : null; },
     receiveTakeover() {
       const offboarded = arkOffboardedScreen();

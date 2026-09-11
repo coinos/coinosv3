@@ -484,7 +484,6 @@ hr.divider { margin: 16px 0; }
 .zap-tally { display: inline-flex; align-items: center; gap: 2px; font-size: 11px; font-weight: 650; color: #e6a800; white-space: nowrap; flex-shrink: 0; }
 .zap-tally.chat-react { font-size: 12px; padding: 1px 7px 1px 5px; }
 .zap-tally.clickable { cursor: pointer; }
-.zap-tally.on { text-decoration: underline; text-decoration-color: color-mix(in srgb, #e6a800 60%, transparent); text-underline-offset: 2px; }
 /* A zap in flight: the chip lands the moment you tap and breathes until the
    payment settles — the bolt carries the pulse, the number stays readable. */
 .zap-tally.flying { animation: zap-breathe 1.15s ease-in-out infinite; }

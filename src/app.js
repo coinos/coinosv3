@@ -508,8 +508,17 @@ function renderInner() {
   for (const el of root.querySelectorAll('[data-keep-scroll]'))
     if (el.scrollLeft || el.scrollTop)
       scrolls[el.getAttribute('data-keep-scroll')] = { l: el.scrollLeft, t: el.scrollTop };
+  // The padlock's "protect this device?" ask is modal: it belongs over
+  // whatever page the tap happened on. A feature screen (your profile, a chat
+  // thread) used to swallow it — walletScreen paints the card, and
+  // screenView outranks walletScreen, so the padlock did nothing visible
+  // until you navigated back to the wallet and the card finally appeared
+  // there. Declining still lands back exactly where the tap happened,
+  // because nothing else moves. Onboarding keeps its precedence.
+  const lockAsk = ui.pw && ui.pw.purpose === 'lock' && !(ui.onb || onbInProgress());
   const screen =
-    featureHook('screenView')
+    (lockAsk && h('div', { class: 'col', style: 'gap:16px' }, brandHeader(false), pwPromptCard()))
+    || featureHook('screenView')
     || (ui.screen === 'wallet'
       ? walletScreen()
       : ui.screen === 'accounts'
@@ -1374,13 +1383,22 @@ function identities() {
   return out;
 }
 
+// Page-level navigation owned by the features (a profile, a chat thread, a
+// search, the zap setup) — dropped whenever the session underneath it
+// changes, so the next paint is the app's own screen and not the page the
+// previous identity (or the unlocked wallet) was reading.
+function clearFeatureNav() {
+  ui.profilePk = null; ui.profEdit = null; ui.profEditFilled = false;
+  ui.chatOpen = false; ui.userSearch = null; ui.noteThread = null; ui.zapSetup = null;
+}
+
 // Switch to another identity already signed in on this device: the wallet
 // it opens lands on its own history, out of any profile or chat the previous
 // identity had open.
 function switchIdentity(id) {
   const acc = accounts.find((a) => a.id === id);
   if (!acc) return;
-  ui.profilePk = null; ui.profEdit = null; ui.profEditFilled = false; ui.chatOpen = false;
+  clearFeatureNav();
   switchToView(acc.id, viewsOf(acc)[0]);
 }
 // The working set of wallets you can switch between. Full (seed-bearing)
@@ -1979,6 +1997,7 @@ function lock({ offerPassword = false } = {}) {
   ui.watchXpub = '';
   ui.watchLabel = '';
   ui.pw = null;
+  clearFeatureNav(); // a profile/chat from the locked session must not outlive it
   ui.vaultPw = '';
   ui.vaultError = '';
   ui.confirmClear = false;
@@ -2088,6 +2107,10 @@ function softLock() {
     }
   }
   const keepId = activeId;
+  // The lock is going through: leave whatever page the padlock was tapped
+  // from, so what you land on is the wallet wearing a closed padlock — from
+  // a profile page the toast was the only sign anything had happened.
+  clearFeatureNav();
   _featuresInited = false;
   for (const f of FEATURES) { try { f.stop && f.stop(); } catch {} }
   vaultPassword = null;
@@ -3223,11 +3246,6 @@ function walletScreen() {
   if (ui.onb || onbInProgress()) {
     const s = onboardScreen();
     if (s) return s; // null = the wizard just handed over; fall through
-  }
-  // The padlock's set-a-password ask renders here, over the open wallet —
-  // declining it must land back exactly where the tap happened.
-  if (ui.pw && ui.pw.purpose === 'lock') {
-    return h('div', { class: 'col', style: 'gap:16px' }, brandHeader(false), pwPromptCard());
   }
   // A feature can hold the wallet behind a required onboarding step (picking
   // a username). Imported wallets skip it once their name is recovered.

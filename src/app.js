@@ -7,7 +7,7 @@
 import { Wallet, newMnemonic, isValidMnemonic, accountXpubFor, cacheKeyFor, utxoId, parseExtendedKey, xpubToZpub, encryptVault, decryptVault } from './wallet.js';
 import { qrSvg } from './qr.js';
 import { makeSearcher, resultRows, searchable, punkUrl, warmSearch } from './recipient-search.js';
-import { npubOf } from './nostr.js';
+import { npubOf, seedPubkey } from './nostr.js';
 import { nip98Header } from './nip98.js';
 import { NOSTR_MARK } from './features/nostrlogin.js';
 import { scanQr } from './scan.js';
@@ -1327,17 +1327,32 @@ function signInAnother() {
   render();
 }
 
+// The nostr login persisted against an account's OWN wallet state. Feature
+// state lives in localStorage keyed by the seed, so this answers "who is that
+// account?" for every account on the device, not just the open one — no
+// stamping, nothing to go stale.
+function loginPkOf(a) {
+  try {
+    const base = a.type === 'watch' ? a.xpub : a.xprv || (a.mnemonic ? `${a.mnemonic}\n${a.passphrase || ''}` : null);
+    if (!base) return null;
+    const key = cacheKeyFor(a.deriveIndex ? `${base}\n#${a.deriveIndex}` : base);
+    return (JSON.parse(localStorage.getItem(key + ':nostrlogin') || 'null') || {}).pubkey || null;
+  } catch { return null; }
+}
+
 // The identities on this device — one per seed (a seed's Spending and
 // Savings faces are the same person), each with the nostr key its header
 // avatar wears: the nostr login when there is one, else the seed's own key.
-// A key is remembered on the account when it's active (saveDirectory) and in
-// the durable directory by xpub, so accounts restored from the vault still
-// show a face; one never opened on this device has no key yet and falls back
-// to its label.
+// Both are read from the account itself; the key remembered on the record
+// (saveDirectory) and in the durable directory by xpub is only the fallback,
+// for a watch-only entry whose seed isn't here to ask.
 function identities() {
   let dir = [];
   try { dir = JSON.parse(localStorage.getItem(WATCH_KEY) || '[]'); } catch {}
   const dirPk = (a) => (a.xpub && (dir.find((d) => d.xpub === a.xpub) || {}).nostrPk) || null;
+  const pkOf = (a) => loginPkOf(a)
+    || (a.mnemonic ? seedPubkey(a.mnemonic, a.passphrase || '', a.deriveIndex || 0) : null)
+    || a.nostrPk || dirPk(a);
   const bySeed = new Map();
   for (const a of accounts) {
     if (a.provisional) continue;
@@ -1345,7 +1360,7 @@ function identities() {
       : a.mnemonic ? 'm:' + a.mnemonic + '\n' + (a.passphrase || '') + '\n' + (a.deriveIndex || 0)
         : 'x:' + (a.xprv || a.xpub || a.id);
     const active = a.id === activeId;
-    const pk = a.nostrPk || dirPk(a);
+    const pk = pkOf(a);
     const cur = bySeed.get(key);
     if (!cur) bySeed.set(key, { id: a.id, pk, active, label: seedName(a), network: a.network, watch: a.type === 'watch' });
     else {

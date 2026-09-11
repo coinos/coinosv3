@@ -393,6 +393,13 @@ export function arkFeature(ctx) {
     lnTagSeen = -1;
     ark = null;
     arkConnectPromise = null;
+    // The renewal warning describes the coins of the wallet we're leaving.
+    // Switching accounts used to carry it onto the next one — with the old
+    // wallet's amount and deadline, over the new wallet's balance — and the
+    // 30-minute throttle then kept it there. Both reset with the manager;
+    // the next connect's first tick re-decides for the wallet now open.
+    arkRenewWarn = null;
+    arkAutoRefreshAt = 0;
   }
 
   function arkAvailable() {

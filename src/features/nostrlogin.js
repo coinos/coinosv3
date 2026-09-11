@@ -40,6 +40,19 @@ export function nostrLoginFeature(ctx) {
   let _spendingHinted = false; // relay backup already carries the spending hint
   let resumeFailedAt = 0;
 
+  // The signer, but only if it still belongs to the wallet that's open.
+  // Checked on every READ rather than at init() alone, because a wallet
+  // switch has a gap: the new account is loaded and its directory entry
+  // written (stamping the identity it shows) BEFORE features re-init, and the
+  // previous account's signer was still answering in that gap — which is how
+  // two different wallets ended up wearing the same face in the account
+  // switcher. (Mid-sign-in the link isn't saved yet; `attaching` keeps this
+  // from severing it.)
+  const liveSigner = () => {
+    if (live && !attaching && load().pubkey !== live.pubkey) live = null;
+    return live;
+  };
+
   // A remote signer's connection can die quietly — the app is left holding a
   // signer object that will never answer again, and every send after that
   // fails until the page is reloaded. Notice the first failure and drop it, so
@@ -536,7 +549,7 @@ export function nostrLoginFeature(ctx) {
   // signer that isn't answering shouldn't mean a new relay connection per
   // keystroke.
   async function resumeLogin() {
-    if (live) return live;
+    if (liveSigner()) return live;
     const st = load();
     if (!st.pubkey) return null;
     if (resuming) return resuming;
@@ -587,11 +600,12 @@ export function nostrLoginFeature(ctx) {
   function settingsCard() {
     if (wallet.watchOnly || !wallet.mnemonic) return null;
     const st = load();
+    const lv = liveSigner();
     if (st.pubkey) {
       return h('div', { class: 'card col' },
         h('div', { class: 'row between' },
           h('h3', {}, t('nlLinkTitle')),
-          h('span', { class: 'badge dot' + (live ? ' live' : ' off') }, live ? t('nlConnected') : t('nlDisconnected'))),
+          h('span', { class: 'badge dot' + (lv ? ' live' : ' off') }, lv ? t('nlConnected') : t('nlDisconnected'))),
         h('div', { class: 'small muted break' }, npubOf(st.pubkey) || st.pubkey),
         h('p', { class: 'small faint', style: 'margin:0' }, t('nlLinkedDesc')),
         // Signing needs a live signer, and a reload always drops a remote one.
@@ -600,7 +614,7 @@ export function nostrLoginFeature(ctx) {
         // usually reattach without the user doing anything — try that quietly
         // whenever the card paints disconnected (the resume path rate-limits
         // itself), and only the doors this account came through are offered.
-        live ? null : (resumeQuietly(), h('div', { class: 'col', style: 'gap:8px' },
+        lv ? null : (resumeQuietly(), h('div', { class: 'col', style: 'gap:8px' },
           h('p', { class: 'small muted', style: 'margin:0' }, t('nlReconnectDesc')),
           signerButtons(reconnectSigner, { reconnectVia: reconnectViaOf(st) }))));
     }
@@ -626,7 +640,7 @@ export function nostrLoginFeature(ctx) {
   function reconnectScreen() {
     const st = load();
     const run = (makeSigner) => reconnectSigner(makeSigner).then(() => {
-      if (live) { ui.nostrReconnect = null; render(); }
+      if (liveSigner()) { ui.nostrReconnect = null; render(); }
     });
     return h('div', { class: 'col', style: 'gap:16px' },
       ctx.brandHeader(false),
@@ -654,7 +668,7 @@ export function nostrLoginFeature(ctx) {
     // background — it closes the screen by itself when it lands).
     nostrReconnectPrompt() {
       const st = load();
-      if (!st.pubkey || live) return false;
+      if (!st.pubkey || liveSigner()) return false;
       ui.nostrReconnect = true;
       ui.nostrLoginError = '';
       this.nostrLoginResume().then((sg) => {
@@ -667,9 +681,8 @@ export function nostrLoginFeature(ctx) {
       // A live signer is bound to the wallet that linked it. Switching to an
       // account that never did must not inherit the login identity — it used
       // to, and the fresh wallet then claimed names under the login npub,
-      // showed its profile, and even wore its hats. (Mid-sign-in the link
-      // isn't saved yet; `attaching` keeps this from severing it.)
-      if (live && !attaching && load().pubkey !== live.pubkey) live = null;
+      // showed its profile, and even wore its hats.
+      liveSigner();
     },
     // The nostr identity this session is logged in as, for features that
     // should speak as the user (the payment address defaults to this npub).
@@ -677,7 +690,7 @@ export function nostrLoginFeature(ctx) {
       // A just-connected signer counts immediately — the persisted link lands
       // only after the wallet opens, and the header avatar shouldn't show the
       // wallet key's face in the gap.
-      if (live) return { pubkey: live.pubkey, npub: npubOf(live.pubkey), signer: live };
+      if (liveSigner()) return { pubkey: live.pubkey, npub: npubOf(live.pubkey), signer: live };
       const st = load();
       if (!st.pubkey) return null;
       return { pubkey: st.pubkey, npub: npubOf(st.pubkey), signer: live };
@@ -695,7 +708,7 @@ export function nostrLoginFeature(ctx) {
     // hint into the relay backup while a signer is live, so the NEXT restore
     // paints Spending from its first frame. Once per session is plenty.
     spendingEvident() {
-      if (_spendingHinted || !live || !wallet.mnemonic) return null;
+      if (_spendingHinted || !liveSigner() || !wallet.mnemonic) return null;
       _spendingHinted = true;
       publishWalletBackup(live, { mnemonic: wallet.mnemonic, passphrase: wallet.passphrase || '', spending: true })
         .catch(() => { _spendingHinted = false; });

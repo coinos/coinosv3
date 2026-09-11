@@ -188,6 +188,19 @@ export async function publishOn(relays, evt) {
 export { nip04, nip44 };
 export { getPublicKey, finalizeEvent, generateSecretKey };
 
+// The nostr identity a seed carries (NostrSync#load's key, without the
+// wallet) — so the account switcher can put a face on every account on the
+// device, not just the one that's open. Memoized: nip06 stretches the seed.
+const _seedPks = new Map();
+export function seedPubkey(mnemonic, passphrase = '', accountIndex = 0) {
+  const k = `${mnemonic}\n${passphrase}\n${accountIndex}`;
+  if (_seedPks.has(k)) return _seedPks.get(k);
+  let pk = null;
+  try { pk = getPublicKey(nip06.privateKeyFromSeedWords(mnemonic, passphrase || undefined, accountIndex || 0)); } catch {}
+  _seedPks.set(k, pk);
+  return pk;
+}
+
 export function parseNostrPubkey(input) {
   const s = (input || '').trim();
   if (/^[0-9a-f]{64}$/i.test(s)) return s.toLowerCase();

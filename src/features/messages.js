@@ -61,6 +61,7 @@ export function messagesFeature(ctx) {
     s.read ||= {}; // { ['dm:'+pk | 'ch:'+id]: created_at } — last message we've seen
     s.notify ||= {}; // { [cid]: true } — communities that may buzz your phone (opt-in)
     s.drafts ||= {}; // { ['dm:'+pk | 'ch:'+id]: text } — half-typed messages
+    s.zaps ||= {}; // { [eventId]: { s: sats, m: 1 } } — last known zap tallies
     for (const c of s.communities) c.added_at ||= Date.now();
     // pre-multi-community shape: joined was { [pubkey]: true } for coinos
     for (const k of Object.keys(s.joined))
@@ -310,7 +311,7 @@ export function messagesFeature(ctx) {
     const s = wallet.loadFeatureState('profiles', {});
     s[pk] = { name: p.name || null, picture: p.picture || null, nip05: p.nip05 || null, lud16: p.lud16 || null, t: Date.now(),
       ...(p.thumbFor === p.picture && p.thumb ? { thumb: p.thumb, thumbFor: p.thumbFor } : {}),
-      ...(p.thumbFail ? { thumbFail: p.thumbFail } : {}) };
+      ...(p.thumbFail ? { thumbFail: p.thumbFail, thumbFailAt: p.thumbFailAt || 0, ...(p.thumbHard ? { thumbHard: true } : {}) } : {}) };
     // Thumbnails are the bulk of this blob, so they live on a budget: the
     // least recently seen faces give theirs up first. The row itself stays —
     // that face just paints the way it used to.
@@ -352,7 +353,11 @@ export function messagesFeature(ctx) {
     const prev = profiles.get(pk);
     if (!prev || !entry || !entry.picture) return entry;
     if (prev.thumb && prev.thumbFor === entry.picture) { entry.thumb = prev.thumb; entry.thumbFor = prev.thumbFor; }
-    if (prev.thumbFail === entry.picture) entry.thumbFail = prev.thumbFail;
+    if (prev.thumbFail === entry.picture) {
+      entry.thumbFail = prev.thumbFail;
+      entry.thumbFailAt = prev.thumbFailAt || 0;
+      if (prev.thumbHard) entry.thumbHard = true;
+    }
     return entry;
   };
 
@@ -376,11 +381,19 @@ export function messagesFeature(ctx) {
                              // layers the original over it anyway
   const THUMB_MAX = 9000;    // chars of data URL for one face
   const THUMB_BUDGET = 180_000; // ...and for all of them together
+  const THUMB_SLOW = 20_000; // a host that won't answer must not hold a slot
+  const THUMB_RETRY = 6 * 3600_000; // ...and must not be written off for good
   const thumbing = new Set();
   function makeThumb(pk, p) {
     if (!p || !p.picture || typeof document === 'undefined') return;
-    if (p.thumbFor === p.picture || p.thumbFail === p.picture) return;
+    if (p.thumbFor === p.picture) return;
     if (localPunk(p.picture)) return; // our own art, already the right size on disk
+    // A failed attempt is usually the network, not the host: these images sit
+    // on CDNs that answer in 700ms one minute and time out the next. Only a
+    // tainted canvas (no CORS header, and there's nothing to be done about
+    // that) is remembered for good; everything else is tried again later —
+    // one slow minute used to cost a face its thumbnail permanently.
+    if (p.thumbFail === p.picture && (p.thumbHard || Date.now() - (p.thumbFailAt || 0) < THUMB_RETRY)) return;
     if (thumbing.has(pk) || thumbing.size >= 3) return; // a few at a time
     // Making the thumbnail costs one more fetch of the original today to
     // save every fetch after it — but not on a connection someone is
@@ -395,24 +408,30 @@ export function messagesFeature(ctx) {
       persistProfile(pk, entry);
       if (patch.thumb) scheduleRepaint();
     };
+    const failed = (hard) => done({ thumbFail: url, thumbFailAt: Date.now(), ...(hard ? { thumbHard: true } : {}) });
     const img = new Image();
     img.crossOrigin = 'anonymous';
     img.decoding = 'async';
+    const slow = setTimeout(() => { img.onload = img.onerror = null; failed(false); }, THUMB_SLOW);
     img.onload = () => {
+      clearTimeout(slow);
       try {
         // centre-crop to a square, the way background-size:cover paints it
         const side = Math.min(img.naturalWidth, img.naturalHeight);
-        if (!side) return done({ thumbFail: url });
+        if (!side) return failed(true);
         const c = document.createElement('canvas');
         c.width = c.height = THUMB_PX;
         c.getContext('2d').drawImage(img, (img.naturalWidth - side) / 2, (img.naturalHeight - side) / 2,
           side, side, 0, 0, THUMB_PX, THUMB_PX);
+        // toDataURL is what throws on a tainted canvas, so a failure from
+        // here down is the host's CORS policy, not the picture.
         let data = c.toDataURL('image/webp', 0.75);
         if (!data.startsWith('data:image/webp')) data = c.toDataURL('image/jpeg', 0.7);
-        done(data.length <= THUMB_MAX ? { thumb: data, thumbFor: url } : { thumbFail: url });
-      } catch { done({ thumbFail: url }); } // tainted canvas — this host sends no CORS header
+        if (data.length > THUMB_MAX) data = c.toDataURL('image/webp', 0.5); // a busy picture, leaned on harder
+        done(data.length <= THUMB_MAX ? { thumb: data, thumbFor: url } : { thumbFail: url, thumbFailAt: Date.now(), thumbHard: true });
+      } catch { failed(true); } // tainted canvas — this host sends no CORS header
     };
-    img.onerror = () => done({ thumbFail: url });
+    img.onerror = () => { clearTimeout(slow); failed(false); };
     img.src = url;
   }
 
@@ -1969,7 +1988,7 @@ export function messagesFeature(ctx) {
       if (from && my.includes(from)) { cur.mine = true; voidPending(x[1], ev.created_at * 1000); }
       changed = true;
     }
-    if (changed) scheduleRepaint();
+    if (changed) { saveZapTotals(); scheduleRepaint(); }
   }
   // Ask once per id (batched per paint), and keep ONE live subscription on
   // the ids most recently on screen, so a zap landing while you watch —
@@ -1983,14 +2002,67 @@ export function messagesFeature(ctx) {
       const batch = [...zapQueue]; zapQueue = new Set();
       const relays = zapRelays();
       for (let i = 0; i < batch.length; i += 150) {
-        queryOn(relays, { kinds: ZAP_KINDS, '#e': batch.slice(i, i + 150) }, 4000)
-          .then((evs) => evs.forEach(noteReceipt)).catch(() => {});
+        const slice = batch.slice(i, i + 150);
+        queryOn(relays, { kinds: ZAP_KINDS, '#e': slice }, 4000)
+          .then((evs) => {
+            evs.forEach(noteReceipt);
+            // the relays have spoken for these ids: their live tally is the
+            // truth now, remembered or not (a zap that was deleted has to be
+            // able to disappear)
+            for (const id of slice) zapSeeds().delete(id);
+            saveZapTotals();
+            scheduleRepaint();
+          }).catch(() => {});
       }
       zapRecent = [...batch.reverse(), ...zapRecent.filter((x) => !batch.includes(x))].slice(0, 200);
       if (zapLiveUnsub) { try { zapLiveUnsub(); } catch {} }
       zapLiveUnsub = subscribeOn(relays, { kinds: ZAP_KINDS, '#e': zapRecent, since: Math.floor(Date.now() / 1000) - 60 }, noteReceipt);
     }, 250);
   }
+  // Tallies are asked of the relays again on every boot, and that takes
+  // seconds — long enough that a room full of zapped messages paints bare and
+  // fills in afterwards. So the totals themselves are remembered (just the
+  // numbers, never the receipts) and painted straight away; the moment the
+  // relays answer for a message, their word replaces it.
+  const ZAP_REMEMBER = 400; // tallies kept between sessions
+  let zapSeed = null;
+  function zapSeeds() {
+    if (!zapSeed) {
+      zapSeed = new Map();
+      try {
+        for (const [id, v] of Object.entries(st().zaps || {})) if (v && v.s) zapSeed.set(id, { sats: v.s, mine: !!v.m });
+      } catch {}
+    }
+    return zapSeed;
+  }
+  let zapSaveT = null;
+  function saveZapTotals() {
+    clearTimeout(zapSaveT);
+    zapSaveT = setTimeout(() => {
+      try {
+        const s2 = st();
+        // Update what's recently been on screen, and KEEP the rest: opening a
+        // DM thread must not forget what the community chat had learned.
+        const out = { ...(s2.zaps || {}) };
+        for (const id of zapRecent) {
+          const z = zapTotals.get(id) || zapSeeds().get(id);
+          if (z && z.sats) out[id] = z.mine ? { s: z.sats, m: 1 } : { s: z.sats };
+          else delete out[id]; // the relays answered, and it's zero
+        }
+        let n = Object.keys(out).length;
+        if (n > ZAP_REMEMBER) {
+          const recent = new Set(zapRecent);
+          for (const k of Object.keys(out)) { // insertion order: oldest first
+            if (n <= ZAP_REMEMBER) break;
+            if (!recent.has(k)) { delete out[k]; n--; }
+          }
+        }
+        s2.zaps = out;
+        save(s2);
+      } catch {}
+    }, 1500);
+  }
+
   // After OUR zap the receipt trails the payment by seconds — ask again.
   function recheckZap(id) {
     for (const ms of [4000, 12000, 30000]) setTimeout(() => { zapAsked.delete(id); watchZaps([id]); }, ms);
@@ -2061,7 +2133,7 @@ export function messagesFeature(ctx) {
   // The chip: a little bolt + the sats total. Absent until the first receipt
   // — or until you zap it yourself, which is its own kind of receipt.
   function zapChip(id, { onClick, cls = '' } = {}) {
-    const z = zapTotals.get(id);
+    const z = zapTotals.get(id) || zapSeeds().get(id);
     const p = pendingOf(id);
     const optimistic = p && p.state !== 'void' ? p.sats : 0;
     const sats = (z ? z.sats : 0) + optimistic;
@@ -3862,6 +3934,7 @@ export function messagesFeature(ctx) {
       listsSynced = false;
       if (zapLiveUnsub) { try { zapLiveUnsub(); } catch {} zapLiveUnsub = null; }
       clearTimeout(zapTimer); zapTimer = null; zapQueue = new Set(); zapRecent = [];
+      clearTimeout(zapSaveT); zapSaveT = null; zapSeed = null;
       zapTotals.clear(); zapAsked.clear(); zapPending.clear(); // 'mine' is per identity — refetch under the next
     },
   };

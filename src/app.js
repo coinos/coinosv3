@@ -614,7 +614,7 @@ wallet.subscribe(scheduleRender);
 // views — most Spending payments open one of these, and leaving them out
 // meant the phone's native Back skipped past the history list entirely
 // (it landed on whatever tab minted the previous entry).
-const NAV_FIELDS = ['screen', 'tab', 'txDetail', 'arkMoveDetail', 'arkReconDetail', 'arkExitDetail', 'giftDetail', 'bump', 'giftMode', 'claimStep', 'chatOpen', 'msgView', 'msgCommunity', 'msgPeer', 'profilePk', 'profOverThread', 'settingsPage', 'nameEditOpen', 'noteThread', 'userSearch', 'zapSetup', 'hatShop'];
+const NAV_FIELDS = ['screen', 'tab', 'txDetail', 'arkMoveDetail', 'arkReconDetail', 'arkExitDetail', 'giftDetail', 'bump', 'giftMode', 'claimStep', 'chatOpen', 'msgView', 'msgCommunity', 'msgPeer', 'profilePk', 'profEdit', 'profEditFilled', 'profOverThread', 'settingsPage', 'nameEditOpen', 'noteThread', 'userSearch', 'zapSetup', 'hatShop'];
 function navSnapshot() {
   const s = {};
   for (const f of NAV_FIELDS) s[f] = ui[f] ?? null;
@@ -624,9 +624,15 @@ function navSnapshot() {
   if (ui.noteThread) s.noteThread = { rootId: ui.noteThread.rootId, focusId: ui.noteThread.focusId, seed: ui.noteThread.seed };
   if (ui.userSearch) s.userSearch = { q: '', rows: null };
   if (ui.zapSetup) s.zapSetup = { pk: ui.zapSetup.pk, npub: ui.zapSetup.npub, eventId: ui.zapSetup.eventId, amount: '21' };
+  // Keep the editable fields in this history entry so a refresh restores the
+  // draft. Copy them: later keystrokes must not mutate earlier snapshots.
+  s.profEdit = ui.profilePk && ui.profEdit ? Object.fromEntries(
+    ['uname', 'name', 'about', 'picture', 'banner'].map(k => [k, ui.profEdit[k] || ''])) : null;
+  if (s.profEdit) s.profEdit.touched = { ...ui.profEdit.touched };
+  s.profEditFilled = !!s.profEdit && !!ui.profEditFilled;
   return s;
 }
-const navSig = (s) => JSON.stringify(s);
+const navSig = ({ profEdit, profEditFilled, ...s }) => JSON.stringify({ ...s, profEdit: !!profEdit });
 let navStack = []; // in-memory mirror of the history entries (to detect an in-app Back)
 let navIndex = -1;
 let restoringHistory = false; // true while applying a popstate (suppresses pushing)
@@ -636,7 +642,15 @@ function syncHistory() {
   try {
     const snap = navSnapshot();
     const sig = navSig(snap);
-    if (navIndex >= 0 && sig === navSig(navStack[navIndex])) return; // no navigation change
+    if (navIndex >= 0 && sig === navSig(navStack[navIndex])) {
+      // Typing changes the draft, not the page. Replace the current entry
+      // instead of making Back walk through every version of the form.
+      if (JSON.stringify(snap) !== JSON.stringify(navStack[navIndex])) {
+        history.replaceState({ nav: snap, i: navIndex }, '');
+        navStack[navIndex] = snap;
+      }
+      return;
+    }
     // Every screen change is a new history entry. (We deliberately don't try to
     // detect in-app "back" navigations — an A→B→A pattern is indistinguishable
     // from a genuine back, so guessing corrupts the stack. An in-app back just
@@ -659,7 +673,7 @@ function restoreNavFromHistory() {
   try {
     const nav = BOOT_NAV;
     if (!nav || ui.screen !== 'wallet') return;
-    for (const f of NAV_FIELDS) if (f in nav) ui[f] = nav[f];
+    for (const f of NAV_FIELDS) if (f in nav) ui[f] = f === 'profEdit' && nav[f] ? structuredClone(nav[f]) : nav[f];
     navStack = [nav];
     navIndex = 0;
     history.replaceState({ nav, i: 0 }, ''); // undo any boot-render clobber
@@ -672,7 +686,7 @@ window.addEventListener('popstate', (e) => {
   const snap = (st && st.nav) || navSnapshot();
   restoringHistory = true;
   try {
-    for (const f of NAV_FIELDS) ui[f] = f in snap ? snap[f] : null;
+    for (const f of NAV_FIELDS) ui[f] = f === 'profEdit' && snap[f] ? structuredClone(snap[f]) : f in snap ? snap[f] : null;
     if (st && typeof st.i === 'number') navIndex = st.i;
     else { const i = navStack.findIndex((s) => navSig(s) === navSig(snap)); if (i >= 0) navIndex = i; }
     render();

@@ -2661,6 +2661,8 @@ export function messagesFeature(ctx) {
   function profileScreen() {
     const pk = ui.profilePk;
     const mine = isMe(pk) || (ctx.shownPubkey && pk === ctx.shownPubkey());
+    // History can outlive an account switch; only restore our own editor.
+    if (!mine && ui.profEdit) { ui.profEdit = null; ui.profEditFilled = false; }
     const logoutBtn = () => h('button', {
       class: 'btn-block', style: 'color:var(--red,#c0392b);display:flex;align-items:center;justify-content:center;gap:8px',
       onClick: () => { ui.logoutConfirm = true; render(); },
@@ -2755,10 +2757,9 @@ export function messagesFeature(ctx) {
     if (mine && ui.profEdit && !ui.profEditFilled && full !== undefined) {
       ui.profEditFilled = true;
       const e = ui.profEdit;
-      if (!e.name) e.name = full.display_name || full.name || '';
-      if (!e.about) e.about = full.about || '';
-      if (!e.picture) e.picture = full.picture || '';
-      if (!e.banner) e.banner = full.banner || '';
+      if (!e.name && !e.touched?.name) e.name = full.display_name || full.name || '';
+      for (const key of ['about', 'picture', 'banner'])
+        if (!e[key] && !e.touched?.[key]) e[key] = full[key] || '';
     }
     const name = displayName(pk);
     const npub = npubOf(pk) || pk;
@@ -2770,7 +2771,11 @@ export function messagesFeature(ctx) {
         // render per keystroke so the page-top preview (name/picture/banner)
         // tracks the draft live — the morph never rewrites a focused field,
         // so this can't fight the typing
-        onInput: (ev) => { ui.profEdit[key] = ev.target.value; render(); },
+        onInput: (ev) => {
+          ui.profEdit[key] = ev.target.value;
+          (ui.profEdit.touched ||= {})[key] = true;
+          render();
+        },
       }));
     // A lightning address worth showing: not an npub-shaped machine address
     // (npub1…@some.relay duplicates the npub below) and not the same string
@@ -2844,7 +2849,8 @@ export function messagesFeature(ctx) {
                     onInput: (ev) => {
                       ui.profEdit.uname = ev.target.value.toLowerCase().replace(/[^a-z0-9._-]/g, '');
                       ev.target.value = ui.profEdit.uname;
-                      if (ui.profEdit.migrationName) { ui.profEdit.migrationName = null; render(); }
+                      ui.profEdit.migrationName = null;
+                      render();
                     },
                   }),
                   h('span', { class: 'muted', style: 'white-space:nowrap;padding:0 8px' }, '@' + myAddr.split('@')[1]))) : null,

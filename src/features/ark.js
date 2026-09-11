@@ -664,7 +664,7 @@ export function arkFeature(ctx) {
   function arkBalance() {
     const s = arkStateNow();
     if (!s) return null;
-    const sum = (st) => (s.vtxos || []).filter((v) => v.state === st).reduce((n, v) => n + v.amountSat, 0);
+    const sum = (st) => (s.vtxos || []).filter((v) => v.state === st && !v.expiryRejected).reduce((n, v) => n + v.amountSat, 0);
     const boardingSat = (s.actions || [])
       .filter((a) => a.type === 'board' && a.fundingTxid && !['done', 'failed'].includes(a.step))
       .reduce((n, a) => n + (a.amountSat - a.feeSat), 0);
@@ -1188,8 +1188,9 @@ export function arkFeature(ctx) {
     : null;
 
   function arkHistoryItem(m) {
+    const failed = m.status === 'failed';
     const incoming = !['send', 'offboard', 'exit', 'ln-send', 'refresh'].includes(m.type);
-    const label = m.type === 'receive' ? t('received') : m.type === 'board' ? t('arkBoarded')
+    const label = failed ? t('arkLnPayFailed') : m.type === 'receive' ? t('received') : m.type === 'board' ? t('arkBoarded')
       : m.type === 'ln-send' ? t('arkLnPaidHistory') : m.type === 'ln-receive' ? t('arkLnReceivedHistory')
       : m.type === 'offboard' ? t('arkOffboarded') : m.type === 'exit' ? t('arkExited')
       : m.type === 'refresh' ? t('arkRenewedHistory') : t('sent');
@@ -1248,10 +1249,10 @@ export function arkFeature(ctx) {
                 g.claimed ? t('giftClaimedTag') : g.revoked ? t('giftRevokedTag') : t('giftUnclaimedTag')));
           })(),
           (() => { const pk = zapNoteFor(m); return pk ? ctx.hook('profileChip', pk) : null; })(),
-          m.status !== 'complete' ? h('span', { class: 'tag pending' }, m.status) : null),
+          m.status !== 'complete' && !failed ? h('span', { class: 'tag pending' }, m.status) : null),
         h('div', { class: 'small faint' }, timeAgo(m.ts / 1000))),
       h('div', { style: 'text-align:right' },
-        h('div', { class: incoming ? 'amount-pos' : 'amount-neg' }, (incoming ? '+' : '-') + fmtAmount(m.amountSat)))
+        h('div', { class: failed ? 'muted' : incoming ? 'amount-pos' : 'amount-neg' }, (failed ? '' : incoming ? '+' : '-') + fmtAmount(m.amountSat)))
     );
   }
 
@@ -1336,8 +1337,9 @@ export function arkFeature(ctx) {
   }
 
   function arkMoveDetailView(m) {
+    const failed = m.status === 'failed';
     const incoming = m.type === 'refresh' ? false : !['send', 'offboard', 'exit', 'ln-send'].includes(m.type);
-    const label = m.type === 'receive' ? t('received') : m.type === 'board' ? t('arkBoarded')
+    const label = failed ? t('arkLnPayFailed') : m.type === 'receive' ? t('received') : m.type === 'board' ? t('arkBoarded')
       : m.type === 'ln-send' ? t('arkLnPaidHistory') : m.type === 'ln-receive' ? t('arkLnReceivedHistory')
       : m.type === 'offboard' ? t('arkOffboarded') : m.type === 'exit' ? t('arkExited')
       : m.type === 'refresh' ? t('arkRenewedHistory') : t('sent');
@@ -1355,12 +1357,12 @@ export function arkFeature(ctx) {
           : ONCHAIN_ARK.has(m.type) ? h('span', { html: BITCOIN_ICON(18) })
           : h('span', { html: ARK_ICON(18) }),
         h('h3', { style: 'margin:0' }, label),
-        m.status !== 'complete' ? h('span', { class: 'tag pending' }, m.status) : null),
+        m.status !== 'complete' && !failed ? h('span', { class: 'tag pending' }, m.status) : null),
       m.type === 'refresh'
         ? h('div', { class: m.feeSat > 0 ? 'amount-neg' : 'small faint', style: 'font-size:20px' },
             m.feeSat > 0 ? '-' + fmtAmount(m.feeSat) + ' ' + unitLabel() : t('arkDepthFree'))
-        : h('div', { class: incoming ? 'amount-pos' : 'amount-neg', style: 'font-size:20px' },
-            (incoming ? '+' : '-') + fmtAmount(m.amountSat) + ' ' + unitLabel()),
+        : h('div', { class: failed ? 'muted' : incoming ? 'amount-pos' : 'amount-neg', style: 'font-size:20px' },
+            (failed ? '' : incoming ? '+' : '-') + fmtAmount(m.amountSat) + ' ' + unitLabel()),
       row(t('dateLabel'), new Date(m.ts).toLocaleString()),
       (() => {
         const pk = zapNoteFor(m);
@@ -2645,7 +2647,7 @@ export function arkFeature(ctx) {
   async function maybeAutoRefresh(mgr) {
     if (wallet.watchOnly || !mgr || !mgr.state) return;
     if (Date.now() - arkAutoRefreshAt < 30 * 60_000) return;
-    const spendables = (mgr.state.vtxos || []).filter((v) => v.state === 'spendable');
+    const spendables = (mgr.state.vtxos || []).filter((v) => v.state === 'spendable' && !v.expiryRejected);
     if (!spendables.length) { arkRenewWarn = null; return; }
     // never start a round while any other action is still in flight
     if ((mgr.state.actions || []).some((a) => !['done', 'failed'].includes(a.step))) return;
@@ -3280,7 +3282,8 @@ export function arkFeature(ctx) {
       // renewal is net zero, invisible money movement, noise.
       const seenPay = new Set();
       const moves = (s.movements || [])
-        .filter((m) => ['receive', 'send', 'board', 'offboard', 'exit', 'ln-send', 'ln-receive', 'refresh', 'reconcile'].includes(m.type) && m.status === 'complete')
+        .filter((m) => ['receive', 'send', 'board', 'offboard', 'exit', 'ln-send', 'ln-receive', 'refresh', 'reconcile'].includes(m.type)
+          && (m.status === 'complete' || (m.type === 'send' && m.status === 'failed')))
         .filter((m) => m.type !== 'refresh' || m.feeSat > 0)
         .sort((m, n) => (m.ts || 0) - (n.ts || 0))
         .filter((m) => {
@@ -3392,7 +3395,7 @@ export function arkFeature(ctx) {
       // balance is enough: the depth advisory outranks this forecast, and
       // Manage carries the full story either way.
       if (!depthNotice && ark && ark.state && ark._tipH && !wallet.watchOnly) {
-        const spend = (ark.state.vtxos || []).filter((v) => v.state === 'spendable' && v.expiryHeight);
+        const spend = (ark.state.vtxos || []).filter((v) => v.state === 'spendable' && v.expiryHeight && !v.expiryRejected);
         if (spend.length) {
           const tip = ark._tipH;
           const RENEW = renewWindow();

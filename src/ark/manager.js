@@ -210,6 +210,10 @@ export class ArkManager {
       this.state.serverPubkey = this.info.serverPubkey;
       this._save();
     }
+    // Older builds kept server-rejected dust in the spendable balance.
+    let expiryChanged = false;
+    for (const action of this.state.actions) expiryChanged = this._recordExpiryRejection(action) || expiryChanged;
+    if (expiryChanged) this._save();
     return this;
   }
 
@@ -337,7 +341,22 @@ export class ArkManager {
   // the exception — they have no unilateral exit to protect and the coinos ASP
   // keeps honoring them off-chain (mirrors validateVtxo's carve-out).
   _expired(v, tip) {
-    return !!tip && !!v.expiryHeight && v.amountSat >= 330 && v.expiryHeight <= tip;
+    return !!v.expiryRejected || (!!tip && !!v.expiryHeight && v.amountSat >= 330 && v.expiryHeight <= tip);
+  }
+
+  // The dust exemption is not a promise that every old coin will be
+  // accepted. A cosign rejection names the exact expired input; remember
+  // that verdict without discarding the other inputs in its atomic package.
+  _recordExpiryRejection(action) {
+    if (action.step !== 'failed') return false;
+    const m = /vtxo ([0-9a-f]{64}:\d+) expired at height (\d+) \(tip = (\d+)\)/i.exec(action.error || '');
+    if (!m) return false;
+    const inputs = [...(action.inputIds || []), ...this._sendParts(action).map(p => p.inputId)];
+    const v = inputs.includes(m[1]) && this._vtxo(m[1]);
+    if (!v || v.expiryHeight !== Number(m[2]) || v.expiryRejected) return false;
+    v.expiryRejected = true;
+    this._tipH = Math.max(this._tipH || 0, Number(m[3]));
+    return true;
   }
 
   balance() {
@@ -810,6 +829,7 @@ export class ArkManager {
     this.state.actions.push(action);
     this._save();
     await this._driveSend(action);
+    if (action.step !== 'done') throw new Error(action.error || 'Ark payment did not complete');
     return action.id;
   }
 
@@ -853,7 +873,8 @@ export class ArkManager {
           if (spent) this.reconcile().catch(() => {});
           action.step = 'failed';
           action.error = e.message;
-          this._movement({ type: 'send', amountSat: action.amountSat, status: 'failed', detail: e.message });
+          this._recordExpiryRejection(action);
+          this._movement({ type: 'send', amountSat: action.amountSat, status: 'failed', detail: e.message, to: action.destAddress });
           this._save();
           return;
         }
@@ -1105,6 +1126,7 @@ export class ArkManager {
           if (spent) this.reconcile().catch(() => {});
           action.step = 'failed';
           action.error = e.message;
+          this._recordExpiryRejection(action);
           this._movement({ type: 'ln-send', amountSat: action.amountSat, status: 'failed', detail: e.message });
           this._save();
           return;

@@ -332,6 +332,17 @@ export function messagesFeature(ctx) {
     }
     wallet.saveFeatureState('profiles', s);
   }
+  // A punk picture is OUR OWN art. Every coinos user who keeps the default
+  // publishes https://v3.coinos.io/punks/N.webp as their nostr picture, and
+  // the legacy coinos.io copies 502 for a third of the set — so painting
+  // those from the local files means no network, no broken faces, and the
+  // right size for the circle being drawn.
+  const PUNK_PIC_RE = /^https?:\/\/(?:[a-z0-9-]+\.)*coinos\.io\/punks\/(\d{1,2})\.webp$/i;
+  const localPunk = (url, big) => {
+    const m = PUNK_PIC_RE.exec(url || '');
+    return m ? (big ? `punks/${m[1]}.webp` : `punks-sm/${m[1]}.webp`) : null;
+  };
+
   // A refreshed profile whose picture hasn't changed keeps the thumbnail we
   // already made of it — otherwise every relay refresh throws the local copy
   // away and the original gets downloaded all over again.
@@ -367,6 +378,7 @@ export function messagesFeature(ctx) {
   function makeThumb(pk, p) {
     if (!p || !p.picture || typeof document === 'undefined') return;
     if (p.thumbFor === p.picture || p.thumbFail === p.picture) return;
+    if (localPunk(p.picture)) return; // our own art, already the right size on disk
     if (thumbing.has(pk) || thumbing.size >= 3) return; // a few at a time
     // Making the thumbnail costs one more fetch of the original today to
     // save every fetch after it — but not on a connection someone is
@@ -1732,6 +1744,21 @@ export function messagesFeature(ctx) {
         ' ' + d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
   };
 
+  // Which bytes a face paints from, in order of preference:
+  //   our own punk art, straight off disk at the size being drawn;
+  //   the thumbnail we keep locally, which needs no network at all;
+  //   the original, when we have nothing else yet.
+  // The 64px profile avatar layers the original OVER the local copy: CSS
+  // paints the first layer that has arrived, so the face is there instantly
+  // and sharpens when the full-size one lands.
+  function avatarBg(p, big) {
+    const punk = localPunk(p.picture, big);
+    if (punk) return `url(${JSON.stringify(punk)})`;
+    const local = p.thumb && p.thumbFor === p.picture ? p.thumb : null;
+    if (!local) return `url(${JSON.stringify(p.picture)})`;
+    return (big ? `url(${JSON.stringify(p.picture)}),` : '') + `url(${JSON.stringify(local)})`;
+  }
+
   const avatar = (pk, cls = 'chat-avatar', clickable = true) => {
     const p = profileOf(pk);
     // While the profile is in flight, a quiet empty circle — the punk is a
@@ -1748,12 +1775,7 @@ export function messagesFeature(ctx) {
         // 64px profile avatar layers them: CSS paints the first layer that
         // has arrived, so the thumbnail shows instantly and the full-size
         // original takes over on top when it lands.
-        ? h('div', {
-            class: cls + ' ava-img',
-            style: 'background-image:' + (p.thumb && p.thumbFor === p.picture
-              ? (cls.includes('profile-avatar') ? `url(${JSON.stringify(p.picture)}),` : '') + `url(${JSON.stringify(p.thumb)})`
-              : `url(${JSON.stringify(p.picture)})`),
-          })
+        ? h('div', { class: cls + ' ava-img', style: 'background-image:' + avatarBg(p, cls.includes('profile-avatar')) })
         : fallbackAvatar(h, pk, p.name, cls);
     // A face we keep painting is one worth keeping a thumbnail of.
     if (p && p.picture) makeThumb(pk, p);

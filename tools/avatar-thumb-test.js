@@ -31,6 +31,11 @@ const server = Bun.serve({
   port: 5235,
   async fetch(req) {
     const u = new URL(req.url);
+    if (u.pathname.startsWith('/punks')) {
+      const f = Bun.file('dist' + u.pathname);
+      if (await f.exists()) return new Response(await f.arrayBuffer(), { headers: { 'content-type': 'image/webp' } });
+      return new Response('no', { status: 404 });
+    }
     if (u.pathname === '/big.png') {
       originalHits++;
       const bytes = await Bun.file('/tmp/claude-1000/-home-adam-coinosv3/61dea255-d26d-411d-be8b-92dfb0a75887/scratchpad/big.png').arrayBuffer();
@@ -102,6 +107,38 @@ try {
   await waitText('receive', 20000);
   await sleep(2000);
   check('a later boot fetches no picture at all', originalHits === 0, originalHits + ' request(s)');
+
+  // A punk picture is our own art: painted from disk at the size being drawn,
+  // never fetched from coinos.io (whose copies 502 for a third of the set).
+  await page.evaluate((pkHex) => {
+    for (const k of Object.keys(localStorage).filter((x) => /^btc-wallet-cache:[0-9a-f]+$/.test(x)))
+      localStorage.setItem(k + ':profiles', JSON.stringify({
+        [pkHex]: { name: 'Punk Test', picture: 'https://v3.coinos.io/punks/7.webp', t: Date.now() },
+      }));
+  }, pk);
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await waitText('receive', 20000);
+  await sleep(1200);
+  const punkStyle = await page.evaluate(() => {
+    const a = document.querySelector('.header-avatar .ava-img') || document.querySelector('.ava-img');
+    return a ? a.getAttribute('style') : '';
+  });
+  check('a punk picture paints from the local small copy', /punks-sm\/7\.webp/.test(punkStyle), punkStyle.slice(0, 60));
+  check('...and never from coinos.io', !/coinos\.io/.test(punkStyle));
+
+  // And someone with no picture at all still gets a punk — the small one.
+  await page.evaluate((pkHex) => {
+    for (const k of Object.keys(localStorage).filter((x) => /^btc-wallet-cache:[0-9a-f]+$/.test(x)))
+      localStorage.setItem(k + ':profiles', JSON.stringify({ [pkHex]: { name: 'Bare', picture: null, t: Date.now() } }));
+  }, pk);
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await waitText('receive', 20000);
+  await sleep(1200);
+  const punkSrc = await page.evaluate(() => {
+    const i = document.querySelector('.header-avatar img.punk') || document.querySelector('img.punk');
+    return i ? i.getAttribute('src') : '';
+  });
+  check('the default face is the small punk', /^punks-sm\//.test(punkSrc), punkSrc);
 } finally { await browser.close(); server.stop(true); }
 console.log(ok ? '\n✅ faces come back instantly' : '\n❌ failed');
 process.exit(ok ? 0 : 1);

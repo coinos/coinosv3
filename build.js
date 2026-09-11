@@ -472,9 +472,13 @@ if (import.meta.main) {
   if (await Bun.file('static/coinos.apk').exists()) {
     await Bun.write('dist/coinos.apk', Bun.file('static/coinos.apk'));
   }
-  // default avatars, self-hosted since coinos.io's copies are half-broken
+  // default avatars, self-hosted since coinos.io's copies are half-broken.
+  // punks-sm carries a 128px copy of each: the art is 240px because that's
+  // what a punk published as someone's nostr picture should be, but the
+  // circles the app draws are 18-64px and shouldn't pay for the rest.
   const { readdirSync } = await import('node:fs');
-  for (const f of readdirSync('static/punks')) await Bun.write('dist/punks/' + f, Bun.file('static/punks/' + f));
+  for (const d of ['punks', 'punks-sm'])
+    for (const f of readdirSync('static/' + d)) await Bun.write(`dist/${d}/${f}`, Bun.file(`static/${d}/${f}`));
 
   const kb = (Buffer.byteLength(html) / 1024).toFixed(0);
   const jkb = (Buffer.byteLength(rawJs) / 1024).toFixed(0);

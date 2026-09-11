@@ -15,12 +15,23 @@ import { queryOn, parseNostrPubkey, npubOf, PROFILE_RELAYS } from './nostr.js';
 // if the image can't load (offline).
 // Self-hosted (dist/punks) — coinos.io's own copies 502 for a third of the
 // set. Same deterministic formula the coinos app uses.
-export const punkUrl = (pk) =>
-  `punks/${Math.floor((parseInt(pk.slice(-2), 16) / 256) * 64) + 1}.webp`;
+const punkN = (pk) => Math.floor((parseInt(pk.slice(-2), 16) / 256) * 64) + 1;
+export const punkUrl = (pk) => `punks/${punkN(pk)}.webp`;
+// The art is 240px, which is what a punk published as someone's nostr
+// picture should be — and eight times what a 30px circle needs. We ship a
+// 128px copy of each (a fifth of the bytes, 20KB → 4KB) and paint the circles
+// from that, so a brand-new wallet with nothing cached fills its faces in
+// straight away. Only the 64px profile avatar takes the full-size one.
+export const punkSmallUrl = (pk) => `punks-sm/${punkN(pk)}.webp`;
+export const punkSmallN = (n) => `punks-sm/${n}.webp`;
 
 export const fallbackAvatar = (h, pk, name, cls) =>
   h('div', { class: cls + ' fallback' },
-    h('img', { class: 'punk', src: punkUrl(pk), alt: '', onError: (e) => { e.target.style.display = 'none'; } }),
+    h('img', {
+      class: 'punk', alt: '',
+      src: cls.includes('profile-avatar') ? punkUrl(pk) : punkSmallUrl(pk),
+      onError: (e) => { e.target.style.display = 'none'; },
+    }),
     (name || npubOf(pk) || '??').slice(0, 2));
 
 const REGISTRAR = 'https://names.coinos.io';

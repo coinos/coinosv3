@@ -2904,7 +2904,11 @@ function shouldOnboard() {
 }
 
 const PUNK_PICKS = [7, 14, 21, 3, 33, 40, 47, 36, 61, 26, 12, 50];
+// The value the wizard publishes is always the full-size art — that URL
+// becomes this person's picture on every nostr client. The tiles in the
+// picker are 56px, so they load the small copies.
 const punkImg = (n) => `punks/${n}.webp`;
+const punkTile = (n) => `punks-sm/${n}.webp`;
 
 async function onbUpload(file) {
   const fd = new FormData();
@@ -3106,7 +3110,7 @@ function onboardScreen() {
         ...PUNK_PICKS.map((n) =>
           h('img', {
             class: 'onb-punk' + (sel === punkImg(n) ? ' sel' : ''),
-            src: punkImg(n), alt: '',
+            src: punkTile(n), alt: '',
             onClick: () => { o.avatar = punkImg(n); render(); },
             onError: (e) => { e.target.remove(); }, // a 502'd punk removes itself
           }))),

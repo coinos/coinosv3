@@ -444,6 +444,16 @@ let _renderDeferred = false;
 // and every app render (feature init, emitter ticks) must stand down or the
 // onboarding screen paints over the chat moments after it mounts.
 let _publicChatMode = false;
+// True until boot has decided whether a session is restoring. Anything that
+// renders before then (a deferred feature chunk landing, an emitter tick) is
+// rendering without knowing whether anyone is signed in — and the signed-out
+// welcome screen is the one screen that must never be guessed at. The boot
+// shell holds the frame for those few ms instead; see the dispatch below.
+let _bootDeciding = true;
+// Belt and braces: a boot path that returns early (or throws) must not leave
+// the welcome screen held back forever. Nothing legitimate is still deciding
+// four seconds in — the store wait alone caps at 800ms.
+setTimeout(() => { if (_bootDeciding) { _bootDeciding = false; render(); } }, 4000);
 function render() {
   if (_publicChatMode) return;
   // A background render mid carousel-drag rebuilds the strip; the morph then
@@ -529,7 +539,13 @@ function renderInner() {
           ? vaultScreen()
           : ui.screen === 'howItWorks'
             ? howItWorksScreen()
-            : shouldOnboard() ? onboardScreen() : unlockScreen());
+            : _bootDeciding
+              // Not "nobody is signed in" — "we don't know yet". Painting
+              // Get started here is what flashed the sign-in page over a
+              // wallet that was about to restore. Every other screen is a
+              // deliberate choice and still paints; this one waits.
+              ? h('div', { class: 'col', style: 'gap:16px' }, brandHeader(false))
+              : shouldOnboard() ? onboardScreen() : unlockScreen());
   // Navigation animates; background repaints must not. The key is every
   // ui field that decides which page is on screen.
   const navKey = [ui.screen, ui.tab === 'settings', ui.chatOpen, ui.msgView, ui.msgPeer, ui.msgCommunity,
@@ -5175,6 +5191,7 @@ loadLocale(getLang()).finally(async () => {
   // wrong balance. The hook caps its own wait.
   const storeReady = featureHook('arkStoreReady');
   if (storeReady) await storeReady;
+  _bootDeciding = false; // from here on the screen is a decision, not a guess
   if (!restoreAccountsState()) render();
 });
 

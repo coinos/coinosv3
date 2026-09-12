@@ -2712,10 +2712,20 @@ export function messagesFeature(ctx) {
 
   // A like is kind 7 on the note (NIP-25). Tapping it again withdraws it the
   // only way nostr has: a deletion request for the reaction we sent.
-  async function toggleLike(ev) {
+  // Reply: open (or re-aim) the thread and put the cursor in the box.
+  function replyToNote(ev) {
+    if (ui.noteThread && ui.noteThread.rootId === rootIdOf(ev)) {
+      ui.noteThread.focusId = ev.id;
+      render();
+    } else openNoteThread(ev);
+    if (ui.noteThread) ui.noteThread.refocus = true;
+    setTimeout(() => document.querySelector('.thread-reply-input')?.focus(), 120);
+  }
+
+  async function unreact(ev) {
     const id = await requireIdentity();
     const relays = await noteRelaysFor(ev);
-    if (myReactOn(ev.id)) {
+    {
       // Taking a like back is the only withdrawal nostr has: a deletion
       // request naming the reaction. Relays that honour it drop it; the ones
       // that don't go on showing it to other people — worth knowing, not
@@ -2731,8 +2741,14 @@ export function messagesFeature(ctx) {
       publishOn(relays, del).catch(() => {});
       return;
     }
+  }
+
+  // React with whichever emoji was picked (NIP-25 takes any content).
+  async function reactTo(ev, emoji) {
+    const id = await requireIdentity();
+    const relays = await noteRelaysFor(ev);
     const partial = {
-      kind: 7, content: '❤️', created_at: Math.floor(Date.now() / 1000),
+      kind: 7, content: emoji || '❤️', created_at: Math.floor(Date.now() / 1000),
       tags: [['e', ev.id], ['p', ev.pubkey], CLIENT_TAG],
     };
     const evt = id.signer instanceof Uint8Array ? finalizeEvent(partial, id.signer) : await id.signer.signEvent(partial);
@@ -2873,23 +2889,57 @@ export function messagesFeature(ctx) {
         h('button', { class: 'btn-ghost btn-block', onClick: close }, t('back'))));
   }
 
-  // Under a post: a like with its count, a boost with its count. Amethyst
-  // puts these in a row of their own rather than crowding the header, and
-  // they read better there — the counts are part of the post, not chrome.
-  function noteActions(ev) {
+  // The things you can do to a post, in a row of their own across the bottom
+  // of it: reply, boost, quote, react, zap. Counts sit beside their own icon,
+  // because a count belongs to the thing it counts. Spread across the full
+  // width so each is a comfortable target rather than five buttons huddled in
+  // a corner.
+  const ICON = (d, fill) => '<svg width="19" height="19" viewBox="0 0 24 24" fill="' + (fill ? 'currentColor' : 'none')
+    + '" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="display:block">' + d + '</svg>';
+  const I_REPLY = ICON('<path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/>');
+  const I_BOOST = ICON('<path d="M17 2.5l3.5 3.5-3.5 3.5"/><path d="M3.5 11.5v-1a4 4 0 0 1 4-4h13"/><path d="M7 21.5L3.5 18 7 14.5"/><path d="M20.5 12.5v1a4 4 0 0 1-4 4h-13"/>');
+  const I_QUOTE = ICON('<path stroke="none" d="M7.2 17c.5 0 1-.3 1.2-.7l1.4-2.9c.1-.3.2-.6.2-.9V8c0-.6-.4-1-1-1H6c-.6 0-1 .4-1 1v4c0 .6.4 1 1 1h2l-1 2.1c-.5.9.2 1.9 1.2 1.9zm10 0c.5 0 1-.3 1.2-.7l1.4-2.9c.1-.3.2-.6.2-.9V8c0-.6-.4-1-1-1H16c-.6 0-1 .4-1 1v4c0 .6.4 1 1 1h2l-1 2.1c-.5.9.2 1.9 1.2 1.9z"/>', true);
+  const I_HEART = (on) => ICON('<path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1-1.1a5.5 5.5 0 1 0-7.8 7.8l1.1 1L12 21l7.7-7.7 1.1-1a5.5 5.5 0 0 0 0-7.7z"/>', on);
+  const I_ZAP = ICON('<path d="M13 2L4 14h7l-1 8 9-12h-7l1-8z"/>', true);
+
+  function noteActions(pk, ev, { canZap }) {
     const mineReact = myReactOn(ev.id);
     const rm = reacts.get(ev.id);
     const likeN = rm ? [...rm.values()].reduce((n, who) => n + who.size, 0) : 0;
     const boostN = (boosts.get(ev.id) || new Set()).size;
-    const mineBoost = iBoosted(ev.id);
-    const btn = (cls, label, count, on, onClick) => h('button', {
+    const btn = (icon, label, count, on, onClick) => h('button', {
       class: 'note-act' + (on ? ' on' : ''), title: label, 'aria-label': label,
       onClick: (e) => { e.stopPropagation(); onClick(); },
-    }, cls, count ? h('span', { class: 'note-act-n' }, String(count)) : null);
-    return h('div', { class: 'row note-acts', style: 'gap:14px' },
-      btn('\u2764', t('postLike'), likeN, !!mineReact, () => toggleLike(ev).catch(() => {})),
-      btn('\u21bb', t('postBoost'), boostN, mineBoost, () => boostNote(ev).catch(() => {})),
-      btn('\u275d', t('postQuote'), 0, false, () => quoteNote(ev)));
+    },
+      typeof icon === 'string' && icon.startsWith('<svg')
+        ? h('span', { style: 'display:flex', html: icon })
+        : h('span', { class: 'note-act-emoji' }, icon),
+      count ? h('span', { class: 'note-act-n' }, String(count)) : null);
+    return h('div', { class: 'row note-acts' },
+      btn(I_REPLY, t('msgReply'), 0, false, () => replyToNote(ev)),
+      btn(I_BOOST, t('postBoost'), boostN, iBoosted(ev.id), () => boostNote(ev).catch(() => {})),
+      btn(I_QUOTE, t('postQuote'), 0, false, () => quoteNote(ev)),
+      // tap to choose how you feel about it; tap again to take it back
+      btn(mineReact || I_HEART(false), t('postLike'), likeN, !!mineReact,
+        () => { if (mineReact) unreact(ev).catch(() => {}); else { ui.reactPick = ev; render(); } }),
+      canZap ? btn(I_ZAP, t('zapTitle'), 0, false, () => { zapNote(pk, ev); recheckZap(ev.id); }) : null);
+  }
+
+  // The emoji row, same set the chat sheet offers.
+  function reactPicker() {
+    if (!ui.reactPick) return null;
+    const ev = ui.reactPick;
+    const close = () => { ui.reactPick = null; render(); };
+    return h('div', {
+      class: 'confirm-pop-backdrop',
+      onClick: (e) => { if (e.target === e.currentTarget) close(); },
+    },
+      h('div', { class: 'card col msg-sheet' },
+        h('div', { class: 'msg-sheet-emojis' },
+          REACT_EMOJIS.map((e2) => h('button', {
+            onClick: () => { close(); reactTo(ev, e2).catch(() => {}); },
+          }, e2))),
+        h('button', { class: 'btn-ghost btn-block', onClick: close }, t('back'))));
   }
 
   function noteRow(pk, ev, name, { open = true, focus = false } = {}) {
@@ -2925,28 +2975,15 @@ export function messagesFeature(ctx) {
             h('span', { class: 'small faint', style: 'white-space:nowrap' },
               (isReply ? '↩ ' + t('profReplyTag') + ' · ' : '') + timeLabel(ev.created_at * 1000)),
             zapChip(ev.id, { onClick: canZap ? () => { zapNote(pk, ev); recheckZap(ev.id); } : null })),
-          pending ? null : h('div', { class: 'row', style: 'gap:6px;flex-shrink:0' },
-            // Reply on every post: opens (or re-targets) its thread and puts
-            // the cursor in the reply box — no hunting for the row tap.
-            h('button', {
-              class: 'btn-sm', title: t('msgReply'), onClick: (e) => {
-                e.stopPropagation();
-                if (ui.noteThread && ui.noteThread.rootId === rootIdOf(ev)) {
-                  ui.noteThread.focusId = ev.id;
-                  render();
-                } else openNoteThread(ev);
-                if (ui.noteThread) ui.noteThread.refocus = true; // survives the box relocating when the thread loads
-                setTimeout(() => document.querySelector('.thread-reply-input')?.focus(), 120);
-              },
-            }, '↩'),
-            canZap ? h('button', { class: 'btn-sm', title: t('zapTitle'), onClick: (e) => { e.stopPropagation(); zapNote(pk, ev); recheckZap(ev.id); } }, '⚡') : null,
-            // everything else a post can have done to it, one tap away
-            h('button', {
-              class: 'btn-sm', title: t('postMore'), 'aria-label': t('postMore'),
-              onClick: (e) => { e.stopPropagation(); ui.noteSheet = ev; render(); },
-            }, '\u22ef'))),
+          pending ? null : h('button', {
+            // the overflow stays up here; reply, boost, quote, react and zap
+            // are a row of their own under the post
+            class: 'btn-sm', title: t('postMore'), 'aria-label': t('postMore'),
+            style: 'flex-shrink:0',
+            onClick: (e) => { e.stopPropagation(); ui.noteSheet = ev; render(); },
+          }, '\u22ef')),
         h('div', { class: 'small', style: 'white-space:pre-wrap;overflow-wrap:anywhere' }, ...noteBody(ev.content)),
-        pending ? null : noteActions(ev)));
+        pending ? null : noteActions(pk, ev, { canZap })));
   }
 
   // ---- thread view: a note in its conversation ----------------------------
@@ -3654,7 +3691,8 @@ export function messagesFeature(ctx) {
         c.loadingMore
           ? h('div', { class: 'row gap6', style: 'justify-content:center;padding:4px 0' }, h('span', { class: 'spinner sm' }))
           : null,
-        noteSheet());
+        noteSheet(),
+        reactPicker());
   }
 
 

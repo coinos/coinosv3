@@ -533,16 +533,19 @@ hr.divider { margin: 16px 0; }
 /* Profile note feed: inline images stay contained, links wrap. */
 .note-img { display: block; max-width: 100%; max-height: 320px; border-radius: 10px; margin-top: 6px; object-fit: contain; }
 .note-img.clickable { cursor: zoom-in; }
-/* The row under a post: like, boost, quote. Quiet until they carry a count
-   or you've used one, the way a timeline should read. */
-.note-acts { margin-top: 6px; }
+/* The row under a post: reply, boost, quote, react, zap — spread across the
+   post's full width so each is a comfortable target, quiet until one carries
+   a count or you've used it. */
+.note-acts { margin-top: 8px; justify-content: space-between; gap: 4px; max-width: 340px; }
 .note-act {
-  background: none; border: 0; padding: 2px 0; margin: 0; font-size: 14px; line-height: 1;
-  color: var(--faint); display: inline-flex; align-items: center; gap: 5px; cursor: pointer;
+  background: none; border: 0; padding: 4px 6px; margin: 0; line-height: 1;
+  color: var(--faint); display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
+  border-radius: 8px;
 }
-.note-act:hover { background: none; color: var(--ink); }
+.note-act:hover { background: var(--surface2); color: var(--ink); }
 .note-act.on { color: #e0245e; }
-.note-act.on[title="Boost"], .note-act.on[aria-label="Boost"] { color: var(--green); }
+.note-act.on[aria-label="Boost"] { color: var(--green); }
+.note-act-emoji { font-size: 17px; line-height: 1; }
 .note-act-n { font-size: 12px; font-weight: 600; color: var(--muted); }
 /* The attach button sits between Post and Cancel: a square the size of the
    buttons beside it, not the sliver a .btn-sm made of a 20px icon. */

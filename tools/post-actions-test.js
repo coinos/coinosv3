@@ -61,14 +61,19 @@ try {
   await sleep(2500);
 
   const acts = await page.evaluate(() => [...document.querySelectorAll('.note-act')].map((b) => b.getAttribute('aria-label')));
-  check('a post carries like, boost and quote', acts.join(',') === 'Like,Boost,Quote', acts.join(',') || 'none');
+  check('every action sits under the post', acts.slice(0, 4).join(',') === 'Reply,Boost,Quote,Like', acts.join(',') || 'none');
 
-  // a like paints before any relay answers, and counts itself
-  const before = await page.evaluate(() => Number(document.querySelector('.note-act').textContent.replace(/\D/g, '') || 0));
-  await page.evaluate(() => document.querySelector('.note-act').click());
-  await sleep(900);
-  const liked = await page.evaluate(() => { const b = document.querySelector('.note-act'); return { on: b.className.includes('on'), n: Number(b.textContent.replace(/\D/g, '') || 0) }; });
-  check('liking shows immediately, with a count', liked.on && liked.n === before + 1, JSON.stringify(liked) + ' was ' + before);
+  // the heart opens the emoji row; picking one paints before any relay answers
+  const likeBtn = () => page.evaluate(() => { const b = [...document.querySelectorAll('.note-act')].find((x) => x.getAttribute('aria-label') === 'Like'); return b ? { on: b.className.includes('on'), n: Number(b.textContent.replace(/\D/g, '') || 0), emoji: b.textContent.replace(/[\d\s]/g, '') } : null; });
+  const before = (await likeBtn()).n;
+  await page.evaluate(() => { const b = [...document.querySelectorAll('.note-act')].find((x) => x.getAttribute('aria-label') === 'Like'); b.click(); });
+  await sleep(600);
+  const emojis = await page.evaluate(() => [...document.querySelectorAll('.msg-sheet-emojis button')].map((b) => b.textContent));
+  check('the heart offers a choice of emoji', emojis.length >= 5, emojis.join(' '));
+  await page.evaluate(() => { const b = [...document.querySelectorAll('.msg-sheet-emojis button')].find((x) => x.textContent === '🔥'); b.click(); });
+  await sleep(1200);
+  const liked = await likeBtn();
+  check('the one you picked is the one it shows', liked.on && liked.n === before + 1 && liked.emoji.includes('🔥'), JSON.stringify(liked) + ' was ' + before);
 
   // quoting carries the post into the composer as a nostr: reference
   await page.evaluate(() => { const b = [...document.querySelectorAll('.note-act')].find((x) => x.getAttribute('aria-label') === 'Quote'); b.click(); });

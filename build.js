@@ -470,9 +470,9 @@ if (import.meta.main) {
     await Bun.write('dist/.well-known/assetlinks.json', Bun.file('static/.well-known/assetlinks.json'));
   }
   // The Android builds. coinos.apk is the TWA (Chrome renders the site);
-  // coinos-unifiedpush.apk runs the wallet in its own WebView so a phone
-  // without Google Play Services can be woken — see android/.
-  for (const apk of ['coinos.apk', 'coinos-unifiedpush.apk']) {
+  // graphene.apk runs the wallet in its own WebView so a phone without
+  // Google Play Services can be woken — see android/.
+  for (const apk of ['coinos.apk', 'graphene.apk']) {
     if (await Bun.file('static/' + apk).exists()) {
       await Bun.write('dist/' + apk, Bun.file('static/' + apk));
     }

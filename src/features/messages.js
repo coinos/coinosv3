@@ -3143,6 +3143,8 @@ export function messagesFeature(ctx) {
       ...(c.root ? [c.root.pubkey] : []),
       ...target.tags.filter((x) => x[0] === 'p' && /^[0-9a-f]{64}$/.test(x[1] || '')).map((x) => x[1]),
     ])].filter((pk) => pk !== id.pubkey).slice(0, 8);
+    const imeta = (ui.postMedia || []).filter((m) => m && m.url && text.includes(m.url))
+      .map((m) => ['imeta', 'url ' + m.url, ...(m.m ? ['m ' + m.m] : [])]);
     const partial = {
       kind: 1,
       content: text,
@@ -3151,6 +3153,7 @@ export function messagesFeature(ctx) {
         ['e', rootId, '', 'root'],
         ...(target.id !== rootId ? [['e', target.id, '', 'reply']] : []),
         ...pTags.map((pk) => ['p', pk]),
+        ...imeta,
         CLIENT_TAG,
       ],
     };
@@ -3175,8 +3178,27 @@ export function messagesFeature(ctx) {
         onInput: (e) => { s.draft = e.target.value; },
         onKeydown: (e) => { if (e.key === 'Enter') e.target.parentElement.querySelector('.thread-reply-send')?.click(); },
       }),
+      // A reply can carry a picture too — same upload, same imeta tag, same
+      // paperclip. The URL lands in the draft, which is what every client
+      // reads as the media.
+      ctx.uploadImage ? h('button', {
+        class: 'attach-btn', title: t('feedAttach'), 'aria-label': t('feedAttach'), disabled: !!ui.postUploading,
+        onClick: () => document.getElementById('reply-file')?.click(),
+      }, ui.postUploading ? h('span', { class: 'spinner sm' }) : h('span', { style: 'display:flex', html: CLIP })) : null,
+      h('input', {
+        type: 'file', id: 'reply-file', accept: 'image/*,video/*', style: 'display:none',
+        onChange: async (e) => {
+          const f = e.target.files && e.target.files[0];
+          e.target.value = '';
+          await attachTo(f, (url) => {
+            s.draft = ((s.draft || '').replace(/\s+$/, '') + ' ' + url).trim();
+            const inp = document.querySelector('.thread-reply-input');
+            if (inp) inp.value = s.draft;
+          });
+        },
+      }),
       h('button', {
-        class: 'btn-primary thread-reply-send', disabled: !!s.sending,
+        class: 'btn-primary thread-reply-send', disabled: !!s.sending || !!ui.postUploading,
         onClick: async () => {
           const text = (s.draft || '').trim();
           if (!text) return;
@@ -3184,6 +3206,7 @@ export function messagesFeature(ctx) {
           try {
             await publishReply(c, s, text);
             s.draft = '';
+            ui.postMedia = (ui.postMedia || []).filter((m) => !text.includes(m.url));
             // the input may still be focused, and the morph won't touch a
             // focused field's value — clear it by hand
             const inp = document.querySelector('.thread-reply-input');
@@ -3646,19 +3669,23 @@ export function messagesFeature(ctx) {
   // client reads media — with a NIP-92 imeta tag published beside it for the
   // ones that would rather have the metadata than sniff the URL.
   const composeText = () => (ui.profCompose == null ? draftFor(POST_DRAFT) : ui.profCompose || '');
-  async function attachMedia(file) {
+  // Upload, then hand the URL to whichever draft asked for it.
+  async function attachTo(file, place) {
     if (!file || !ctx.uploadImage) return;
     ui.postUploading = true; render();
     try {
       const url = await ctx.uploadImage(file);
       (ui.postMedia ||= []).push({ url, m: file.type || '' });
-      const cur = composeText().replace(/\s+$/, '');
-      const next = (cur ? cur + '\n' : '') + url;
-      ui.profCompose = next;
-      setDraft(POST_DRAFT, next);
+      place(url);
     } catch (e) { toast(e.message || String(e)); }
     ui.postUploading = false; render();
   }
+  const attachMedia = (file) => attachTo(file, (url) => {
+    const cur = composeText().replace(/\s+$/, '');
+    const next = (cur ? cur + '\n' : '') + url;
+    ui.profCompose = next;
+    setDraft(POST_DRAFT, next);
+  });
   const CLIP = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:block"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>';
   function postComposer() {
     if (ui.profCompose == null && !draftFor(POST_DRAFT)) return null;

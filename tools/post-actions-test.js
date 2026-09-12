@@ -81,6 +81,26 @@ try {
   const draft = await page.evaluate(() => (document.querySelector('.chat-page textarea') || {}).value || '');
   check('quoting opens the composer with the reference in it', /nostr:nevent1/.test(draft), draft.slice(0, 40) || 'empty');
 
+  // A reply can carry a picture, the same as a post can.
+  await page.evaluate(() => { const b = [...document.querySelectorAll('.note-act')].find((x) => x.getAttribute('aria-label') === 'Reply'); if (b) b.click(); });
+  await sleep(2500);
+  const reply = await page.evaluate(() => {
+    const box = document.querySelector('.thread-reply-input');
+    if (!box) return { box: false };
+    const row = box.parentElement;
+    return {
+      box: true,
+      attach: !!row.querySelector('.attach-btn'),
+      file: !!row.querySelector('#reply-file'),
+      accepts: (row.querySelector('#reply-file') || {}).accept,
+    };
+  });
+  check('the reply box has the same paperclip', reply.box && reply.attach && reply.file, JSON.stringify(reply));
+  check('...taking pictures and video', /image/.test(reply.accepts || '') && /video/.test(reply.accepts || ''), reply.accepts || 'none');
+  // back out of the thread the reply check opened
+  await page.evaluate(() => { const b = [...document.querySelectorAll('button')].find((x) => x.textContent.trim() === 'Back' || x.textContent.trim() === '← Back'); if (b) b.click(); });
+  await sleep(1500);
+
   // the ellipsis sheet, and muting from it
   await page.evaluate(() => { const b = [...document.querySelectorAll('.btn-sm')].find((x) => x.textContent.trim() === '⋯'); if (b) b.click(); });
   await sleep(600);

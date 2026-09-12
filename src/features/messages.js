@@ -2222,9 +2222,10 @@ export function messagesFeature(ctx) {
   // only runs once a wallet opens.
   if (typeof window !== 'undefined') {
     window.addEventListener('scroll', () => {
-      if (!ui.profilePk) return;
+      if (!ui.profilePk && !(ui.chatOpen && ui.msgView === 'feed')) return;
       if (window.innerHeight + window.scrollY < (document.documentElement.scrollHeight || 0) - 600) return;
-      loadOlderNotes(ui.profilePk).catch(() => {});
+      if (ui.profilePk) loadOlderNotes(ui.profilePk).catch(() => {});
+      else loadOlderFeed().catch(() => {});
     }, { passive: true });
   }
   async function loadOlderNotes(pk) {
@@ -2246,6 +2247,178 @@ export function messagesFeature(ctx) {
     } catch {} finally {
       c.loadingMore = false;
       if (ui.profilePk === pk) render();
+    }
+  }
+
+
+  // ---- follows: the kind-3 contact list -------------------------------------
+  // Who you follow. Kept locally so the Follow button and the feed are right
+  // in the first frame, and refreshed from relays behind that. A contact list
+  // is a shared document — other clients keep relay hints in its content and
+  // petnames in its tags — so publishing preserves everything we didn't write
+  // and only ever adds or removes one p tag.
+  const FOLLOWS = 'follows';
+  let follows = null;      // { set: Set<pk>, tags, content, at }
+  let followsAt = 0;       // when we last asked the relays
+  let followsPub = false;  // a publish is in flight
+
+  const mePk = () => (hook('nostrLoginIdentity') || {}).pubkey || (wallet.nostr && wallet.nostr.pk) || null;
+  const pTags = (tags) => (tags || []).filter((x) => x[0] === 'p' && /^[0-9a-f]{64}$/.test(x[1] || ''));
+
+  function followsNow() {
+    if (!follows) {
+      let s = null;
+      try { s = wallet.loadFeatureState(FOLLOWS, null); } catch {}
+      const tags = (s && s.tags) || [];
+      follows = { set: new Set(pTags(tags).map((x) => x[1])), tags, content: (s && s.c) || '', at: (s && s.at) || 0 };
+    }
+    return follows;
+  }
+  function saveFollows(f) {
+    follows = f;
+    try { wallet.saveFeatureState(FOLLOWS, { tags: f.tags, c: f.content, at: f.at }); } catch {}
+  }
+  const isFollowing = (pk) => followsNow().set.has(pk);
+
+  // Fetch the newest list from the relays. Older than what we hold is
+  // ignored: a relay that missed our last publish must not un-follow people.
+  async function syncFollows({ force = false } = {}) {
+    const me = mePk();
+    if (!me) return followsNow();
+    if (!force && Date.now() - followsAt < 10 * 60_000) return followsNow();
+    followsAt = Date.now();
+    try {
+      const evs = await queryOn(zapRelays(), { kinds: [3], authors: [me] }, 5000);
+      const newest = (evs || []).sort((a, b) => b.created_at - a.created_at)[0];
+      const cur = followsNow();
+      if (newest && newest.created_at > cur.at) {
+        saveFollows({
+          set: new Set(pTags(newest.tags).map((x) => x[1])),
+          tags: newest.tags || [], content: newest.content || '', at: newest.created_at,
+        });
+        feedAuthorsChanged();
+        scheduleRepaint();
+      }
+    } catch { followsAt = 0; }
+    return followsNow();
+  }
+
+  // Follow or unfollow, on the freshest list the relays will give us — the
+  // local copy alone would quietly drop anyone another client added since.
+  // The button flips immediately and goes back if the publish fails.
+  async function toggleFollow(pk) {
+    if (!pk || followsPub) return;
+    const id = await requireIdentity();
+    if (pk === id.pubkey) return;
+    followsPub = true;
+    const before = followsNow();
+    // paint the answer now, decide the real list a beat later
+    saveFollows({ ...before, set: new Set(before.set.has(pk) ? [...before.set].filter((x) => x !== pk) : [...before.set, pk]) });
+    render();
+    try {
+      const base = await syncFollows({ force: true });
+      const had = base.set.has(pk);
+      const tags = had
+        ? base.tags.filter((x) => !(x[0] === 'p' && x[1] === pk))
+        : [...base.tags, ['p', pk]];
+      const created_at = Math.max(Math.floor(Date.now() / 1000), base.at + 1);
+      const partial = { kind: 3, content: base.content || '', created_at, tags };
+      const evt = id.signer instanceof Uint8Array ? finalizeEvent(partial, id.signer) : await id.signer.signEvent(partial);
+      const ok = await publishOn(zapRelays(), evt);
+      if (!ok) throw new Error(t('msgSendFailed'));
+      saveFollows({ set: new Set(pTags(tags).map((x) => x[1])), tags, content: base.content || '', at: created_at });
+      feedAuthorsChanged();
+      syncInbox({ force: true }).catch(() => {}); // the SW's friend filter reads this list
+      toast(had ? t('feedUnfollowed') : t('feedFollowed'));
+    } catch (e) {
+      saveFollows(before);
+      if (!(e instanceof NoIdentity)) toast(e.message || String(e));
+    } finally {
+      followsPub = false;
+      render();
+    }
+  }
+
+  // ---- the feed: posts from the people you follow ---------------------------
+  // Their kind-1 notes, newest first, replies left out — a reply belongs to
+  // its thread, and a timeline of half-conversations reads like eavesdropping.
+  // The last screenful is kept locally so the feed opens with posts in it
+  // rather than a spinner, exactly like the profile pages do.
+  const FEED_CACHE = 'feedNotes';
+  const FEED_LIMIT = 80;
+  const FEED_KEEP = 200;   // in memory
+  const FEED_STORE = 50;   // ...and on disk
+  let feed = null;         // { status, notes, end, loadingMore }
+  let feedUnsub = null;
+  let feedAt = 0;
+
+  const isReply = (ev) => (ev.tags || []).some((x) => x[0] === 'e');
+  const feedAuthors = () => [...followsNow().set].slice(0, 500);
+
+  function feedNow() {
+    if (!feed) {
+      let stored = [];
+      try { stored = wallet.loadFeatureState(FEED_CACHE, []) || []; } catch {}
+      feed = { status: stored.length ? 'ready' : 'loading', notes: stored };
+      refreshFeed();
+    }
+    return feed;
+  }
+  // A follow list that changed means a feed built from the wrong authors.
+  function feedAuthorsChanged() {
+    if (!feed) return;
+    feedAt = 0;
+    refreshFeed();
+  }
+  function mergeFeed(evs) {
+    const c = feedNow();
+    const seen = new Set(c.notes.map((e) => e.id));
+    const add = (evs || []).filter((e) => e.kind === 1 && !isReply(e) && !seen.has(e.id) && seen.add(e.id));
+    if (!add.length) return false;
+    c.notes = [...c.notes, ...add].sort((a, b) => b.created_at - a.created_at).slice(0, FEED_KEEP);
+    try { wallet.saveFeatureState(FEED_CACHE, c.notes.slice(0, FEED_STORE).map(slimNote)); } catch {}
+    return true;
+  }
+  async function refreshFeed() {
+    const authors = feedAuthors();
+    if (!authors.length) { if (feed) feed.status = 'ready'; return; }
+    if (Date.now() - feedAt < 30_000) return;
+    feedAt = Date.now();
+    try {
+      const evs = await queryOn(zapRelays(), { kinds: [1], authors, limit: FEED_LIMIT }, 5000);
+      mergeFeed(evs);
+    } catch {} finally {
+      if (feed) feed.status = 'ready';
+      scheduleRepaint();
+    }
+    watchFeed();
+  }
+  // While the feed is what's on screen, new posts arrive by themselves.
+  function watchFeed() {
+    stopFeedWatch();
+    const authors = feedAuthors();
+    if (!authors.length || !ui.chatOpen || ui.msgView !== 'feed') return;
+    feedUnsub = subscribeOn(zapRelays(), { kinds: [1], authors, since: Math.floor(Date.now() / 1000) - 60 },
+      (ev) => { if (mergeFeed([ev])) scheduleRepaint(); });
+  }
+  function stopFeedWatch() {
+    if (feedUnsub) { try { feedUnsub(); } catch {} feedUnsub = null; }
+  }
+  async function loadOlderFeed() {
+    const c = feedNow();
+    if (c.status !== 'ready' || c.loadingMore || c.end) return;
+    const oldest = c.notes[c.notes.length - 1];
+    const authors = feedAuthors();
+    if (!oldest || !authors.length) { c.end = true; return; }
+    c.loadingMore = true;
+    render();
+    try {
+      const evs = await queryOn(zapRelays(),
+        { kinds: [1], authors, limit: FEED_LIMIT, until: oldest.created_at - 1 }, 5000);
+      if (!mergeFeed(evs)) c.end = true;
+    } catch {} finally {
+      c.loadingMore = false;
+      render();
     }
   }
 
@@ -2460,7 +2633,7 @@ export function messagesFeature(ctx) {
   // at the top of the feed before any signing or relay round-trip (a remote
   // signer alone can take seconds), swapped for the signed event on success
   // and withdrawn on failure.
-  async function publishPost(text) {
+  async function publishPost(text, media = []) {
     const id = await requireIdentity();
     const temp = {
       id: 'pending:' + Math.random().toString(36).slice(2),
@@ -2470,18 +2643,26 @@ export function messagesFeature(ctx) {
     const caches = [...new Set([id.pubkey, ui.profilePk].filter(Boolean))]
       .map((pk) => notesCache.get(pk)).filter(Boolean);
     for (const c of caches) c.notes = [temp, ...c.notes];
+    // your own post belongs at the top of your own feed too, before any
+    // relay has heard of it
+    if (feed) { feed.notes = [temp, ...feed.notes]; }
     render();
     try {
-      const partial = { kind: 1, content: text, created_at: temp.created_at, tags: [CLIENT_TAG] };
+      // NIP-92: what we uploaded, described, so clients needn't sniff the URL
+      const imeta = media.filter((m) => m && m.url)
+        .map((m) => ['imeta', 'url ' + m.url, ...(m.m ? ['m ' + m.m] : [])]);
+      const partial = { kind: 1, content: text, created_at: temp.created_at, tags: [...imeta, CLIENT_TAG] };
       const evt = id.signer instanceof Uint8Array ? finalizeEvent(partial, id.signer) : await id.signer.signEvent(partial);
       const relays = [...new Set([...(await notesRelays(id.pubkey)), ...wallet.nostrRelays()])];
       const ok = await publishOn(relays, evt);
       if (!ok) throw new Error(t('msgSendFailed'));
       for (const c of caches) c.notes = c.notes.map((e) => (e.id === temp.id ? evt : e));
+      if (feed) feed.notes = feed.notes.map((e) => (e.id === temp.id ? evt : e));
       render();
       return evt;
     } catch (e) {
       for (const c of caches) c.notes = c.notes.filter((e) => e.id !== temp.id);
+      if (feed) feed.notes = feed.notes.filter((e) => e.id !== temp.id);
       render();
       throw e;
     }
@@ -2913,31 +3094,7 @@ export function messagesFeature(ctx) {
                 // and channels: a reload (say, to reconnect a signer) brings
                 // the half-written post back, composer open. Posting clears
                 // it; Cancel just closes the composer and keeps the text.
-                (ui.profCompose == null && !draftFor(POST_DRAFT)) ? null : h('div', { class: 'col', style: 'gap:8px' },
-                  h('textarea', {
-                    rows: '3', placeholder: t('profComposePh'),
-                    style: 'font-family:var(--sans);min-height:64px',
-                    value: ui.profCompose == null ? draftFor(POST_DRAFT) : ui.profCompose,
-                    onInput: (ev) => { ui.profCompose = ev.target.value; setDraft(POST_DRAFT, ev.target.value); },
-                  }),
-                  h('div', { class: 'row gap6' },
-                    h('button', { class: 'btn-primary grow', onClick: async () => {
-                      const text = (ui.profCompose == null ? draftFor(POST_DRAFT) : ui.profCompose || '').trim();
-                      if (!text) return;
-                      // the post is on screen instantly (publishPost is
-                      // optimistic) — close the composer now; a failure
-                      // reopens it with the text intact
-                      ui.profCompose = null;
-                      setDraft(POST_DRAFT, '');
-                      try { await publishPost(text); toast(t('profPosted')); }
-                      catch (e) {
-                        ui.profCompose = text;
-                        setDraft(POST_DRAFT, text);
-                        if (!e.silent) toast(e.message || String(e));
-                        render();
-                      }
-                    } }, t('profPostBtn')),
-                    h('button', { class: 'btn-ghost', onClick: () => { ui.profCompose = null; render(); } }, t('cancel')))),
+                postComposer(),
                 // the non-destructive way out: add another identity (Nostr,
                 // passkey, Google) next to this one and switch between them
                 // on the Accounts screen — logout stays for actually leaving
@@ -2978,7 +3135,14 @@ export function messagesFeature(ctx) {
                   ui.tab = 'send';
                   render();
                   hook('matchSendText', npubStr);
-                } }, t('profPay')))),
+                } }, t('profPay')),
+                // Follow: their posts join your feed, and the service worker
+                // learns to treat their DMs as a friend's rather than a
+                // stranger's.
+                h('button', {
+                  class: (isFollowing(pk) ? 'btn-ghost ' : '') + 'grow', disabled: followsPub,
+                  onClick: () => toggleFollow(pk),
+                }, isFollowing(pk) ? t('feedFollowing') : t('feedFollow')))),
       // Their public notes: the PAGE scrolls (no inner scrollbox), older
       // pages stream in as you near the bottom (the init() scroll listener →
       // loadOlderNotes), and on phones the feed goes full-bleed — edge to
@@ -3009,6 +3173,99 @@ export function messagesFeature(ctx) {
   }
 
   const backBtn = (onClick) => h('button', { class: 'iconbtn chat-back', onClick }, '‹');
+
+  // ---- the post composer ----------------------------------------------------
+  // Shared by the profile page and the feed. A picture is uploaded the moment
+  // it's picked and its URL appended to the text — which is how every nostr
+  // client reads media — with a NIP-92 imeta tag published beside it for the
+  // ones that would rather have the metadata than sniff the URL.
+  const composeText = () => (ui.profCompose == null ? draftFor(POST_DRAFT) : ui.profCompose || '');
+  async function attachMedia(file) {
+    if (!file || !ctx.uploadImage) return;
+    ui.postUploading = true; render();
+    try {
+      const url = await ctx.uploadImage(file);
+      (ui.postMedia ||= []).push({ url, m: file.type || '' });
+      const cur = composeText().replace(/\s+$/, '');
+      const next = (cur ? cur + '\n' : '') + url;
+      ui.profCompose = next;
+      setDraft(POST_DRAFT, next);
+    } catch (e) { toast(e.message || String(e)); }
+    ui.postUploading = false; render();
+  }
+  const CLIP = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:block"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>';
+  function postComposer() {
+    if (ui.profCompose == null && !draftFor(POST_DRAFT)) return null;
+    const text = composeText();
+    return h('div', { class: 'col', style: 'gap:8px' },
+      h('textarea', {
+        rows: '3', placeholder: t('profComposePh'),
+        style: 'font-family:var(--sans);min-height:64px',
+        value: text,
+        onInput: (ev) => { ui.profCompose = ev.target.value; setDraft(POST_DRAFT, ev.target.value); },
+      }),
+      h('div', { class: 'row gap6' },
+        h('button', { class: 'btn-primary grow', disabled: !!ui.postUploading, onClick: async () => {
+          const body = composeText().trim();
+          if (!body) return;
+          const media = (ui.postMedia || []).filter((m) => body.includes(m.url));
+          // the post is on screen instantly (publishPost is optimistic) —
+          // close the composer now; a failure reopens it with the text intact
+          ui.profCompose = null;
+          ui.postMedia = [];
+          setDraft(POST_DRAFT, '');
+          try { await publishPost(body, media); toast(t('profPosted')); }
+          catch (e) {
+            ui.profCompose = body;
+            ui.postMedia = media;
+            setDraft(POST_DRAFT, body);
+            if (!e.silent) toast(e.message || String(e));
+            render();
+          }
+        } }, t('profPostBtn')),
+        ctx.uploadImage ? h('button', {
+          class: 'btn-sm', title: t('feedAttach'), disabled: !!ui.postUploading,
+          onClick: () => document.getElementById('post-file')?.click(),
+        }, ui.postUploading ? h('span', { class: 'spinner sm' }) : h('span', { style: 'display:flex', html: CLIP })) : null,
+        h('input', {
+          type: 'file', id: 'post-file', accept: 'image/*,video/*', style: 'display:none',
+          onChange: async (e) => { const f = e.target.files && e.target.files[0]; e.target.value = ''; await attachMedia(f); },
+        }),
+        h('button', { class: 'btn-ghost', onClick: () => { ui.profCompose = null; render(); } }, t('cancel'))));
+  }
+
+  // ---- the feed view --------------------------------------------------------
+  function feedView() {
+    const c = feedNow();
+    const authors = feedAuthors();
+    const rows = c.notes.flatMap((ev, i) => [
+      i ? h('div', { style: 'height:1px;background:var(--border,rgba(128,128,128,.18));margin:0 -14px' }) : null,
+      noteRow(ev.pubkey, ev, displayName(ev.pubkey)),
+    ]);
+    // the chat shell draws the brand header; this is just the page under it
+    return h('div', { class: 'card col chat-page', style: 'gap:10px' },
+        h('div', { class: 'row gap6', style: 'align-items:center' },
+          backBtn(() => { ui.msgView = 'home'; stopFeedWatch(); render(); }),
+          h('h3', { style: 'margin:0' }, t('feedTitle')),
+          h('button', {
+            class: 'btn-sm', style: 'margin-left:auto',
+            onClick: () => { ui.profCompose = ui.profCompose == null ? (draftFor(POST_DRAFT) || '') : null; render(); },
+          }, t('profNewPost'))),
+        postComposer(),
+        !authors.length
+          ? h('div', { class: 'col', style: 'gap:8px' },
+              h('div', { class: 'small muted' }, t('feedNoFollows')),
+              h('button', { class: 'btn-sm', onClick: () => { stopFeedWatch(); hook('openUserSearch'); render(); } }, t('feedFindPeople')))
+          : c.status === 'loading' && !c.notes.length
+            ? h('div', { class: 'row gap6', style: 'justify-content:center;padding:12px 0' }, h('span', { class: 'spinner sm' }))
+            : !c.notes.length
+              ? h('div', { class: 'small faint', style: 'text-align:center;padding:12px 0' }, t('feedEmpty'))
+              : h('div', { class: 'card col notes-feed', style: 'gap:0' }, ...rows),
+        c.loadingMore
+          ? h('div', { class: 'row gap6', style: 'justify-content:center;padding:4px 0' }, h('span', { class: 'spinner sm' }))
+          : null);
+  }
+
 
   // ---- user search: the header magnifier ----------------------------------
   // Same engine the Send form and DMs use (registrar names + Primal cache +
@@ -3283,6 +3540,21 @@ export function messagesFeature(ctx) {
             class: 'btn-ghost btn-sm',
             onClick: () => { const s = st(); s.pushDismissed = true; save(s); render(); },
           }, t('msgDismiss')))));
+
+    // ---- the feed, above the conversations: it's the thing you read, they're
+    // the things you answer
+    kids.push(h('div', { class: 'list' },
+      h('div', {
+        class: 'item chat-thread-row',
+        onClick: () => { ui.msgView = 'feed'; feedNow(); watchFeed(); render(); },
+      },
+      h('div', { class: 'chat-avatar fallback' }, '\u2605'),
+      h('div', { class: 'col grow', style: 'min-width:0;gap:1px' },
+        h('span', { class: 'chat-name' }, t('feedTitle')),
+        h('div', { class: 'muted small' },
+          followsNow().set.size === 1 ? t('feedFollowing1')
+            : followsNow().set.size ? t('feedFollowingN', { n: followsNow().set.size })
+            : t('feedNoFollowsShort'))))));
 
     // ---- DMs
     kids.push(h('div', { class: 'row between', style: 'align-items:baseline' },
@@ -3762,6 +4034,7 @@ export function messagesFeature(ctx) {
   // ---- feature ------------------------------------------------------------
 
   function messagesTab() {
+    if (ui.msgView === 'feed') return feedView();
     if (ui.msgView === 'room') return roomView();
     if (ui.msgView === 'dm') return dmView();
     return homeView();
@@ -3946,6 +4219,7 @@ export function messagesFeature(ctx) {
       for (const jm of communities()) { try { ensureRoom(jm, { subscribe: false }); } catch {} }
       syncLists().catch(() => {});
       syncInbox().catch(() => {});
+      syncFollows().catch(() => {}); // the Follow button should be right on first paint
       registerPush().catch(() => {}); // silent refresh when permission already granted
     },
     stop() {
@@ -3961,6 +4235,8 @@ export function messagesFeature(ctx) {
       listsSynced = false;
       if (zapLiveUnsub) { try { zapLiveUnsub(); } catch {} zapLiveUnsub = null; }
       clearTimeout(zapTimer); zapTimer = null; zapQueue = new Set(); zapRecent = [];
+      stopFeedWatch();
+      follows = null; followsAt = 0; feed = null; feedAt = 0;
       clearTimeout(zapSaveT); zapSaveT = null; zapSeed = null;
       zapTotals.clear(); zapAsked.clear(); zapPending.clear(); // 'mine' is per identity — refetch under the next
     },

@@ -5209,7 +5209,3 @@ loadLocale(getLang()).finally(async () => {
   _bootDeciding = false; // from here on the screen is a decision, not a guess
   if (!restoreAccountsState()) render();
 });
-
-
-
-

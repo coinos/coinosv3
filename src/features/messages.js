@@ -1267,8 +1267,38 @@ export function messagesFeature(ctx) {
     } catch { inboxAt = 0; }
   }
 
+  // The Android wrapper hands us a UnifiedPush endpoint on its launch URL
+  // (?up=), because the distributor talks to the app and only the web app
+  // knows which pubkeys are worth watching. On a phone without Google Play
+  // Services this is the ONLY way to be reached while closed, so it takes
+  // precedence over the browser's own push — which there doesn't work at all.
+  const UP_KEY = 'coinos-unifiedpush';
+  const upEndpoint = () => { try { return localStorage.getItem(UP_KEY) || null; } catch { return null; } };
+  (() => {
+    try {
+      const u = new URLSearchParams(location.search).get('up');
+      if (!u) return;
+      localStorage.setItem(UP_KEY, u);
+      // tidy the URL the way the payment intent does
+      history.replaceState(null, '', location.pathname || '/');
+    } catch {}
+  })();
+
   async function registerPush({ interactive = false } = {}) {
     try {
+      // A UnifiedPush endpoint needs no permission and no push service: it's
+      // a URL the distributor gave the wrapper, and the notifier POSTs to it.
+      const up = upEndpoint();
+      if (up) {
+        const r = await fetch(`${NOTIFIER}/register`, {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ subscription: { endpoint: up, unifiedpush: true }, notify: pushWatch() }),
+        });
+        if (!r.ok) return false;
+        const s2 = st();
+        if (!s2.push || s2.noPushService) { s2.push = true; delete s2.noPushService; save(s2); }
+        return true;
+      }
       if (typeof Notification === 'undefined' || !('serviceWorker' in navigator) || !('PushManager' in window)) return false;
       if (Notification.permission !== 'granted') {
         if (!interactive) return false;

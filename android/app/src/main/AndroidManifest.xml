@@ -7,6 +7,15 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
   <!-- NFC is a way in (bolt cards, NDEF tags), never a requirement -->
   <uses-feature android:name="android.hardware.nfc" android:required="false" />
+  <!-- our own notifications, raised from UnifiedPush messages (Android 13+) -->
+  <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+  <!-- Which apps can act as a UnifiedPush distributor: Android 11+ hides the
+       package list unless we say what we're looking for. -->
+  <queries>
+    <intent>
+      <action android:name="org.unifiedpush.android.distributor.REGISTER" />
+    </intent>
+  </queries>
   <application
       android:label="@string/app_name"
       android:icon="@mipmap/ic_launcher"
@@ -86,5 +95,18 @@
         <data android:scheme="https" android:host="v3.coinos.io" />
       </intent-filter>
     </activity>
+    <!-- UnifiedPush: the distributor broadcasts here. Web push needs Google
+         Play Services on Android, so on a de-Googled phone this is the only
+         way the wallet can be reached at all while it isn't open. -->
+    <receiver
+        android:name="io.coinos.app.PushReceiver"
+        android:exported="true">
+      <intent-filter>
+        <action android:name="org.unifiedpush.android.connector.NEW_ENDPOINT" />
+        <action android:name="org.unifiedpush.android.connector.REGISTRATION_FAILED" />
+        <action android:name="org.unifiedpush.android.connector.UNREGISTERED" />
+        <action android:name="org.unifiedpush.android.connector.MESSAGE" />
+      </intent-filter>
+    </receiver>
   </application>
 </manifest>

@@ -595,7 +595,28 @@ export function nwcFeature(ctx) {
     return /push service|Registration failed|AbortError|NotSupportedError|permission denied/i.test(m);
   };
 
+  // The Android wrapper's UnifiedPush endpoint, if it handed us one (see
+  // messages.js, which reads it off the launch URL). It needs no permission
+  // and no push service, and on a phone without Google Play Services it is
+  // the only way to be reached at all.
+  const upEndpoint = () => { try { return localStorage.getItem('coinos-unifiedpush') || null; } catch { return null; } };
+
   async function enableBackground() {
+    const up = upEndpoint();
+    if (up) {
+      const pksUp = conns().map((c) => c.servicePk);
+      if (load().offer) pksUp.push(load().offer.pk);
+      if (pksUp.length) {
+        const r = await fetch(`${NOTIFIER}/register`, {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ subscription: { endpoint: up, unifiedpush: true }, servicePubkeys: pksUp }),
+        });
+        if (!r.ok) throw new Error(`notifier refused: ${r.status}`);
+      }
+      const stUp = load(); stUp.background = true; delete stUp.pushUnavailable; save(stUp);
+      writeBg();
+      return true;
+    }
     if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
       throw new Error(t('nwcNoPushHere'));
     }
@@ -643,11 +664,13 @@ export function nwcFeature(ctx) {
   async function ensureBackground(interactive) {
     const st = load();
     if (st.background || st.backgroundOff) return;
-    if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)
-      || typeof window === 'undefined' || !('PushManager' in window)
-      || typeof Notification === 'undefined') return;
     if (!conns().length) return;
-    if (!interactive && Notification.permission !== 'granted') return;
+    if (!upEndpoint()) {
+      if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)
+        || typeof window === 'undefined' || !('PushManager' in window)
+        || typeof Notification === 'undefined') return;
+      if (!interactive && Notification.permission !== 'granted') return;
+    }
     try {
       await enableBackground();
       await reconcileBg();
@@ -691,15 +714,16 @@ export function nwcFeature(ctx) {
     clearTimeout(regTimer);
     regTimer = setTimeout(async () => {
       try {
-        const reg = await navigator.serviceWorker.ready;
-        const sub = await reg.pushManager.getSubscription();
-        if (!sub) return;
         const pks = conns().map((c) => c.servicePk);
         if (load().offer) pks.push(load().offer.pk);
         if (!pks.length) return;
+        const up2 = upEndpoint();
+        const sub = up2 ? { endpoint: up2, unifiedpush: true }
+          : await (await navigator.serviceWorker.ready).pushManager.getSubscription().then((x) => x && x.toJSON());
+        if (!sub) return;
         await fetch(`${NOTIFIER}/register`, {
           method: 'POST', headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ subscription: sub.toJSON(), servicePubkeys: pks }),
+          body: JSON.stringify({ subscription: sub, servicePubkeys: pks }),
         });
       } catch (e) { console.warn('nwc: notifier re-register failed', e.message); }
     }, 1500);

@@ -48,6 +48,35 @@ const REQ_KIND = 23194;
 const OFFER_KIND = 21001;
 
 webpush.setVapidDetails(CFG.vapid.subject, CFG.vapid.publicKey, CFG.vapid.privateKey);
+
+// Two ways to reach a device.
+//
+// Web Push is the browser's, and on Android it is Firebase's — a phone
+// without Google Play Services (GrapheneOS and friends) can't subscribe at
+// all. UnifiedPush is the other way: the user runs a distributor, the app
+// gets an endpoint, and anyone wanting to reach the device POSTs the payload
+// to it. No encryption envelope and no VAPID — the endpoint is the secret,
+// which is why we never log one in full.
+//
+// A subscription marked `unifiedpush` is the second kind; everything else is
+// a browser's. One function, so every send path serves both.
+const isUP = (sub) => !!(sub && sub.unifiedpush && typeof sub.endpoint === 'string');
+async function deliver(sub, payload, opts = {}) {
+  if (!isUP(sub)) return webpush.sendNotification(sub, payload, opts);
+  const res = await fetch(sub.endpoint, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: payload,
+    signal: AbortSignal.timeout(8000),
+  });
+  if (!res.ok) {
+    // shaped like web-push's errors so the callers' 404/410 pruning works
+    const err = new Error(`unifiedpush ${res.status}`);
+    err.statusCode = res.status;
+    throw err;
+  }
+  return res;
+}
 const log = (...a) => console.log(new Date().toISOString(), ...a);
 
 // ---------------------------------------------------------------------------
@@ -158,14 +187,14 @@ async function pushNotify(id, r, reason, extra) {
   const payload = JSON.stringify({ type: 'notify', reason, ...extra });
   try {
     try {
-      await webpush.sendNotification(r.sub, payload, { TTL: 3600, urgency: 'normal' });
+      await deliver(r.sub, payload, { TTL: 3600, urgency: 'normal' });
     } catch (e) {
       // A payload the push service won't take (413, or the library refusing
       // the size) must not cost the notification itself — send the bare nudge
       // and let the device show its generic message.
       if (!extra.wrap || (e.statusCode && e.statusCode !== 413)) throw e;
       log(`notify(dm): payload rejected (${e.statusCode || e.message}), retrying bare`);
-      await webpush.sendNotification(r.sub, JSON.stringify({ type: 'notify', reason }), { TTL: 3600, urgency: 'normal' });
+      await deliver(r.sub, JSON.stringify({ type: 'notify', reason }), { TTL: 3600, urgency: 'normal' });
     }
     log(`notify(${reason}) -> device ${id}`);
   } catch (e) {
@@ -261,7 +290,7 @@ async function wake(servicePk, eventId, ev) {
   let ok = 0;
   for (const r of targets) {
     try {
-      await webpush.sendNotification(r.sub, payload, { TTL: 60, urgency: 'high' });
+      await deliver(r.sub, payload, { TTL: 60, urgency: 'high' });
       ok++;
     } catch (e) {
       // 404/410 mean the browser dropped the subscription: forget it.

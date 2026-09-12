@@ -15,6 +15,7 @@ import { dataSources, getSource, setSource, getNetwork, setNetwork, NETWORKS } f
 import { STAGING } from './build-flags.js';
 import { buildFeatures, loadDeferredFeatures } from './features/index.js';
 import { t, LANGS, getLang, setLang, isRTL, loadLocale } from './i18n.js';
+import { rateNow, rateAt, refreshRates, haveRate, getCurrency, setCurrency, currencies, fmtFiat } from './rates.js';
 import {
   fmtBtc,
   fmtSats,
@@ -790,24 +791,56 @@ function pasteInto(ta, apply) {
 // logouts. Every unit label on the site is clickable to toggle it.
 const UNIT_KEY = 'btc-wallet-unit';
 let unit = (() => {
-  // Default to sats for first-time users; only an explicit 'btc' choice sticks.
+  // Default to sats for first-time users; only an explicit choice sticks.
   try {
-    return localStorage.getItem(UNIT_KEY) === 'btc' ? 'btc' : 'sats';
+    const v = localStorage.getItem(UNIT_KEY);
+    return v === 'btc' || v === 'fiat' ? v : 'sats';
   } catch {
     return 'sats';
   }
 })();
 
+// sats → BTC → your money → sats. Fiat is a display unit like the other two
+// rather than a second number beside them: the balance is one figure, and
+// which figure is your choice. It's skipped entirely when no price has ever
+// been fetched — a third position showing blanks is worse than two that work.
 function toggleUnit() {
-  unit = unit === 'btc' ? 'sats' : 'btc';
+  const ring = haveRate() ? ['sats', 'btc', 'fiat'] : ['sats', 'btc'];
+  unit = ring[(ring.indexOf(unit) + 1) % ring.length];
   try {
     localStorage.setItem(UNIT_KEY, unit);
   } catch {}
   render();
 }
 
-const unitLabel = () => (unit === 'sats' ? 'sats' : 'BTC');
-const fmtAmount = (sats) => (unit === 'sats' ? fmtSats(sats) : fmtBtc(sats));
+const unitLabel = () => (unit === 'sats' ? 'sats' : unit === 'fiat' ? getCurrency() : 'BTC');
+
+// "Worth X then · Y now" for a payment's detail page — the one place both
+// numbers earn their keep, because that page is where the question is asked.
+// Absent when there's no price, and when the two would say the same thing.
+function worthLine(sats, at, row = null) {
+  const then = rateAt(at);
+  const now = rateNow();
+  if (!now || !at) return null;
+  const line = row || ((k, v) => h('div', { class: 'line' }, h('span', { class: 'k' }, k), h('span', { class: 'v' }, v)));
+  const thenStr = then.rate && !then.stale ? fmtFiat(sats, then.rate) : null;
+  const nowStr = fmtFiat(sats, now);
+  if (!thenStr) return line(t('worthNow'), nowStr);
+  return line(t('worthThen'), thenStr + (thenStr === nowStr ? '' : ' · ' + t('worthNowInline', { v: nowStr })));
+}
+// `at` is when the money moved. In fiat it picks the price recorded at that
+// moment, so a payment is shown for what it was worth then — the number the
+// rest of the world remembers it by. Without it (a balance, a form) the live
+// price is used. A '~' means we had no sample near that time and had to price
+// it at today's, which is a different claim and shouldn't look like the same
+// one.
+const fmtAmount = (sats, at) => {
+  if (unit === 'sats') return fmtSats(sats);
+  if (unit === 'btc') return fmtBtc(sats);
+  const { rate, stale } = rateAt(at);
+  if (!rate) return fmtSats(sats);
+  return (stale && at ? '~' : '') + fmtFiat(sats, rate);
+};
 
 // A clickable unit label. cls lets callers inherit surrounding sizing.
 function unitTag(cls = '') {
@@ -2296,7 +2329,7 @@ function settingsTab() {
   switch (ui.settingsPage) {
     case 'wallet': return page(a ? [walletNameCard(a), pubkeyCard(a), recoveryCard(a)] : []);
     case 'payments': return page(featureAll('settingsCards').reverse());
-    case 'network': return page([networkCard(), explorerCard()]);
+    case 'network': return page([networkCard(), currencyCard(), explorerCard()]);
     case 'nostr': return nostrSettingsView();
     case 'notifications': return page(featureAll('notifySettingsCards').reverse());
     case 'advanced': return advancedSettingsView();
@@ -2454,6 +2487,26 @@ function explorerCard() {
   );
 }
 
+
+// Which money the third tap on an amount shows. The list is whatever the
+// rates endpoint carries, so it's every currency coinos knows a price for.
+// Changing it starts the recorded price history again: the samples behind
+// "worth then" are denominated in the currency they were taken in, and
+// relabelling them would be a lie.
+function currencyCard() {
+  const codes = currencies();
+  return h(
+    'div',
+    { class: 'card col' },
+    h('h3', {}, t('currencyLabel')),
+    h('select', {
+      value: getCurrency(),
+      onChange: (e) => { setCurrency(e.target.value); refreshRates({ force: true }).then(render); render(); },
+    }, codes.map((c) => h('option', { value: c, selected: c === getCurrency() }, c))),
+    h('div', { class: 'small faint' }, t('currencyHint')),
+    rateNow() ? h('div', { class: 'small muted' }, '1 BTC = ' + fmtFiat(SATS, rateNow())) : null
+  );
+}
 
 // Language selector. Changing it persists the choice, flips text direction for
 // RTL languages, and re-renders the whole app in the new language.
@@ -4572,7 +4625,7 @@ function reviewSend() {
       recipients = s.recipients.map((r, i) => {
         const addr = r.address.trim();
         if (!addr) throw new Error(t('enterAddrForN', { n: i + 1 }));
-        const sats = parseAmount(r.amount, unit);
+        const sats = parseAmount(r.amount, unit, rateNow());
         if (!sats || sats <= 0) throw new Error(t('enterValidAmtForN', { n: i + 1 }));
         return { address: addr, amount: sats };
       });
@@ -4746,8 +4799,9 @@ function txHistoryItem(tx) {
       h('div', { class: 'small faint' }, tx.confirmed ? timeAgo(tx.blockTime) : stuck ? t('stuckNote') : t('awaitingConfirmation'))
     ),
     h('div', { style: 'text-align:right' },
-      h('div', { class: incoming ? 'amount-pos' : 'amount-neg' }, (incoming ? '+' : '') + fmtAmount(tx.net)),
-      !incoming && tx.fee ? h('div', { class: 'small faint' }, t('feeShort', { x: fmtAmount(tx.fee) })) : null
+      // priced at the moment it happened, not at today's number
+      h('div', { class: incoming ? 'amount-pos' : 'amount-neg' }, (incoming ? '+' : '') + fmtAmount(tx.net, tx.blockTime)),
+      !incoming && tx.fee ? h('div', { class: 'small faint' }, t('feeShort', { x: fmtAmount(tx.fee, tx.blockTime) })) : null
     )
   );
 }
@@ -4864,14 +4918,17 @@ function txDetailView(tx) {
       h('span', { class: `tag ${tx.confirmed ? 'conf' : 'pending'}` }, tx.confirmed ? t('confirmedTag') : t('pendingTag'))
     ),
     h('div', { class: 'amt', style: 'font-size:30px' },
-      h('span', { class: incoming ? 'amount-pos' : 'amount-neg' }, (incoming ? '+' : '') + fmtAmount(tx.net)),
+      h('span', { class: incoming ? 'amount-pos' : 'amount-neg' }, (incoming ? '+' : '') + fmtAmount(tx.net, tx.blockTime)),
       ' ', unitTag('unit')
     ),
     h('div', { class: 'summary col', style: 'gap:0' },
       line(t('status'), tx.confirmed ? t('confirmed') : t('pending')),
       tx.confirmed ? line(t('block'), String(tx.blockHeight || '—')) : null,
       tx.confirmed && tx.blockTime ? line(t('date'), new Date(tx.blockTime * 1000).toLocaleString()) : null,
-      tx.fee ? line(t('networkFee'), fmtAmount(tx.fee) + ' ' + unitLabel()) : null
+      // what it was worth then, beside what it is now — the one place both
+      // numbers earn their keep, because this is the page you open to ask
+      worthLine(tx.net, tx.blockTime),
+      tx.fee ? line(t('networkFee'), fmtAmount(tx.fee, tx.blockTime) + ' ' + unitLabel()) : null
     ),
     ...FEATURES.map((f) => (f.txDetailSection ? f.txDetailSection(tx) : null)),
     !tx.confirmed && wallet.isStuck(tx)
@@ -4944,7 +5001,10 @@ async function importSnapshotFile(e) {
 // only invoked at runtime (first render happens after loadLocale below).
 const ctx = {
   h, ui, render, wallet, toast, copy, copyBtn, pasteBtn, blankSend, goBack, goHome, openExternal,
-  fmtAmount, unitLabel, unitTag, parseAmount, getUnit: () => unit, toggleUnit, download,
+  fmtAmount, unitLabel, unitTag, getUnit: () => unit, toggleUnit, download,
+  // in fiat the typed figure is money, so it needs today's price to become sats
+  parseAmount: (v, u) => parseAmount(v, u, rateNow()),
+  worthLine,
   // "The next balance isn't a change, it's the first real value" — state
   // arriving late (the ark store opening past boot's patience) must not read
   // as money landing: without this the balance counts up from 0 in green,
@@ -5204,6 +5264,10 @@ loadLocale(getLang()).finally(async () => {
   // counted itself up in green as if money had just come in. The shell is on
   // screen either way; waiting shows it a moment longer rather than showing a
   // wrong balance. The hook caps its own wait.
+  // The price, early: the unit toggle only offers fiat once we've had one,
+  // and a wallet opening in fiat should open with a number in it.
+  refreshRates().then(() => { if (unit === 'fiat') render(); }).catch(() => {});
+  setInterval(() => { refreshRates().then(() => { if (unit === 'fiat') render(); }).catch(() => {}); }, 10 * 60_000);
   const storeReady = featureHook('arkStoreReady');
   if (storeReady) await storeReady;
   _bootDeciding = false; // from here on the screen is a decision, not a guess

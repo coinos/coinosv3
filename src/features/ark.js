@@ -1224,7 +1224,7 @@ export function arkFeature(ctx) {
           h('div', {}, t('arkHistoryIncomplete')),
           h('div', { class: 'small faint' }, t('arkDetailsNotSynced'))),
         h('div', { style: 'text-align:right' },
-          h('div', { class: 'small muted' }, fmtAmount(m.amountSat) + ' ' + unitLabel())));
+          h('div', { class: 'small muted' }, fmtAmount(m.amountSat, m.ts / 1000) + ' ' + unitLabel())));
     }
     // a renewal moves nothing anywhere — its history amount is what it COST
     if (m.type === 'refresh') {
@@ -1266,7 +1266,8 @@ export function arkFeature(ctx) {
           m.status !== 'complete' && !failed ? h('span', { class: 'tag pending' }, m.status) : null),
         h('div', { class: 'small faint' }, timeAgo(m.ts / 1000))),
       h('div', { style: 'text-align:right' },
-        h('div', { class: failed ? 'muted' : incoming ? 'amount-pos' : 'amount-neg' }, (failed ? '' : incoming ? '+' : '-') + fmtAmount(m.amountSat)))
+        // in fiat this is what the payment was worth when it was made
+        h('div', { class: failed ? 'muted' : incoming ? 'amount-pos' : 'amount-neg' }, (failed ? '' : incoming ? '+' : '-') + fmtAmount(m.amountSat, m.ts / 1000)))
     );
   }
 
@@ -1376,8 +1377,9 @@ export function arkFeature(ctx) {
         ? h('div', { class: m.feeSat > 0 ? 'amount-neg' : 'small faint', style: 'font-size:20px' },
             m.feeSat > 0 ? '-' + fmtAmount(m.feeSat) + ' ' + unitLabel() : t('arkDepthFree'))
         : h('div', { class: failed ? 'muted' : incoming ? 'amount-pos' : 'amount-neg', style: 'font-size:20px' },
-            (failed ? '' : incoming ? '+' : '-') + fmtAmount(m.amountSat) + ' ' + unitLabel()),
+            (failed ? '' : incoming ? '+' : '-') + fmtAmount(m.amountSat, m.ts / 1000) + ' ' + unitLabel()),
       row(t('dateLabel'), new Date(m.ts).toLocaleString()),
+      ctx.worthLine ? ctx.worthLine(m.amountSat, m.ts / 1000, row) : null,
       (() => {
         const pk = zapNoteFor(m);
         const chip = pk ? ctx.hook('profileChip', pk) : null;

@@ -39,11 +39,15 @@ export function fmtUsd(sats, price) {
   return usd.toLocaleString('en-US', { style: 'currency', currency: 'USD' });
 }
 
-// Parse a user-entered amount. Accepts BTC (default) or sats.
-export function parseAmount(value, unit) {
+// Parse a user-entered amount. Accepts BTC (default), sats, or — when the
+// display unit is the user's own money and a rate is passed — that: typing 5
+// with the unit on USD means five dollars' worth, priced right now.
+export function parseAmount(value, unit, rate = null) {
   const n = Number(String(value).trim().replace(/,/g, ''));
   if (!isFinite(n) || n < 0) return null;
-  return unit === 'sats' ? Math.round(n) : Math.round(n * SATS);
+  if (unit === 'sats') return Math.round(n);
+  if (unit === 'fiat') return rate ? Math.round((n / rate) * SATS) : null;
+  return Math.round(n * SATS);
 }
 
 export function shortAddr(a, head = 10, tail = 8) {

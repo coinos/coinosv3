@@ -45,6 +45,12 @@ public class MainActivity extends Activity {
     setContentView(web, new ViewGroup.LayoutParams(
         ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
+    // A debug build can be inspected from a desktop (chrome://inspect); a
+    // release build of a wallet must not be — anything with ADB access could
+    // read its storage through the same door.
+    if ((getApplicationInfo().flags & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
+      WebView.setWebContentsDebuggingEnabled(true);
+    }
     WebSettings s = web.getSettings();
     s.setJavaScriptEnabled(true);
     s.setDomStorageEnabled(true);          // localStorage + IndexedDB: the wallet

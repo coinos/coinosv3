@@ -3,11 +3,17 @@
      See MainActivity for why that trade exists. -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
   <uses-permission android:name="android.permission.INTERNET" />
+  <!-- the wake job asks to run when there's a network; the scheduler won't
+       take that constraint without this -->
+  <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
   <uses-permission android:name="android.permission.CAMERA" />
-  <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
   <uses-feature android:name="android.hardware.camera" android:required="false" />
-  <application android:usesCleartextTraffic="false">
+  <application
+      android:label="@string/app_name"
+      android:icon="@mipmap/ic_launcher"
+      android:theme="@style/AppTheme"
+      android:supportsRtl="true"
+      android:usesCleartextTraffic="false">
     <activity
         android:name="io.coinos.app.MainActivity"
         android:exported="true"
@@ -43,8 +49,8 @@
     </activity>
     <!-- the off-screen wallet a push wakes -->
     <service
-        android:name="io.coinos.app.WakeService"
+        android:name="io.coinos.app.WakeJob"
         android:exported="false"
-        android:foregroundServiceType="dataSync" />
+        android:permission="android.permission.BIND_JOB_SERVICE" />
   </application>
 </manifest>

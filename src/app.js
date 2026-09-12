@@ -5045,6 +5045,12 @@ const ctx = {
   parseAmount: (v, u) => parseAmount(v, u, rateNow()),
   worthLine,
   openImage: (src) => { ui.lightbox = src; render(); },
+  // What woke this run, if anything did, and how to say we're finished.
+  // Both read through a closure: ctx is built before these are defined, and
+  // a bare `wakeDone` shorthand captured the binding while it was still
+  // undefined — the job then ran its full half minute every time.
+  wakePayload: () => WAKE_PAYLOAD,
+  wakeDone: () => wakeDone(),
   // "The next balance isn't a change, it's the first real value" — state
   // arriving late (the ark store opening past boot's patience) must not read
   // as money landing: without this the balance counts up from 0 in green,
@@ -5124,6 +5130,23 @@ const ctx = {
 // BEFORE features construct: a nostr npub/nprofile rewrites itself onto the
 // existing /npub… profile deep link (which the messages feature reads at
 // construction); payment URIs stash for dispatch once a wallet is open.
+// Woken by the Android wrapper (see android/, WakeJob): the wallet is being
+// loaded off-screen to deal with something. The payload is read once, here,
+// because whether anything CAN be done depends on whether a wallet opens at
+// all — and if none does, the job should end straight away rather than hold
+// a WebView open for half a minute over a locked wallet.
+const WAKE_PAYLOAD = (() => {
+  try {
+    const w = new URLSearchParams(location.search).get('wake');
+    if (w == null) return null;
+    history.replaceState(null, '', location.pathname || '/');
+    return w;
+  } catch { return null; }
+})();
+const wakeDone = () => {
+  try { if (WAKE_PAYLOAD != null && window.CoinosHost && window.CoinosHost.done) window.CoinosHost.done(); } catch {}
+};
+
 const INTENT_URI = (() => {
   try {
     const u = new URLSearchParams(location.search).get('u');
@@ -5311,5 +5334,14 @@ loadLocale(getLang()).finally(async () => {
   const storeReady = featureHook('arkStoreReady');
   if (storeReady) await storeReady;
   _bootDeciding = false; // from here on the screen is a decision, not a guess
-  if (!restoreAccountsState()) render();
+  const opened = restoreAccountsState();
+  if (!opened) render();
+  if (WAKE_PAYLOAD != null) {
+    // Nothing opened — a locked vault, or no wallet on this device. There is
+    // nothing to answer with, so say so now.
+    if (!opened) wakeDone();
+    // And a backstop: a wallet that opened but has no feature interested in
+    // this payload must still end the job.
+    else setTimeout(wakeDone, 40_000);
+  }
 });

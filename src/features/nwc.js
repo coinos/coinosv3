@@ -803,16 +803,17 @@ export function nwcFeature(ctx) {
   // service can stop rather than sit there costing battery. A cap, because
   // "finished" is not always reachable: the relay may have nothing for us.
   function serveWake() {
-    let payload = null;
-    try { payload = new URLSearchParams(location.search).get('wake'); } catch {}
+    const payload = ctx.wakePayload ? ctx.wakePayload() : null;
     if (payload == null) return;
-    try { history.replaceState(null, '', location.pathname || '/'); } catch {}
-    const host = typeof window !== 'undefined' && window.CoinosHost;
+    if (!ctx.wakeDone) return;
+    let settled = false;
+    const finish = () => { if (settled) return; settled = true; ctx.wakeDone(); };
+    // No connections means nothing here could have been asked of us: end the
+    // job now rather than hold a WebView open for half a minute on the
+    // strength of a payload we can't act on.
+    if (!conns().length) { finish(); return; }
     listen();          // the request is on a relay; this is what hears it
     reconcileBg();     // and make sure the pouch behind it is current
-    if (!host || typeof host.done !== 'function') return;
-    let settled = false;
-    const finish = () => { if (settled) return; settled = true; try { host.done(); } catch {} };
     // an answer published is the signal we were woken for
     const stop = onAnswered(() => setTimeout(finish, 1500));
     setTimeout(() => { try { stop(); } catch {} finish(); }, 25_000);

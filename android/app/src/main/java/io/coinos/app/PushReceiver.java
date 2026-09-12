@@ -45,16 +45,28 @@ public class PushReceiver extends BroadcastReceiver {
         byte[] bytes = intent.getByteArrayExtra(Push.EXTRA_BYTES_MESSAGE);
         String body = bytes != null ? new String(bytes) : intent.getStringExtra(Push.EXTRA_MESSAGE);
         // On the WebView build the wallet lives in THIS app's storage, so it
-        // can be woken and told to deal with whatever arrived — no tap. On
-        // the TWA build the wallet is Chrome's and out of reach, so the
-        // notification is the whole of what we can do.
-        if (!Wake.start(context, body)) notify(context, body);
+        // can be woken and told to deal with whatever arrived. On the TWA
+        // build the wallet is Chrome's and out of reach, so the notification
+        // is the whole of what we can do.
+        boolean woke = Wake.start(context, body);
+        // A payment or a message is news whether or not we handled it; a
+        // wallet-connect request is not, unless nobody is going to answer it.
+        if (!woke || !isSilent(body)) notify(context, body);
         Push.ack(context, intent.getStringExtra(Push.EXTRA_ID));
         break;
       }
       default:
         break;
     }
+  }
+
+  /** Requests the woken wallet answers by itself need no notification. */
+  private boolean isSilent(String payload) {
+    try {
+      JSONObject j = new JSONObject(payload == null ? "{}" : payload);
+      String reason = j.optString("reason", j.optString("type", ""));
+      return "nwc".equals(reason) || "request".equals(reason);
+    } catch (Exception e) { return false; }
   }
 
   /**

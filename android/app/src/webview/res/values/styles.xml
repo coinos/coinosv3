@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <!-- The TWA has no chrome of its own; neither should this. Same system-bar
+       colours as the TWA declares, so the two builds look like one app. -->
+  <style name="AppTheme" parent="@android:style/Theme.Material.NoActionBar">
+    <item name="android:statusBarColor">@color/statusBarColor</item>
+    <item name="android:navigationBarColor">@color/navigationBarColor</item>
+    <item name="android:windowBackground">@color/statusBarColor</item>
+  </style>
+</resources>

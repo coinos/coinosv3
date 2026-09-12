@@ -89,7 +89,7 @@ try {
   await page.goto('http://localhost:5263/?wake=' + encodeURIComponent(JSON.stringify({ type: 'nwc', servicePubkey: 'a'.repeat(64) })), { waitUntil: 'domcontentloaded' });
   await waitText('receive', 20000);
   check('a woken run takes the payload off the URL', !(await page.url()).includes('wake='), await page.url());
-  await sleep(27000); // the cap is 25s; a real answer ends it sooner
+  await sleep(8000); // a wallet with no connections has nothing to wait for
   const done = await page.evaluate(() => window.__done);
   check('...and tells the service when to stop', done > 0, done + ' call(s) to CoinosHost.done()');
 } finally { await browser.close(); server.stop(true); }

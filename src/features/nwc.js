@@ -242,6 +242,7 @@ export function nwcFeature(ctx) {
         content,
       }, sk);
       await publish(NWC_RELAYS, evt);
+      noteAnswered(); // a woken background run can stop once this happens
     } catch (e) {
       console.warn('nwc: could not reply', e.message);
     }
@@ -794,6 +795,34 @@ export function nwcFeature(ctx) {
     });
   }
 
+  // ---- woken by the Android wrapper --------------------------------------
+  // The WebView build starts the wallet off-screen when a push arrives, with
+  // ?wake=<payload> on the URL. There's no service worker in that picture —
+  // the page IS the background — so it does the normal thing (subscribe, let
+  // the request arrive, answer it) and then says it's finished, so the
+  // service can stop rather than sit there costing battery. A cap, because
+  // "finished" is not always reachable: the relay may have nothing for us.
+  function serveWake() {
+    let payload = null;
+    try { payload = new URLSearchParams(location.search).get('wake'); } catch {}
+    if (payload == null) return;
+    try { history.replaceState(null, '', location.pathname || '/'); } catch {}
+    const host = typeof window !== 'undefined' && window.CoinosHost;
+    listen();          // the request is on a relay; this is what hears it
+    reconcileBg();     // and make sure the pouch behind it is current
+    if (!host || typeof host.done !== 'function') return;
+    let settled = false;
+    const finish = () => { if (settled) return; settled = true; try { host.done(); } catch {} };
+    // an answer published is the signal we were woken for
+    const stop = onAnswered(() => setTimeout(finish, 1500));
+    setTimeout(() => { try { stop(); } catch {} finish(); }, 25_000);
+  }
+
+  // Callers that want to know when this wallet answered something.
+  const answeredWatchers = new Set();
+  function onAnswered(fn) { answeredWatchers.add(fn); return () => answeredWatchers.delete(fn); }
+  function noteAnswered() { for (const fn of [...answeredWatchers]) { try { fn(); } catch {} } }
+
   // Watchdog: relay sockets can die in ways the pool's reconnect never heals
   // (an errored socket sets skipReconnection and gives up), and a wallet
   // service with a dead subscription is indistinguishable from one that's
@@ -913,7 +942,7 @@ export function nwcFeature(ctx) {
     id: 'nwc',
     nwcOfferPubkey() { return (hook('arkReady') && !wallet.watchOnly) ? offerKeys().pk : null; },
     nwcOfferString() { return hook('arkReady') && !wallet.watchOnly ? offerString() : null; },
-    init() { listen(); startWatchdog(); refreshRegistration(); reconcileBg(); ensureBackground(false); },
+    init() { listen(); startWatchdog(); refreshRegistration(); reconcileBg(); ensureBackground(false); serveWake(); },
     stop() { stop(); if (watchdog) { clearInterval(watchdog); watchdog = null; } },
     nostrSettingsCards() { return [nwcCard()]; },
     notifySettingsCards() {

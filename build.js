@@ -469,8 +469,13 @@ if (import.meta.main) {
   if (await Bun.file('static/.well-known/assetlinks.json').exists()) {
     await Bun.write('dist/.well-known/assetlinks.json', Bun.file('static/.well-known/assetlinks.json'));
   }
-  if (await Bun.file('static/coinos.apk').exists()) {
-    await Bun.write('dist/coinos.apk', Bun.file('static/coinos.apk'));
+  // The Android builds. coinos.apk is the TWA (Chrome renders the site);
+  // coinos-unifiedpush.apk runs the wallet in its own WebView so a phone
+  // without Google Play Services can be woken — see android/.
+  for (const apk of ['coinos.apk', 'coinos-unifiedpush.apk']) {
+    if (await Bun.file('static/' + apk).exists()) {
+      await Bun.write('dist/' + apk, Bun.file('static/' + apk));
+    }
   }
   // default avatars, self-hosted since coinos.io's copies are half-broken.
   // punks-sm carries a 128px copy of each: the art is 240px because that's

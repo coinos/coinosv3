@@ -78,6 +78,20 @@ try {
   const txt = await page.evaluate(() => document.body.innerText);
   check('the browser\'s own dead push is no longer the story', !/no push service/i.test(txt),
     (txt.match(/[^\n]*push service[^\n]*/i) || [''])[0].slice(0, 50));
+
+  // The WebView build wakes the wallet off-screen with ?wake=<payload> and a
+  // CoinosHost bridge. The page has to notice, tidy the URL, and say when
+  // it's finished so the service can stop.
+  await page.evaluateOnNewDocument(() => {
+    window.__done = 0;
+    window.CoinosHost = { done: () => { window.__done++; }, notify: () => {} };
+  });
+  await page.goto('http://localhost:5263/?wake=' + encodeURIComponent(JSON.stringify({ type: 'nwc', servicePubkey: 'a'.repeat(64) })), { waitUntil: 'domcontentloaded' });
+  await waitText('receive', 20000);
+  check('a woken run takes the payload off the URL', !(await page.url()).includes('wake='), await page.url());
+  await sleep(27000); // the cap is 25s; a real answer ends it sooner
+  const done = await page.evaluate(() => window.__done);
+  check('...and tells the service when to stop', done > 0, done + ' call(s) to CoinosHost.done()');
 } finally { await browser.close(); server.stop(true); }
 console.log(ok ? '\n✅ a de-Googled phone can be reached' : '\n❌ failed');
 process.exit(ok ? 0 : 1);

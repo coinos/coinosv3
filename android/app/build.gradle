@@ -14,6 +14,28 @@ android {
     versionCode 7
     versionName '1.6'
   }
+  // Two builds of the same wallet.
+  //
+  //  twa      — Chrome renders the site (the better browser, and the one
+  //             people already have installed). Its storage is Chrome's, so
+  //             nothing outside Chrome can wake the wallet, and on a phone
+  //             without Google Play Services nothing inside it can either.
+  //  webview  — the wallet runs in the app, so a UnifiedPush message can
+  //             start it off-screen and let it answer. A separate app id,
+  //             because it is a separate wallet: its storage is its own.
+  flavorDimensions += 'shell'
+  productFlavors {
+    twa {
+      dimension 'shell'
+      isDefault = true
+    }
+    webview {
+      dimension 'shell'
+      applicationId 'io.coinos.webview'
+      versionNameSuffix '-webview'
+      resValue 'string', 'app_name', 'Coinos (UnifiedPush)'
+    }
+  }
   signingConfigs {
     release {
       if (keystoreFile.exists()) {
@@ -32,5 +54,6 @@ android {
   }
 }
 dependencies {
-  implementation 'com.google.androidbrowserhelper:androidbrowserhelper:2.5.0'
+  // only the TWA shell needs Chrome's helper; the WebView build carries none
+  twaImplementation 'com.google.androidbrowserhelper:androidbrowserhelper:2.5.0'
 }

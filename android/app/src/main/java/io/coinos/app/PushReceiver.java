@@ -44,7 +44,11 @@ public class PushReceiver extends BroadcastReceiver {
       case Push.ACTION_MESSAGE: {
         byte[] bytes = intent.getByteArrayExtra(Push.EXTRA_BYTES_MESSAGE);
         String body = bytes != null ? new String(bytes) : intent.getStringExtra(Push.EXTRA_MESSAGE);
-        notify(context, body);
+        // On the WebView build the wallet lives in THIS app's storage, so it
+        // can be woken and told to deal with whatever arrived — no tap. On
+        // the TWA build the wallet is Chrome's and out of reach, so the
+        // notification is the whole of what we can do.
+        if (!Wake.start(context, body)) notify(context, body);
         Push.ack(context, intent.getStringExtra(Push.EXTRA_ID));
         break;
       }
@@ -84,7 +88,10 @@ public class PushReceiver extends BroadcastReceiver {
       nm.createNotificationChannel(ch);
     }
 
-    Intent open = new Intent(c, LauncherActivity.class);
+    // whichever front door this build has — the TWA's launcher or the
+    // WebView's main activity; the receiver is shared by both
+    Intent open = c.getPackageManager().getLaunchIntentForPackage(c.getPackageName());
+    if (open == null) open = new Intent(Intent.ACTION_VIEW);
     open.setAction(Intent.ACTION_VIEW);
     open.setData(Uri.parse(deepLink != null && deepLink.startsWith("https://v3.coinos.io")
         ? deepLink : "https://v3.coinos.io/"));

@@ -13,7 +13,7 @@ import * as nip06 from 'nostr-tools/nip06';
 import * as nip44 from 'nostr-tools/nip44';
 import * as nip04 from 'nostr-tools/nip04';
 import { getPublicKey, finalizeEvent, generateSecretKey, verifyEvent } from 'nostr-tools/pure';
-import { decode as nip19decode, npubEncode, nsecEncode } from 'nostr-tools/nip19';
+import { decode as nip19decode, npubEncode, nsecEncode, neventEncode } from 'nostr-tools/nip19';
 import { wrapEvent as nip17WrapEvent } from 'nostr-tools/nip17';
 import { SimplePool } from 'nostr-tools/pool';
 import { randomBytes, bytesToHex } from '@noble/hashes/utils';
@@ -209,6 +209,9 @@ export function parseNostrPubkey(input) {
 }
 // An npub or 64-hex nostr pubkey → hex, or null if it isn't one.
 export function npubOf(pkHex) { try { return npubEncode(pkHex); } catch { return null; } }
+// An event reference other clients can resolve: the id plus who wrote it, so
+// a quote can be fetched even by someone who doesn't have it yet.
+export function neventOf(id, author) { try { return neventEncode({ id, author }); } catch { return null; } }
 // Any nostr entity reference → something renderable: npub/nprofile land as a
 // pubkey (with relay hints when carried), note/nevent as an event id.
 export function parseNostrRef(input) {

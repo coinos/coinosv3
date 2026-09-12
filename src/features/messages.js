@@ -14,7 +14,7 @@
 
 import {
   subscribeOn, publishOn, queryOn, fetchNostrProfile, fetchInboxRelays,
-  npubOf, parseNostrPubkey, parseNostrRef, generateSecretKey, getPublicKey, finalizeEvent, nip44,
+  npubOf, neventOf, parseNostrPubkey, parseNostrRef, generateSecretKey, getPublicKey, finalizeEvent, nip44,
   PROFILE_RELAYS, openWrapsOffthread, unwrapDMsOffthread,
 } from '../nostr.js';
 import {
@@ -1962,6 +1962,13 @@ export function messagesFeature(ctx) {
   // rumor with an id like any event, so a zap aimed at it e-tags that id —
   // the receipt reveals nothing but the id itself.
   const ZAP_KINDS = [9735, 9737];
+  // ...and, in the same REQ, what else happened to a note: likes (kind 7)
+  // and boosts (kind 6). One round trip for all three.
+  const NOTE_KINDS = [9735, 9737, 7, 6];
+  const reacts = new Map();  // note id -> Map(emoji -> Set<pubkey>)
+  const boosts = new Map();  // note id -> Set<pubkey>
+  const seenNoteEv = new Set(); // event ids already counted
+  const myReactEv = new Map();  // note id -> the id of OUR reaction, so it can be withdrawn
   const zapTotals = new Map(); // id -> { sats, seen: Set<receipt id>, mine }
   const zapAsked = new Set();
   let zapQueue = new Set(), zapTimer = null, zapLiveUnsub = null, zapRecent = [];
@@ -1986,6 +1993,35 @@ export function messagesFeature(ctx) {
     if (tagOf(ev, 'P')) return tagOf(ev, 'P');
     try { return (JSON.parse(tagOf(ev, 'description') || 'null') || {}).pubkey || null; } catch { return null; }
   }
+  // Where an event about a note goes. A zap receipt is money and has its own
+  // bookkeeping (see below); a like and a boost are just tallies of who.
+  function noteEvent(ev) {
+    if (ev.kind === 7 || ev.kind === 6) {
+      if (seenNoteEv.has(ev.id)) return;
+      seenNoteEv.add(ev.id);
+      // the LAST e tag is the note being reacted to (NIP-25)
+      const ids = (ev.tags || []).filter((x) => x[0] === 'e' && x[1]).map((x) => x[1]);
+      const id = ids[ids.length - 1];
+      if (!id) return;
+      if (ev.kind === 6) {
+        if (!boosts.has(id)) boosts.set(id, new Set());
+        boosts.get(id).add(ev.pubkey);
+      } else {
+        // '+' and an empty content both mean a plain like
+        const emoji = !ev.content || ev.content === '+' ? '\u2764\ufe0f' : ev.content.slice(0, 12);
+        if (!reacts.has(id)) reacts.set(id, new Map());
+        const m = reacts.get(id);
+        if (!m.has(emoji)) m.set(emoji, new Set());
+        m.get(emoji).add(ev.pubkey);
+        // ours, wherever it was sent from — so it can be taken back here
+        if (myPubkeys().includes(ev.pubkey)) myReactEv.set(id, ev.id);
+      }
+      scheduleRepaint();
+      return;
+    }
+    noteReceipt(ev);
+  }
+
   function noteReceipt(ev) {
     const sats = receiptSats(ev);
     if (!sats) return;
@@ -2018,9 +2054,9 @@ export function messagesFeature(ctx) {
       const relays = zapRelays();
       for (let i = 0; i < batch.length; i += 150) {
         const slice = batch.slice(i, i + 150);
-        queryOn(relays, { kinds: ZAP_KINDS, '#e': slice }, 4000)
+        queryOn(relays, { kinds: NOTE_KINDS, '#e': slice }, 4000)
           .then((evs) => {
-            evs.forEach(noteReceipt);
+            evs.forEach(noteEvent);
             // the relays have spoken for these ids: their live tally is the
             // truth now, remembered or not (a zap that was deleted has to be
             // able to disappear)
@@ -2031,7 +2067,7 @@ export function messagesFeature(ctx) {
       }
       zapRecent = [...batch.reverse(), ...zapRecent.filter((x) => !batch.includes(x))].slice(0, 200);
       if (zapLiveUnsub) { try { zapLiveUnsub(); } catch {} }
-      zapLiveUnsub = subscribeOn(relays, { kinds: ZAP_KINDS, '#e': zapRecent, since: Math.floor(Date.now() / 1000) - 60 }, noteReceipt);
+      zapLiveUnsub = subscribeOn(relays, { kinds: NOTE_KINDS, '#e': zapRecent, since: Math.floor(Date.now() / 1000) - 60 }, noteEvent);
     }, 250);
   }
   // Tallies are asked of the relays again on every boot, and that takes
@@ -2319,7 +2355,13 @@ export function messagesFeature(ctx) {
     saveFollows({ ...before, set: new Set(before.set.has(pk) ? [...before.set].filter((x) => x !== pk) : [...before.set, pk]) });
     render();
     try {
-      const base = await syncFollows({ force: true });
+      await syncFollows({ force: true });
+      // The list to publish is the relays' copy if it's genuinely newer than
+      // what we held, and otherwise what we held BEFORE the optimistic paint
+      // — reading our own paint back as fact made a follow publish a list
+      // without it, and a mute publish a list without the mute.
+      const fetched = followsNow();
+      const base = fetched.at > before.at ? fetched : before;
       const had = base.set.has(pk);
       const tags = had
         ? base.tags.filter((x) => !(x[0] === 'p' && x[1] === pk))
@@ -2481,7 +2523,7 @@ export function messagesFeature(ctx) {
   function mergeFeed(evs) {
     const c = feedNow();
     const seen = new Set(c.notes.map((e) => e.id));
-    const add = (evs || []).filter((e) => e.kind === 1 && !isReply(e) && !seen.has(e.id) && seen.add(e.id));
+    const add = (evs || []).filter((e) => e.kind === 1 && !isReply(e) && !isMuted(e.pubkey) && !seen.has(e.id) && seen.add(e.id));
     if (!add.length) return false;
     c.notes = [...c.notes, ...add].sort((a, b) => b.created_at - a.created_at).slice(0, FEED_KEEP);
     // posts arriving at the TOP shouldn't cost you the ones you'd scrolled to
@@ -2650,6 +2692,206 @@ export function messagesFeature(ctx) {
   // One post as a feed row (avatar · name · time · body), twitter/jumble
   // style: rows share a scrollable container and are split by hairlines
   // rather than floating in their own cards. Tapping a row opens its thread.
+  // ---- what you can do to a post -------------------------------------------
+  // Like, boost, quote, and — behind the ellipsis — mute or block its author.
+  // Each publishes to the author's own relays as well as ours, so the person
+  // being answered actually sees it.
+  const myReactOn = (id) => {
+    const m = reacts.get(id);
+    if (!m) return null;
+    const mine = myPubkeys();
+    for (const [emoji, who] of m) for (const pk of mine) if (who.has(pk)) return emoji;
+    return null;
+  };
+  const iBoosted = (id) => {
+    const set = boosts.get(id);
+    return !!set && myPubkeys().some((pk) => set.has(pk));
+  };
+  const noteRelaysFor = async (ev) =>
+    [...new Set([...zapRelays(), ...(await relaysOf(ev.pubkey))])];
+
+  // A like is kind 7 on the note (NIP-25). Tapping it again withdraws it the
+  // only way nostr has: a deletion request for the reaction we sent.
+  async function toggleLike(ev) {
+    const id = await requireIdentity();
+    const relays = await noteRelaysFor(ev);
+    if (myReactOn(ev.id)) {
+      // Taking a like back is the only withdrawal nostr has: a deletion
+      // request naming the reaction. Relays that honour it drop it; the ones
+      // that don't go on showing it to other people — worth knowing, not
+      // worth refusing to try.
+      const m = reacts.get(ev.id);
+      if (m) for (const [emoji, who] of [...m]) { for (const pk of myPubkeys()) who.delete(pk); if (!who.size) m.delete(emoji); }
+      render();
+      const mineEv = myReactEv.get(ev.id);
+      if (!mineEv) return;
+      myReactEv.delete(ev.id);
+      const gone = { kind: 5, content: '', created_at: Math.floor(Date.now() / 1000), tags: [['e', mineEv], ['k', '7']] };
+      const del = id.signer instanceof Uint8Array ? finalizeEvent(gone, id.signer) : await id.signer.signEvent(gone);
+      publishOn(relays, del).catch(() => {});
+      return;
+    }
+    const partial = {
+      kind: 7, content: '❤️', created_at: Math.floor(Date.now() / 1000),
+      tags: [['e', ev.id], ['p', ev.pubkey], CLIENT_TAG],
+    };
+    const evt = id.signer instanceof Uint8Array ? finalizeEvent(partial, id.signer) : await id.signer.signEvent(partial);
+    myReactEv.set(ev.id, evt.id);
+    noteEvent(evt); // on screen before the relays answer
+    render();
+    publishOn(relays, evt).catch(() => {});
+  }
+
+  // A boost is kind 6 carrying the note it repeats (NIP-18).
+  async function boostNote(ev) {
+    if (iBoosted(ev.id)) { toast(t('postBoostedAlready')); return; }
+    const id = await requireIdentity();
+    const relays = await noteRelaysFor(ev);
+    const partial = {
+      kind: 6, content: JSON.stringify(ev), created_at: Math.floor(Date.now() / 1000),
+      tags: [['e', ev.id, relays[0] || '', 'mention'], ['p', ev.pubkey], CLIENT_TAG],
+    };
+    const evt = id.signer instanceof Uint8Array ? finalizeEvent(partial, id.signer) : await id.signer.signEvent(partial);
+    noteEvent(evt);
+    render();
+    const ok = await publishOn(relays, evt);
+    toast(ok ? t('postBoosted') : t('msgSendFailed'));
+  }
+
+  // A quote is your own post with theirs referenced inside it: the composer
+  // opens with the reference already in the text, and the q tag goes on at
+  // publish time so clients can render the embed.
+  function quoteNote(ev) {
+    ui.quoteOf = { id: ev.id, pubkey: ev.pubkey };
+    const ref = 'nostr:' + (neventOf(ev.id, ev.pubkey) || ev.id);
+    const cur = composeText().replace(/\s+$/, '');
+    const next = (cur ? cur + '\n\n' : '') + ref;
+    ui.profCompose = next;
+    setDraft(POST_DRAFT, next);
+    ui.noteThread = null;
+    ui.profilePk = null;
+    ui.chatOpen = true;
+    ui.msgView = 'feed';
+    feedNow();
+    render();
+    setTimeout(() => { const el = document.querySelector('.chat-page textarea'); if (el) { el.focus(); el.setSelectionRange(0, 0); } }, 80);
+  }
+
+  // ---- mute list (NIP-51 kind 10000) ---------------------------------------
+  // Muting hides someone's posts everywhere in this app and publishes the
+  // list, so it follows you to other clients. Blocking is the same list plus
+  // an unfollow — the stronger, more deliberate door.
+  const MUTES = 'mutes';
+  let mutes = null; // { set, tags, content, at }
+  let mutesAt = 0;
+  function mutesNow() {
+    if (!mutes) {
+      let st2 = null;
+      try { st2 = wallet.loadFeatureState(MUTES, null); } catch {}
+      const tags = (st2 && st2.tags) || [];
+      mutes = { set: new Set(pTags(tags).map((x) => x[1])), tags, content: (st2 && st2.c) || '', at: (st2 && st2.at) || 0 };
+    }
+    return mutes;
+  }
+  const isMuted = (pk) => mutesNow().set.has(pk);
+  function saveMutes(m) {
+    mutes = m;
+    try { wallet.saveFeatureState(MUTES, { tags: m.tags, c: m.content, at: m.at }); } catch {}
+  }
+  async function syncMutes({ force = false } = {}) {
+    const me = mePk();
+    if (!me) return mutesNow();
+    if (!force && Date.now() - mutesAt < 10 * 60_000) return mutesNow();
+    mutesAt = Date.now();
+    try {
+      const evs = await queryOn(zapRelays(), { kinds: [10000], authors: [me] }, 5000);
+      const newest = (evs || []).sort((a, b) => b.created_at - a.created_at)[0];
+      const cur = mutesNow();
+      if (newest && newest.created_at > cur.at) {
+        saveMutes({ set: new Set(pTags(newest.tags).map((x) => x[1])), tags: newest.tags || [], content: newest.content || '', at: newest.created_at });
+        scheduleRepaint();
+      }
+    } catch { mutesAt = 0; }
+    return mutesNow();
+  }
+  // Same care as the follow list: publish onto the freshest copy the relays
+  // will give us, preserving anything in it we didn't write (the encrypted
+  // content other clients keep their private mutes in, above all).
+  async function toggleMute(pk, { block = false } = {}) {
+    const id = await requireIdentity();
+    if (pk === id.pubkey) return;
+    const before = mutesNow();
+    saveMutes({ ...before, set: new Set(before.set.has(pk) ? [...before.set].filter((x) => x !== pk) : [...before.set, pk]) });
+    render();
+    try {
+      await syncMutes({ force: true });
+      const fetched = mutesNow(); // see the note in toggleFollow
+      const base = fetched.at > before.at ? fetched : before;
+      const had = base.set.has(pk);
+      const tags = had ? base.tags.filter((x) => !(x[0] === 'p' && x[1] === pk)) : [...base.tags, ['p', pk]];
+      const created_at = Math.max(Math.floor(Date.now() / 1000), base.at + 1);
+      const partial = { kind: 10000, content: base.content || '', created_at, tags };
+      const evt = id.signer instanceof Uint8Array ? finalizeEvent(partial, id.signer) : await id.signer.signEvent(partial);
+      const ok = await publishOn(zapRelays(), evt);
+      if (!ok) throw new Error(t('msgSendFailed'));
+      saveMutes({ set: new Set(pTags(tags).map((x) => x[1])), tags, content: base.content || '', at: created_at });
+      if (block && !had && isFollowing(pk)) await toggleFollow(pk);
+      toast(had ? t('postUnmuted') : block ? t('postBlocked') : t('postMuted'));
+      render();
+    } catch (e) {
+      saveMutes(before);
+      if (!(e instanceof NoIdentity)) toast(e.message || String(e));
+      render();
+    }
+  }
+
+  // The ellipsis sheet: the actions that don't earn a button of their own.
+  function noteSheet() {
+    if (!ui.noteSheet) return null;
+    const ev = ui.noteSheet;
+    const close = () => { ui.noteSheet = null; render(); };
+    const mine = isMe(ev.pubkey);
+    const item = (icon, label, onClick, danger) => h('button', {
+      class: 'btn-block', style: 'text-align:left' + (danger ? ';color:var(--red,#c0392b)' : ''),
+      onClick: () => { close(); onClick(); },
+    }, icon + '  ' + label);
+    return h('div', {
+      class: 'confirm-pop-backdrop',
+      onClick: (e) => { if (e.target === e.currentTarget) close(); },
+    },
+      h('div', { class: 'card col confirm-pop', style: 'gap:8px' },
+        h('div', { class: 'row gap6', style: 'align-items:center' },
+          avatar(ev.pubkey, 'chat-avatar', false),
+          h('div', { class: 'chat-name' }, displayName(ev.pubkey))),
+        item('❝', t('postQuote'), () => quoteNote(ev)),
+        item('↻', t('postBoost'), () => boostNote(ev).catch(() => {})),
+        item('⧉', t('copy'), async () => {
+          try { await navigator.clipboard.writeText('nostr:' + (neventOf(ev.id, ev.pubkey) || ev.id)); toast(t('copied')); } catch {}
+        }),
+        mine ? null : item('\u{1F507}', isMuted(ev.pubkey) ? t('postUnmute') : t('postMute'), () => toggleMute(ev.pubkey).catch(() => {})),
+        mine || isMuted(ev.pubkey) ? null : item('⛔', t('postBlock'), () => toggleMute(ev.pubkey, { block: true }).catch(() => {}), true),
+        h('button', { class: 'btn-ghost btn-block', onClick: close }, t('back'))));
+  }
+
+  // Under a post: a like with its count, a boost with its count. Amethyst
+  // puts these in a row of their own rather than crowding the header, and
+  // they read better there — the counts are part of the post, not chrome.
+  function noteActions(ev) {
+    const mineReact = myReactOn(ev.id);
+    const rm = reacts.get(ev.id);
+    const likeN = rm ? [...rm.values()].reduce((n, who) => n + who.size, 0) : 0;
+    const boostN = (boosts.get(ev.id) || new Set()).size;
+    const mineBoost = iBoosted(ev.id);
+    const btn = (cls, label, count, on, onClick) => h('button', {
+      class: 'note-act' + (on ? ' on' : ''), title: label, 'aria-label': label,
+      onClick: (e) => { e.stopPropagation(); onClick(); },
+    }, cls, count ? h('span', { class: 'note-act-n' }, String(count)) : null);
+    return h('div', { class: 'row note-acts', style: 'gap:14px' },
+      btn('\u2764', t('postLike'), likeN, !!mineReact, () => toggleLike(ev).catch(() => {})),
+      btn('\u21bb', t('postBoost'), boostN, mineBoost, () => boostNote(ev).catch(() => {})),
+      btn('\u275d', t('postQuote'), 0, false, () => quoteNote(ev)));
+  }
+
   function noteRow(pk, ev, name, { open = true, focus = false } = {}) {
     prefetchProfilePage(pk); // rows are tap-targets: have the page warm
     const isReply = ev.tags.some((x) => x[0] === 'e');
@@ -2697,8 +2939,14 @@ export function messagesFeature(ctx) {
                 setTimeout(() => document.querySelector('.thread-reply-input')?.focus(), 120);
               },
             }, '↩'),
-            canZap ? h('button', { class: 'btn-sm', title: t('zapTitle'), onClick: (e) => { e.stopPropagation(); zapNote(pk, ev); recheckZap(ev.id); } }, '⚡') : null)),
-        h('div', { class: 'small', style: 'white-space:pre-wrap;overflow-wrap:anywhere' }, ...noteBody(ev.content))));
+            canZap ? h('button', { class: 'btn-sm', title: t('zapTitle'), onClick: (e) => { e.stopPropagation(); zapNote(pk, ev); recheckZap(ev.id); } }, '⚡') : null,
+            // everything else a post can have done to it, one tap away
+            h('button', {
+              class: 'btn-sm', title: t('postMore'), 'aria-label': t('postMore'),
+              onClick: (e) => { e.stopPropagation(); ui.noteSheet = ev; render(); },
+            }, '\u22ef'))),
+        h('div', { class: 'small', style: 'white-space:pre-wrap;overflow-wrap:anywhere' }, ...noteBody(ev.content)),
+        pending ? null : noteActions(ev)));
   }
 
   // ---- thread view: a note in its conversation ----------------------------
@@ -2787,11 +3035,16 @@ export function messagesFeature(ctx) {
       // NIP-92: what we uploaded, described, so clients needn't sniff the URL
       const imeta = media.filter((m) => m && m.url)
         .map((m) => ['imeta', 'url ' + m.url, ...(m.m ? ['m ' + m.m] : [])]);
-      const partial = { kind: 1, content: text, created_at: temp.created_at, tags: [...imeta, CLIENT_TAG] };
+      // NIP-18 quote: the reference is already in the text; the tags let a
+      // client render the quoted post inline and tell its author
+      const q = ui.quoteOf && text.includes(ui.quoteOf.id.slice(0, 8))
+        ? [] : ui.quoteOf ? [['q', ui.quoteOf.id], ['p', ui.quoteOf.pubkey]] : [];
+      const partial = { kind: 1, content: text, created_at: temp.created_at, tags: [...imeta, ...q, CLIENT_TAG] };
       const evt = id.signer instanceof Uint8Array ? finalizeEvent(partial, id.signer) : await id.signer.signEvent(partial);
       const relays = [...new Set([...(await notesRelays(id.pubkey)), ...wallet.nostrRelays()])];
       const ok = await publishOn(relays, evt);
       if (!ok) throw new Error(t('msgSendFailed'));
+      ui.quoteOf = null;
       for (const c of caches) c.notes = c.notes.map((e) => (e.id === temp.id ? evt : e));
       if (feed) feed.notes = feed.notes.map((e) => (e.id === temp.id ? evt : e));
       render();
@@ -3374,7 +3627,8 @@ export function messagesFeature(ctx) {
   function feedView() {
     const c = feedNow();
     const authors = feedAuthors();
-    const rows = c.notes.slice(0, c.shown || FEED_PAGE).flatMap((ev, i) => [
+    const visible = c.notes.filter((ev) => !isMuted(ev.pubkey));
+    const rows = visible.slice(0, c.shown || FEED_PAGE).flatMap((ev, i) => [
       i ? h('div', { style: 'height:1px;background:var(--border,rgba(128,128,128,.18));margin:0 -14px' }) : null,
       noteRow(ev.pubkey, ev, displayName(ev.pubkey)),
     ]);
@@ -3392,14 +3646,15 @@ export function messagesFeature(ctx) {
           ? h('div', { class: 'col', style: 'gap:8px' },
               h('div', { class: 'small muted' }, t('feedNoFollows')),
               h('button', { class: 'btn-sm', onClick: () => { stopFeedWatch(); hook('openUserSearch'); render(); } }, t('feedFindPeople')))
-          : c.status === 'loading' && !c.notes.length
+          : c.status === 'loading' && !visible.length
             ? h('div', { class: 'row gap6', style: 'justify-content:center;padding:12px 0' }, h('span', { class: 'spinner sm' }))
-            : !c.notes.length
+            : !visible.length
               ? h('div', { class: 'small faint', style: 'text-align:center;padding:12px 0' }, t('feedEmpty'))
               : h('div', { class: 'card col notes-feed', style: 'gap:0' }, ...rows),
         c.loadingMore
           ? h('div', { class: 'row gap6', style: 'justify-content:center;padding:4px 0' }, h('span', { class: 'spinner sm' }))
-          : null);
+          : null,
+        noteSheet());
   }
 
 
@@ -4356,6 +4611,7 @@ export function messagesFeature(ctx) {
       syncLists().catch(() => {});
       syncInbox().catch(() => {});
       syncFollows().catch(() => {}); // the Follow button should be right on first paint
+      syncMutes().catch(() => {});   // and a muted author shouldn't flash past before the list lands
       registerPush().catch(() => {}); // silent refresh when permission already granted
     },
     stop() {
@@ -4373,6 +4629,8 @@ export function messagesFeature(ctx) {
       clearTimeout(zapTimer); zapTimer = null; zapQueue = new Set(); zapRecent = [];
       stopFeedWatch();
       follows = null; followsAt = 0; feed = null; feedAt = 0; relayLists = null;
+      mutes = null; mutesAt = 0;
+      reacts.clear(); boosts.clear(); seenNoteEv.clear(); myReactEv.clear();
       clearTimeout(zapSaveT); zapSaveT = null; zapSeed = null;
       zapTotals.clear(); zapAsked.clear(); zapPending.clear(); // 'mine' is per identity — refetch under the next
     },

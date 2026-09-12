@@ -24,6 +24,7 @@ const clickItem = (t) => page.evaluate((x) => { const e = [...document.querySele
 const text = () => page.evaluate(() => document.body.innerText);
 const waitText = async (x, ms = 25000) => { for (let i = 0; i < ms / 250; i++) { if ((await text()).toLowerCase().includes(x)) return true; await sleep(250); } return false; };
 const FOLLOWED = 'e'.repeat(63) + '1';
+const OTHER = 'd'.repeat(63) + '2';
 try {
   await page.setViewport({ width: 390, height: 844 });
   await page.goto('http://localhost:5237/', { waitUntil: 'domcontentloaded' });
@@ -65,6 +66,39 @@ try {
   const btns = await page.evaluate(() => [...document.querySelectorAll('button')].map((b) => b.textContent.trim()));
   check('their profile offers to unfollow, not to follow', btns.includes('Following') && !btns.includes('Follow'),
     btns.filter((b) => /follow/i.test(b)).join(',') || 'no follow button');
+
+  // Outbox: each author is read on the relays they publish to, not only ours.
+  // Every socket the page opens is recorded, so the plan can be checked by
+  // what it actually dialled.
+  await page.evaluateOnNewDocument(() => {
+    window.__dialled = [];
+    const Real = window.WebSocket;
+    window.WebSocket = function (url, ...rest) { window.__dialled.push(String(url)); return new Real(url, ...rest); };
+    window.WebSocket.prototype = Real.prototype;
+    Object.assign(window.WebSocket, Real);
+  });
+  await page.goto('http://localhost:5237/', { waitUntil: 'domcontentloaded' });
+  await waitText('receive', 20000);
+  await page.evaluate(([k, a, b]) => {
+    localStorage.setItem(k + ':follows', JSON.stringify({ tags: [['p', a], ['p', b]], c: '', at: Math.floor(Date.now() / 1000) }));
+    // relay lists as NIP-65 would have given them
+    localStorage.setItem(k + ':relayLists', JSON.stringify({
+      [a]: { r: ['wss://alice.example.invalid'], t: Date.now() },
+      [b]: { r: ['wss://bob.example.invalid'], t: Date.now() },
+    }));
+  }, [base, FOLLOWED, OTHER]);
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await waitText('receive', 20000);
+  await page.evaluate(() => { const b = [...document.querySelectorAll('button')].find((e) => /message/i.test(e.getAttribute('aria-label') || '')); if (b) b.click(); });
+  await sleep(1000);
+  await clickItem('feed');
+  await sleep(6000);
+  const dialled = await page.evaluate(() => window.__dialled || []);
+  check('each author is read on their own write relay',
+    dialled.some((u) => u.includes('alice.example.invalid')) && dialled.some((u) => u.includes('bob.example.invalid')),
+    dialled.filter((u) => u.includes('example.invalid')).join(' ') || 'neither dialled');
+  check('...and our own relays are still asked as well',
+    dialled.some((u) => u.includes('relay.coinos.io')), dialled.length + ' sockets');
 } finally { await browser.close(); server.stop(true); }
 console.log(ok ? '\n✅ follows and feed' : '\n❌ failed');
 process.exit(ok ? 0 : 1);

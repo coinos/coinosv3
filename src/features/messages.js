@@ -2174,6 +2174,9 @@ export function messagesFeature(ctx) {
   function relaysOf(pk) {
     let p = relayListCache.get(pk);
     if (p) return p;
+    // the feed's batched fetch has probably already asked for this one
+    const known = relayListsNow().get(pk);
+    if (known) { p = Promise.resolve(known.r || []); relayListCache.set(pk, p); return p; }
     p = queryOn([...new Set([...PROFILE_RELAYS, ...NOTE_RELAYS])], { kinds: [10002], authors: [pk] }, 3500)
       .then((evs) => {
         const newest = (evs || []).sort((a, b) => b.created_at - a.created_at)[0];
@@ -2339,6 +2342,110 @@ export function messagesFeature(ctx) {
     }
   }
 
+  // ---- outbox: where each person actually publishes -------------------------
+  // NIP-65. Asking our own three relays for everyone's posts only ever finds
+  // the people who happen to use them — the rest are invisible, and it looks
+  // like they stopped posting. So each author's own WRITE relays are read
+  // instead. Lists are fetched in batches and kept for a week; the authors are
+  // then covered greedily, so a feed of hundreds of people is a handful of
+  // sockets that between them reach everyone rather than one socket each.
+  const RELAY_LISTS = 'relayLists';
+  const RELAY_LIST_TTL = 7 * 24 * 3600_000;
+  const OUTBOX_MAX = 10;  // sockets we'll open for one pass
+  const PER_AUTHOR = 3;   // write relays taken from any one list
+  let relayLists = null;  // pk -> { r: [url], t }
+
+  function relayListsNow() {
+    if (!relayLists) {
+      relayLists = new Map();
+      try {
+        for (const [pk, v] of Object.entries(wallet.loadFeatureState(RELAY_LISTS, {}) || {}))
+          if (v && Date.now() - (v.t || 0) < RELAY_LIST_TTL) relayLists.set(pk, v);
+      } catch {}
+    }
+    return relayLists;
+  }
+  function saveRelayLists() {
+    try {
+      const out = {};
+      // the people we follow are the ones worth remembering; a page visit
+      // shouldn't push them out
+      const keep = new Set([...followsNow().set]);
+      let spare = 200 - keep.size;
+      for (const [pk, v] of relayListsNow()) {
+        if (keep.has(pk)) out[pk] = v;
+        else if (spare-- > 0) out[pk] = v;
+      }
+      wallet.saveFeatureState(RELAY_LISTS, out);
+    } catch {}
+  }
+  const writeRelaysIn = (ev) => [...new Set((ev.tags || [])
+    .filter((x) => x[0] === 'r' && x[1] && x[2] !== 'read' && /^wss:\/\//i.test(x[1]))
+    .map((x) => String(x[1]).replace(/\/+$/, '')))].slice(0, PER_AUTHOR);
+
+  // One REQ per hundred authors, against our own relays — a relay list is
+  // small, widely mirrored, and worth having before anything else is asked.
+  // Authors with no list at all are remembered as such, so we don't ask again
+  // every time the feed refreshes.
+  async function fetchRelayLists(pks) {
+    const want = [...new Set(pks)].filter((pk) => !relayListsNow().has(pk));
+    if (!want.length) return;
+    for (let i = 0; i < want.length; i += 100) {
+      const batch = want.slice(i, i + 100);
+      const evs = await queryOn(NOTE_RELAYS, { kinds: [10002], authors: batch }, 4500).catch(() => []);
+      const newest = new Map();
+      for (const ev of evs || []) {
+        const cur = newest.get(ev.pubkey);
+        if (!cur || ev.created_at > cur.created_at) newest.set(ev.pubkey, ev);
+      }
+      for (const pk of batch) {
+        const ev = newest.get(pk);
+        relayListsNow().set(pk, { r: ev ? writeRelaysIn(ev) : [], t: Date.now() });
+      }
+    }
+    saveRelayLists();
+  }
+
+  // The fewest relays that between them carry every author: take the relay
+  // covering the most people not yet covered, repeat.
+  //
+  // Our own relays are then asked about EVERYONE as well, not just the people
+  // with no list. Measured over eight busy accounts, each source holds posts
+  // the other misses — reading only the author's own relays found 7 to 40
+  // notes ours had never seen, and ours held plenty theirs didn't. The feed
+  // wants the union, so the outbox adds reach rather than replacing it.
+  function outboxPlan(authors) {
+    const lists = relayListsNow();
+    const byRelay = new Map();
+    const orphans = [];
+    for (const pk of authors) {
+      const r = (lists.get(pk) || {}).r || [];
+      if (!r.length) { orphans.push(pk); continue; }
+      for (const url of r) {
+        if (!byRelay.has(url)) byRelay.set(url, new Set());
+        byRelay.get(url).add(pk);
+      }
+    }
+    const orphaned = new Set(orphans);
+    const left = new Set(authors.filter((pk) => !orphaned.has(pk))); // the rest are on our relays below
+    const plan = [];
+    while (left.size && plan.length < OUTBOX_MAX) {
+      let best = null, bestN = 0;
+      for (const [url, set] of byRelay) {
+        let n = 0;
+        for (const pk of set) if (left.has(pk)) n++;
+        if (n > bestN) { bestN = n; best = url; }
+      }
+      if (!best) break;
+      const take = [...byRelay.get(best)].filter((pk) => left.has(pk));
+      plan.push({ relays: [best], authors: take });
+      for (const pk of take) left.delete(pk);
+      byRelay.delete(best);
+    }
+    plan.push({ relays: zapRelays(), authors });
+    return plan;
+  }
+
   // ---- the feed: posts from the people you follow ---------------------------
   // Their kind-1 notes, newest first, replies left out — a reply belongs to
   // its thread, and a timeline of half-conversations reads like eavesdropping.
@@ -2349,7 +2456,7 @@ export function messagesFeature(ctx) {
   const FEED_KEEP = 200;   // in memory
   const FEED_STORE = 50;   // ...and on disk
   let feed = null;         // { status, notes, end, loadingMore }
-  let feedUnsub = null;
+  let feedUnsubs = [];
   let feedAt = 0;
 
   const isReply = (ev) => (ev.tags || []).some((x) => x[0] === 'e');
@@ -2379,43 +2486,54 @@ export function messagesFeature(ctx) {
     try { wallet.saveFeatureState(FEED_CACHE, c.notes.slice(0, FEED_STORE).map(slimNote)); } catch {}
     return true;
   }
-  async function refreshFeed() {
+  // One pass over the plan: each relay is asked only for the authors it
+  // actually carries. The slowest relay doesn't hold up the rest — every
+  // answer merges as it lands.
+  async function feedPass(extra = {}) {
     const authors = feedAuthors();
-    if (!authors.length) { if (feed) feed.status = 'ready'; return; }
+    if (!authors.length) return false;
+    await fetchRelayLists(authors);
+    const plan = outboxPlan(authors);
+    let got = false;
+    await Promise.all(plan.map(async ({ relays, authors: a }) => {
+      const evs = await queryOn(relays, { kinds: [1], authors: a, limit: FEED_LIMIT, ...extra }, 5000).catch(() => []);
+      if (mergeFeed(evs)) { got = true; scheduleRepaint(); }
+    }));
+    return got;
+  }
+  async function refreshFeed() {
+    if (!feedAuthors().length) { if (feed) feed.status = 'ready'; return; }
     if (Date.now() - feedAt < 30_000) return;
     feedAt = Date.now();
-    try {
-      const evs = await queryOn(zapRelays(), { kinds: [1], authors, limit: FEED_LIMIT }, 5000);
-      mergeFeed(evs);
-    } catch {} finally {
+    try { await feedPass(); } catch {} finally {
       if (feed) feed.status = 'ready';
       scheduleRepaint();
     }
     watchFeed();
   }
-  // While the feed is what's on screen, new posts arrive by themselves.
+  // While the feed is what's on screen, new posts arrive by themselves — on
+  // the same relays the pass above reads, one subscription each.
   function watchFeed() {
     stopFeedWatch();
-    const authors = feedAuthors();
-    if (!authors.length || !ui.chatOpen || ui.msgView !== 'feed') return;
-    feedUnsub = subscribeOn(zapRelays(), { kinds: [1], authors, since: Math.floor(Date.now() / 1000) - 60 },
-      (ev) => { if (mergeFeed([ev])) scheduleRepaint(); });
+    if (!feedAuthors().length || !ui.chatOpen || ui.msgView !== 'feed') return;
+    const since = Math.floor(Date.now() / 1000) - 60;
+    for (const { relays, authors } of outboxPlan(feedAuthors()))
+      feedUnsubs.push(subscribeOn(relays, { kinds: [1], authors, since },
+        (ev) => { if (mergeFeed([ev])) scheduleRepaint(); }));
   }
   function stopFeedWatch() {
-    if (feedUnsub) { try { feedUnsub(); } catch {} feedUnsub = null; }
+    for (const u of feedUnsubs) { try { u(); } catch {} }
+    feedUnsubs = [];
   }
   async function loadOlderFeed() {
     const c = feedNow();
     if (c.status !== 'ready' || c.loadingMore || c.end) return;
     const oldest = c.notes[c.notes.length - 1];
-    const authors = feedAuthors();
-    if (!oldest || !authors.length) { c.end = true; return; }
+    if (!oldest || !feedAuthors().length) { c.end = true; return; }
     c.loadingMore = true;
     render();
     try {
-      const evs = await queryOn(zapRelays(),
-        { kinds: [1], authors, limit: FEED_LIMIT, until: oldest.created_at - 1 }, 5000);
-      if (!mergeFeed(evs)) c.end = true;
+      if (!await feedPass({ until: oldest.created_at - 1 })) c.end = true;
     } catch {} finally {
       c.loadingMore = false;
       render();
@@ -4236,7 +4354,7 @@ export function messagesFeature(ctx) {
       if (zapLiveUnsub) { try { zapLiveUnsub(); } catch {} zapLiveUnsub = null; }
       clearTimeout(zapTimer); zapTimer = null; zapQueue = new Set(); zapRecent = [];
       stopFeedWatch();
-      follows = null; followsAt = 0; feed = null; feedAt = 0;
+      follows = null; followsAt = 0; feed = null; feedAt = 0; relayLists = null;
       clearTimeout(zapSaveT); zapSaveT = null; zapSeed = null;
       zapTotals.clear(); zapAsked.clear(); zapPending.clear(); // 'mine' is per identity — refetch under the next
     },

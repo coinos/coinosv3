@@ -15,7 +15,7 @@ import { dataSources, getSource, setSource, getNetwork, setNetwork, NETWORKS } f
 import { STAGING } from './build-flags.js';
 import { buildFeatures, loadDeferredFeatures } from './features/index.js';
 import { t, LANGS, getLang, setLang, isRTL, loadLocale } from './i18n.js';
-import { rateNow, rateAt, refreshRates, haveRate, getCurrency, setCurrency, currencies, fmtFiat } from './rates.js';
+import { rateNow, rateAt, refreshRates, haveRate, getCurrency, setCurrency, currencies, fmtFiat, fmtFiatBare } from './rates.js';
 import {
   fmtBtc,
   fmtSats,
@@ -274,7 +274,10 @@ function footer() {
       h('span', { class: 'faint' }, ' · '),
       h('button', { class: 'linklike', style: 'font-weight:400', onClick: toggleTheme }, resolvedTheme() === 'dark' ? t('lightMode') : t('darkMode'))
     ),
-    h('div', { style: 'margin-top:8px' }, languagePicker()),
+    // Display preferences live together: the language this reads in, and the
+    // money amounts are shown in. (The currency sat under Settings → Network
+    // for exactly one day, where nobody found it.)
+    h('div', { class: 'row gap6', style: 'margin-top:8px;justify-content:center' }, languagePicker(), currencyPicker()),
     // The commit stamp settles "is my PWA fresh?" AND "what code is this?" in
     // one glance — its own last line, so it never wraps the credits on mobile.
     h('div', { class: 'faint', style: 'margin-top:6px' },
@@ -823,6 +826,9 @@ function worthLine(sats, at, row = null) {
   const now = rateNow();
   if (!now || !at) return null;
   const line = row || ((k, v) => h('div', { class: 'line' }, h('span', { class: 'k' }, k), h('span', { class: 'v' }, v)));
+  // A payment we have a price for is shown at that price; one we don't is
+  // shown at today's, without ceremony. (The '~' that used to mark the
+  // difference was more bookkeeping than the beta warrants.)
   const thenStr = then.rate && !then.stale ? fmtFiat(sats, then.rate) : null;
   const nowStr = fmtFiat(sats, now);
   if (!thenStr) return line(t('worthNow'), nowStr);
@@ -837,9 +843,11 @@ function worthLine(sats, at, row = null) {
 const fmtAmount = (sats, at) => {
   if (unit === 'sats') return fmtSats(sats);
   if (unit === 'btc') return fmtBtc(sats);
-  const { rate, stale } = rateAt(at);
+  const { rate } = rateAt(at);
   if (!rate) return fmtSats(sats);
-  return (stale && at ? '~' : '') + fmtFiat(sats, rate);
+  // bare, like the other two units: whatever labels this number — the unit
+  // tag beside a balance, the toggle everywhere else — says which money it is
+  return fmtFiatBare(sats, rate);
 };
 
 // A clickable unit label. cls lets callers inherit surrounding sizing.
@@ -2329,7 +2337,7 @@ function settingsTab() {
   switch (ui.settingsPage) {
     case 'wallet': return page(a ? [walletNameCard(a), pubkeyCard(a), recoveryCard(a)] : []);
     case 'payments': return page(featureAll('settingsCards').reverse());
-    case 'network': return page([networkCard(), currencyCard(), explorerCard()]);
+    case 'network': return page([networkCard(), explorerCard()]);
     case 'nostr': return nostrSettingsView();
     case 'notifications': return page(featureAll('notifySettingsCards').reverse());
     case 'advanced': return advancedSettingsView();
@@ -2493,19 +2501,12 @@ function explorerCard() {
 // Changing it starts the recorded price history again: the samples behind
 // "worth then" are denominated in the currency they were taken in, and
 // relabelling them would be a lie.
-function currencyCard() {
-  const codes = currencies();
-  return h(
-    'div',
-    { class: 'card col' },
-    h('h3', {}, t('currencyLabel')),
-    h('select', {
-      value: getCurrency(),
-      onChange: (e) => { setCurrency(e.target.value); refreshRates({ force: true }).then(render); render(); },
-    }, codes.map((c) => h('option', { value: c, selected: c === getCurrency() }, c))),
-    h('div', { class: 'small faint' }, t('currencyHint')),
-    rateNow() ? h('div', { class: 'small muted' }, '1 BTC = ' + fmtFiat(SATS, rateNow())) : null
-  );
+function currencyPicker() {
+  return h('select', {
+    title: t('currencyLabel'),
+    value: getCurrency(),
+    onChange: (e) => { setCurrency(e.target.value); refreshRates({ force: true }).then(render); render(); },
+  }, currencies().map((c) => h('option', { value: c, selected: c === getCurrency() }, c)));
 }
 
 // Language selector. Changing it persists the choice, flips text direction for

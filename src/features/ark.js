@@ -20,7 +20,7 @@ import {
 import { t } from '../i18n.js';
 import { resolveBip353, parsePaymentName, parseBip21 as parseBip21Uri } from '../bip353.js';
 import { parseZapTarget, fetchPayParams, requestInvoice } from '../lnurl.js';
-import { shortAddr, shortTxid, timeAgo, ARK_ICON, ARK_MARK, BITCOIN_ICON } from '../format.js';
+import { shortAddr, shortTxid, timeAgo, fmtSats, ARK_ICON, ARK_MARK, BITCOIN_ICON } from '../format.js';
 
 // t?ark1… bech32m — an Ark address for this or another ASP.
 export function isArkAddress(a) { return /^t?ark1[a-z0-9]{20,}$/i.test((a || '').trim()); }
@@ -1312,7 +1312,7 @@ export function arkFeature(ctx) {
         h('span', { class: 'tag pending' }, t('arkExitPendingTag'))),
       h('div', { class: 'amount-neg', style: 'font-size:20px' }, '-' + fmtAmount(a.amountSat) + ' ' + unitLabel()),
       row(t('dateLabel'), new Date(exitStartedTs(a)).toLocaleString()),
-      h('div', { class: 'small muted' }, t('arkExitSummary', { n: fmtAmount(a.amountSat), eta })),
+      h('div', { class: 'small muted' }, t('arkExitSummary', { n: fmtSats(a.amountSat), eta })),
       a.lastError ? h('div', { class: a.actionable ? 'small err' : 'small faint' }, a.actionable ? a.lastError : t('arkExitRetrying')) : null,
       url ? h('a', { class: 'btn btn-sm', href: url, target: '_blank', rel: 'noopener' }, t('arkExitViewTx')) : null,
       cancellable ? h('button', { class: 'linklike small', onClick: () => {
@@ -1952,7 +1952,7 @@ export function arkFeature(ctx) {
   const EXIT_DEPTH_ADVISORY = 4;
   const depthNoticeEl = (exitFee) =>
     h('div', { class: 'small muted', style: 'margin:10px 0 0;text-align:center' },
-      t('arkDepthNotice', { fee: fmtAmount(exitFee) }),
+      t('arkDepthNotice', { fee: fmtSats(exitFee) }),
       ' ',
       h('button', { class: 'linklike small', onClick: () => { ui.arkCoinsPage = true; render(); } },
         t('arkDepthBtn')));
@@ -2125,7 +2125,7 @@ export function arkFeature(ctx) {
       h('div', { class: 'card col', style: 'gap:8px' },
         h('h4', { style: 'margin:0' }, t('arkCoinsExitTitle')),
         h('p', { class: 'small muted', style: 'margin:0' },
-          t('arkCoinsExitDesc', { fee: fmtAmount(exitFee), after: fmtAmount(afterFee) }))),
+          t('arkCoinsExitDesc', { fee: fmtSats(exitFee), after: fmtSats(afterFee) }))),
       h('div', { class: 'card col', style: 'gap:8px' },
         h('h4', { style: 'margin:0' }, t('arkCoinsRenewTitle')),
         h('p', { class: 'small muted', style: 'margin:0' }, t('arkCoinsRenewDesc')),
@@ -2288,7 +2288,7 @@ export function arkFeature(ctx) {
       // one Savings can't carry, with the number on the table.
       const feeEst = estimateExitFeeSat(mgr);
       if ((wallet.spendable || 0) < feeEst) {
-        throw new Error(t('arkExitFeeShort', { need: fmtAmount(feeEst), have: fmtAmount(wallet.spendable || 0) }));
+        throw new Error(t('arkExitFeeShort', { need: fmtSats(feeEst), have: fmtSats(wallet.spendable || 0) }));
       }
       for (const v of spendables) mgr.startExit(v.id);
       toast(t('arkExitStarted', { n: spendables.length }));
@@ -2343,7 +2343,7 @@ export function arkFeature(ctx) {
             mgr._save();
             return;
           } catch {
-            const e = new Error(t('arkExitNoFeeCoin', { need: fmtAmount(Math.max(294, feeSat)) }));
+            const e = new Error(t('arkExitNoFeeCoin', { need: fmtSats(Math.max(294, feeSat)) }));
             e.actionable = true;
             throw e;
           }
@@ -2566,13 +2566,13 @@ export function arkFeature(ctx) {
         // small balance: Lightning carries no mining fees at all.
         if (feeEst >= balance) {
           return h('div', { class: 'col', style: 'gap:8px;border-top:1px solid var(--border,rgba(128,128,128,.2));padding-top:10px' },
-            h('div', { class: 'small muted' }, t('arkUniUneconomical', { fee: fmtAmount(feeEst), n: fmtAmount(balance) })));
+            h('div', { class: 'small muted' }, t('arkUniUneconomical', { fee: fmtSats(feeEst), n: fmtSats(balance) })));
         }
         const savings = wallet.spendable || 0;
         const short = savings < feeEst;
         return h('div', { class: 'col', style: 'gap:8px;border-top:1px solid var(--border,rgba(128,128,128,.2));padding-top:10px' },
-          h('div', { class: 'small muted' }, t('arkUniFallbackBody', { fee: fmtAmount(feeEst) })),
-          short ? h('div', { class: 'small err' }, t('arkUniFallbackShort', { need: fmtAmount(feeEst), have: fmtAmount(savings) })) : null,
+          h('div', { class: 'small muted' }, t('arkUniFallbackBody', { fee: fmtSats(feeEst) })),
+          short ? h('div', { class: 'small err' }, t('arkUniFallbackShort', { need: fmtSats(feeEst), have: fmtSats(savings) })) : null,
           h('button', {
             class: 'btn-block', disabled: !!ui.arkBusy || short,
             onClick: () => {
@@ -2581,7 +2581,7 @@ export function arkFeature(ctx) {
               ui.tab = 'history'; // the exit lives as a pending record there
               render();
             },
-          }, t('arkUniFallbackBtn', { fee: fmtAmount(feeEst) })));
+          }, t('arkUniFallbackBtn', { fee: fmtSats(feeEst) })));
       })());
   }
 
@@ -2963,7 +2963,7 @@ export function arkFeature(ctx) {
     // batch, gone the moment it would be a lie.
     const cancellable = acts.every((a) => a.actionable && !(a.hopsDone > 0) && a.step === 'chain');
     return [h('div', { class: 'small muted', style: 'margin-top:4px' },
-      t('arkExitSummary', { n: fmtAmount(totalSat), eta }),
+      t('arkExitSummary', { n: fmtSats(totalSat), eta }),
       err ? h('div', { class: 'small err' }, err.lastError)
         : softErr ? h('div', { class: 'small faint' }, t('arkExitRetrying')) : null,
       watch ? h('div', { style: 'margin-top:4px' },

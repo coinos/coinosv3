@@ -116,13 +116,24 @@ export async function refreshRates({ force = false } = {}) {
 // it does — a third position that shows blanks is worse than two that work.
 export const haveRate = () => rateNow() != null;
 
+// Two shapes. `fmtFiat` carries its own currency symbol, for a line of prose
+// that has to say what the number is. `fmtFiatBare` is just the number, for
+// the places where the unit is already spelled out beside it — a balance
+// under its USD tag reading "US$74.67 USD" says it twice.
 export function fmtFiat(sats, rate, code = getCurrency()) {
   if (!rate) return '';
   const v = (Number(sats) / 100_000_000) * rate;
-  const digits = Math.abs(v) < 1 && v !== 0 ? 4 : 2;
   try {
-    return v.toLocaleString(undefined, { style: 'currency', currency: code, maximumFractionDigits: digits, minimumFractionDigits: 2 });
+    return v.toLocaleString(undefined, { style: 'currency', currency: code, maximumFractionDigits: fiatDigits(v), minimumFractionDigits: 2 });
   } catch {
-    return v.toFixed(digits) + ' ' + code; // a code Intl doesn't know
+    return fmtFiatBare(sats, rate) + ' ' + code; // a code Intl doesn't know
   }
 }
+export function fmtFiatBare(sats, rate) {
+  if (!rate) return '';
+  const v = (Number(sats) / 100_000_000) * rate;
+  return v.toLocaleString(undefined, { maximumFractionDigits: fiatDigits(v), minimumFractionDigits: 2 });
+}
+// Under a unit of currency, sats are small: a tenth of a cent still deserves
+// to be a number rather than 0.00.
+const fiatDigits = (v) => (Math.abs(v) < 1 && v !== 0 ? 4 : 2);

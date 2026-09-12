@@ -1278,6 +1278,10 @@ export function messagesFeature(ctx) {
       const { publicKey } = await (await fetch(`${NOTIFIER}/vapid`)).json();
       const wantKey = b64ToBytes(publicKey);
       let sub = await reg.pushManager.getSubscription();
+      // see nwc.js: a Chromium without Google Play Services (GrapheneOS, and
+      // any de-Googled Android) has no push service at all, and says so in a
+      // way nobody can act on. Remember it so the offer can explain itself.
+      const noPushService = (e) => /push service|Registration failed|AbortError|NotSupportedError/i.test((e && (e.message || e.name)) || '');
       // A subscription made against a DIFFERENT VAPID key can never receive a
       // push — the notifier's sends fail with a permanent 403 and it keeps
       // reusing the dead sub, so the device goes silent forever (this is what
@@ -1291,8 +1295,14 @@ export function messagesFeature(ctx) {
       };
       if (sub && !keyMatches(sub)) { try { await sub.unsubscribe(); } catch {} sub = null; }
       if (!sub) {
-        sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: wantKey });
+        try {
+          sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: wantKey });
+        } catch (e) {
+          if (noPushService(e)) { const s2 = st(); s2.noPushService = true; save(s2); render(); }
+          return false;
+        }
       }
+      { const s2 = st(); if (s2.noPushService) { delete s2.noPushService; save(s2); } }
       const r = await fetch(`${NOTIFIER}/register`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ subscription: sub.toJSON(), notify: pushWatch() }),
@@ -3969,6 +3979,11 @@ export function messagesFeature(ctx) {
             class: 'btn-ghost btn-sm',
             onClick: () => { const s = st(); s.pushDismissed = true; save(s); render(); },
           }, t('msgDismiss')))));
+    // A browser with no push service at all: the offer above is beside the
+    // point (permission may even be granted), so say what's actually wrong
+    // wherever the user got to.
+    if (st().noPushService && !st().push)
+      kids.push(h('div', { class: 'notice info small' }, t('nwcNoPushService')));
 
     // ---- the feed, above the conversations: it's the thing you read, they're
     // the things you answer

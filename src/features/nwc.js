@@ -584,18 +584,39 @@ export function nwcFeature(ctx) {
     return Uint8Array.from(raw, (c) => c.charCodeAt(0));
   };
 
+  // Waking a closed app needs a push service, and on Android that means the
+  // browser's: Chrome (and every Chromium, including GrapheneOS's Vanadium)
+  // routes web push through Firebase, which isn't there on a phone without
+  // Google Play Services. The browser says so as "Registration failed - push
+  // service error", which tells the user nothing. Translate it, and name the
+  // thing that does work.
+  const isNoPushService = (e) => {
+    const m = (e && (e.message || e.name)) || '';
+    return /push service|Registration failed|AbortError|NotSupportedError|permission denied/i.test(m);
+  };
+
   async function enableBackground() {
     if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
-      throw new Error('this browser cannot receive push');
+      throw new Error(t('nwcNoPushHere'));
     }
     const perm = await Notification.requestPermission();
-    if (perm !== 'granted') throw new Error('notifications were not allowed');
+    if (perm !== 'granted') throw new Error(t('nwcNoPermission'));
     const reg = await navigator.serviceWorker.ready;
     const { publicKey } = await (await fetch(`${NOTIFIER}/vapid`)).json();
-    const sub = await reg.pushManager.subscribe({
-      userVisibleOnly: true,
-      applicationServerKey: b64ToBytes(publicKey),
-    });
+    let sub;
+    try {
+      sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: b64ToBytes(publicKey),
+      });
+    } catch (e) {
+      if (isNoPushService(e)) {
+        const st2 = load(); st2.pushUnavailable = true; save(st2);
+        throw new Error(t('nwcNoPushService'));
+      }
+      throw e;
+    }
+    { const st2 = load(); if (st2.pushUnavailable) { delete st2.pushUnavailable; save(st2); } }
     const pks1 = conns().map((c) => c.servicePk);
     if (load().offer) pks1.push(load().offer.pk);
     // Arming can precede the first connection (creation requires it) — the
@@ -807,7 +828,11 @@ export function nwcFeature(ctx) {
             : h('button', { class: 'btn-sm', onClick: () => { ui.nwcShow = c.id; render(); } }, t('nwcShow')));
       }),
       list.length
-        ? h('div', { class: 'row between', style: 'border-top:1px solid var(--border,rgba(128,128,128,.2));padding-top:8px' },
+        ? h('div', { class: 'col', style: 'gap:6px;border-top:1px solid var(--border,rgba(128,128,128,.2));padding-top:8px' },
+          load().pushUnavailable && !load().background
+            ? h('div', { class: 'small faint' }, t('nwcNoPushService'))
+            : null,
+          h('div', { class: 'row between' },
             h('span', { class: 'small' }, t('nwcBackground')),
             h('button', { class: 'btn-sm', onClick: async () => {
               try {
@@ -817,6 +842,9 @@ export function nwcFeature(ctx) {
                   const s = load(); s.backgroundOff = true; save(s);
                   toast(t('nwcBackgroundOff'));
                 } else {
+                  // an explicit tap always retries: a phone that grew a push
+                  // service (or a different browser) deserves another go
+                  const s0 = load(); delete s0.pushUnavailable; save(s0);
                   await enableBackground();
                   const s = load(); delete s.backgroundOff; save(s);
                   await reconcileBg();
@@ -824,7 +852,7 @@ export function nwcFeature(ctx) {
                 }
               } catch (e) { toast(e.message); }
               render();
-            } }, load().background ? t('nwcOn') : t('nwcOff')))
+            } }, load().background ? t('nwcOn') : t('nwcOff'))))
         : null,
       st
         ? h('div', { class: 'col', style: 'gap:6px;border-top:1px solid var(--border,rgba(128,128,128,.2));padding-top:8px' },

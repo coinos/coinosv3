@@ -3708,10 +3708,23 @@ function balanceCard() {
       // (scrollend would be the semantic signal but it doesn't fire reliably
       // for programmatic scrolls across browsers, so it's not relied on.)
       onScrollend: (e) => { const el = e.currentTarget; if (!el._dragging) { clearTimeout(el._settle); settle(el); } },
-      onTouchstart: (e) => { const el = e.currentTarget; el._dragging = true; _carDragging = true; el._skipMorph = true; clearTimeout(el._settle); },
+      onTouchstart: (e) => {
+        const el = e.currentTarget;
+        el._dragging = true; _carDragging = true; el._skipMorph = true;
+        el._x0 = el.scrollLeft; // where the finger found it — a tap leaves this alone
+        clearTimeout(el._settle);
+      },
       onTouchend: (e) => {
         const el = e.currentTarget;
         el._dragging = false; // onScroll's debounce settles it
+        // A TAP, not a drag: the strip never moved. Unfreeze it right now.
+        // Otherwise the freeze stood until a scroll settled — and a tap
+        // produces no scroll events, so it stood until the 700ms safety net,
+        // and the morph refused every render in between. That's why tapping
+        // the unit tag on a phone took most of a second to change the number
+        // while the same tap on a laptop (the mouse path has always had this
+        // guard) was instant.
+        if (Math.abs(el.scrollLeft - (el._x0 || 0)) < 2) { endCarouselDrag(); return; }
         // The finger is up: lift the render hold (the strip stays frozen via
         // _skipMorph) and commit the predicted landing NOW, so the history
         // below loads under the glide instead of after it.

@@ -31,9 +31,7 @@ final class Wake {
       } else {
         b.setOverrideDeadline(0);
       }
-      int r = js.schedule(b.build());
-      android.util.Log.i("coinos", "wake: schedule -> " + r);
-      return r == JobScheduler.RESULT_SUCCESS;
+      return js.schedule(b.build()) == JobScheduler.RESULT_SUCCESS;
     } catch (Exception e) {
       android.util.Log.w("coinos", "wake: schedule failed: " + e);
       // out of expedited quota, or a manufacturer being creative: the

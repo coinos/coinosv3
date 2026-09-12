@@ -39,7 +39,9 @@ public class WakeJob extends JobService {
   public boolean onStartJob(JobParameters p) {
     params = p;
     String payload = p.getExtras() == null ? null : p.getExtras().getString("payload");
-    android.util.Log.i("coinos", "wake: job started, payload=" + payload);
+    // no payload in the log: it carries the user's push, and logcat is read
+    // by anything with ADB
+    android.util.Log.i("coinos", "wake: job started");
 
     web = new WebView(this);
     WebSettings s = web.getSettings();

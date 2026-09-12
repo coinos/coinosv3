@@ -25,6 +25,20 @@ import { shortAddr, shortTxid, timeAgo, ARK_ICON, ARK_MARK, BITCOIN_ICON } from 
 // t?ark1… bech32m — an Ark address for this or another ASP.
 export function isArkAddress(a) { return /^t?ark1[a-z0-9]{20,}$/i.test((a || '').trim()); }
 
+// Use the funding transaction's actual input selection and P2TR output size
+// for both Max and the fee preview. Mining fees are paid from Savings; only
+// the ASP service fee comes out of the amount deposited into Spending.
+export function previewBoardFunding(wallet, ark, amountSat = 0, sendMax = false) {
+  const feeRate = (wallet.feeRates && wallet.feeRates.halfHourFee) || 5;
+  const hrp = { bitcoin: 'bc', regtest: 'bcrt' }[ark?.info?.network] || 'tb';
+  const dest = ark ? p2trAddress(ark._key(0).pubkey.slice(1), hrp) : wallet.freshChange().address;
+  const draft = wallet.buildTx({ recipients: [{ address: dest, amount: amountSat }], feeRate, sendMax, noSort: true });
+  const fundingSat = draft.outputs[0].amount;
+  const serviceFeeSat = boardFee(fundingSat, ark?.info?.boardFees);
+  return { fundingSat, chainFeeSat: draft.fee, serviceFeeSat,
+    feeSat: draft.fee + serviceFeeSat, netSat: fundingSat - serviceFeeSat };
+}
+
 // Ark movement types that actually touch the chain — each is a real bitcoin
 // tx with a txid, so it wears the Bitcoin mark, not the Ark one: board pulls
 // coins in from on-chain, offboard and exit push them back out.
@@ -2743,12 +2757,7 @@ export function arkFeature(ctx) {
   // key stands in for the funding key — same size, always a valid point.
   function maxBoardSat() {
     try {
-      const feeRate = (wallet.feeRates && wallet.feeRates.halfHourFee) || 5;
-      const hrp = { bitcoin: 'bc', regtest: 'bcrt' }[ark && ark.info && ark.info.network] || 'tb';
-      // _key() hands back a compressed point; the witness program is x-only
-      const dest = ark ? p2trAddress(ark._key(0).pubkey.slice(1), hrp) : wallet.freshChange().address;
-      const draft = wallet.buildTx({ recipients: [{ address: dest, amount: 0 }], feeRate, sendMax: true });
-      return Math.max(0, (draft.outputs[0]?.amount || 0));
+      return Math.max(0, previewBoardFunding(wallet, ark, 0, true).fundingSat);
     } catch {
       return 0;
     }
@@ -2778,9 +2787,16 @@ export function arkFeature(ctx) {
       (() => {
         const sats = parseInt((ui.arkBoardAmt || '').trim(), 10);
         if (!sats || sats < minBoard || !ark) return null;
-        const fee = boardFee(sats, ark.info.boardFees);
-        return h('div', { class: 'small muted', style: 'text-align:center' },
-          t('arkBoardFeeNote', { fee: fmtAmount(fee), net: fmtAmount(sats - fee) }));
+        try {
+          const quote = previewBoardFunding(wallet, ark, sats);
+          return h('div', { class: 'col small muted', style: 'text-align:center;gap:4px' },
+            t('arkBoardFeeNote', { fee: quote.feeSat.toLocaleString(), net: quote.netSat.toLocaleString() }),
+            h('div', { class: 'small faint' },
+              t('arkFeeChain') + ': ' + fmtAmount(quote.chainFeeSat) + ' ' + unitLabel() + ' · '
+              + t('arkFeeService') + ': ' + fmtAmount(quote.serviceFeeSat) + ' ' + unitLabel()));
+        } catch (e) {
+          return h('div', { class: 'notice err small' }, e.message);
+        }
       })(),
       canBoard
         ? h('div', { class: 'small faint', style: 'text-align:center' },

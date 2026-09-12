@@ -532,6 +532,40 @@ hr.divider { margin: 16px 0; }
 
 /* Profile note feed: inline images stay contained, links wrap. */
 .note-img { display: block; max-width: 100%; max-height: 320px; border-radius: 10px; margin-top: 6px; object-fit: contain; }
+.note-img.clickable { cursor: zoom-in; }
+/* The attach button sits between Post and Cancel: a square the size of the
+   buttons beside it, not the sliver a .btn-sm made of a 20px icon. */
+.attach-btn {
+  flex: 0 0 auto; width: 48px; align-self: stretch; min-height: 44px;
+  display: flex; align-items: center; justify-content: center; padding: 0;
+}
+/* A picture, full screen: the image centred on a dark ground, everything
+   else out of the way. Fixed to the viewport (svh, so a phone's address bar
+   can't push it), and above every other layer including the toast. */
+.lightbox {
+  position: fixed; inset: 0; z-index: 200;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(8, 10, 14, .94); padding: 16px;
+  animation: lightbox-in .12s ease-out;
+}
+/* Nothing scrolls behind a picture that fills the screen — and the reserved
+   scrollbar gutter (see html, top of file) stands down with it, or it shows
+   as a pale stripe beside an otherwise full-screen image. Fixed positioning
+   is sized to the viewport WITHOUT that gutter, so this is the only way to
+   reach the edge. No layout shift worth the name: it happens under the
+   backdrop. */
+html.no-scroll { overflow: hidden; scrollbar-gutter: auto; }
+.lightbox img {
+  max-width: 100%; max-height: 100svh; max-height: 100vh;
+  object-fit: contain; border-radius: 6px; cursor: zoom-out;
+}
+.lightbox-x {
+  position: absolute; top: max(10px, env(safe-area-inset-top)); right: 10px;
+  width: 40px; height: 40px; padding: 0; font-size: 26px; line-height: 1;
+  border-radius: 999px; border: 0; color: #fff; background: rgba(255, 255, 255, .14);
+}
+.lightbox-x:hover { background: rgba(255, 255, 255, .24); }
+@keyframes lightbox-in { from { opacity: 0; } to { opacity: 1; } }
 .note-video { display: block; max-width: 100%; max-height: 360px; border-radius: 10px; margin-top: 6px; background: #000; }
 /* the profile notes feed: page-scrolled (no inner scrollbox); on phones it
    runs edge to edge — the card walls step outside #app's padding */

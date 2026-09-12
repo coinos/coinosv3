@@ -2563,8 +2563,13 @@ export function messagesFeature(ctx) {
       if (!part) continue;
       if (/^https?:\/\//i.test(part)) {
         if (/\.(png|jpe?g|gif|webp|avif)(\?[^\s]*)?$/i.test(part)) {
-          out.push(h('img', { src: part, class: 'note-img', loading: 'lazy',
-            onError: (e) => { e.target.style.display = 'none'; } }));
+          // tap it to see it properly — a 320px-tall crop of someone's
+          // photograph is a thumbnail, not the picture they posted
+          out.push(h('img', {
+            src: part, class: 'note-img clickable', loading: 'lazy',
+            onClick: (e) => { e.stopPropagation(); ctx.openImage && ctx.openImage(part); },
+            onError: (e) => { e.target.style.display = 'none'; },
+          }));
         } else if (/\.(mp4|webm|mov|m4v)(\?[^\s]*)?$/i.test(part)) {
           // metadata-only preload: the poster frame paints, nothing streams
           // until the viewer presses play
@@ -3324,7 +3329,7 @@ export function messagesFeature(ctx) {
     } catch (e) { toast(e.message || String(e)); }
     ui.postUploading = false; render();
   }
-  const CLIP = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:block"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>';
+  const CLIP = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:block"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>';
   function postComposer() {
     if (ui.profCompose == null && !draftFor(POST_DRAFT)) return null;
     const text = composeText();
@@ -3355,7 +3360,7 @@ export function messagesFeature(ctx) {
           }
         } }, t('profPostBtn')),
         ctx.uploadImage ? h('button', {
-          class: 'btn-sm', title: t('feedAttach'), disabled: !!ui.postUploading,
+          class: 'attach-btn', title: t('feedAttach'), 'aria-label': t('feedAttach'), disabled: !!ui.postUploading,
           onClick: () => document.getElementById('post-file')?.click(),
         }, ui.postUploading ? h('span', { class: 'spinner sm' }) : h('span', { style: 'display:flex', html: CLIP })) : null,
         h('input', {

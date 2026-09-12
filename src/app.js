@@ -458,6 +458,22 @@ let _bootDeciding = true;
 // the welcome screen held back forever. Nothing legitimate is still deciding
 // four seconds in — the store wait alone caps at 800ms.
 setTimeout(() => { if (_bootDeciding) { _bootDeciding = false; render(); } }, 4000);
+// A picture, full screen. Posts show images cropped to a few hundred pixels
+// so a feed stays a feed; this is where you actually look at one. Tap
+// anywhere (or Escape, or Back) to close — no chrome, nothing to aim at.
+function imageViewer() {
+  if (!ui.lightbox) return null;
+  const close = () => { ui.lightbox = null; render(); };
+  return h('div', {
+    class: 'lightbox', onClick: close,
+    role: 'dialog', 'aria-modal': 'true',
+  }, h('img', { src: ui.lightbox, alt: '', onClick: (e) => e.stopPropagation() }),
+     h('button', { class: 'lightbox-x', 'aria-label': t('close'), onClick: close }, '\u00d7'));
+}
+if (typeof window !== 'undefined') {
+  window.addEventListener('keydown', (e) => { if (e.key === 'Escape' && ui.lightbox) { ui.lightbox = null; render(); } });
+}
+
 function render() {
   if (_publicChatMode) return;
   // A background render mid carousel-drag rebuilds the strip; the morph then
@@ -567,7 +583,8 @@ function renderInner() {
     ui.navAnimSkip = false;
   }
   applyAnim(screen, 'anim-page', (performance.now() - _navAt) < 340 ? performance.now() - _navAt : -1);
-  morphChildren(root, [screen, footer()]);
+  morphChildren(root, [screen, footer(), ...(ui.lightbox ? [imageViewer()] : [])]);
+  try { document.documentElement.classList.toggle('no-scroll', !!ui.lightbox); } catch {}
   if (fpath) {
     const el = nodeAtPath(fpath);
     if (el && el !== a && /^(INPUT|SELECT|TEXTAREA)$/.test(el.tagName)) {
@@ -5027,6 +5044,7 @@ const ctx = {
   // in fiat the typed figure is money, so it needs today's price to become sats
   parseAmount: (v, u) => parseAmount(v, u, rateNow()),
   worthLine,
+  openImage: (src) => { ui.lightbox = src; render(); },
   // "The next balance isn't a change, it's the first real value" — state
   // arriving late (the ark store opening past boot's patience) must not read
   // as money landing: without this the balance counts up from 0 in green,

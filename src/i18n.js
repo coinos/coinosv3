@@ -193,6 +193,7 @@ const STR = {
     msgReact: 'React',
     msgZap: 'Zap',
     zapTallyTitle: '{n} sats zapped',
+    close: 'Close',
     worthThen: 'Worth then',
     worthNow: 'Worth now',
     worthNowInline: '{v} now',

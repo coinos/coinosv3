@@ -3711,8 +3711,16 @@ function balanceCard() {
       onTouchstart: (e) => {
         const el = e.currentTarget;
         el._dragging = true; _carDragging = true; el._skipMorph = true;
-        el._x0 = el.scrollLeft; // where the finger found it — a tap leaves this alone
+        // where the finger landed, and where it found the strip — a tap
+        // moves neither
+        el._x0 = el.scrollLeft;
+        el._tx = (e.touches[0] || {}).clientX || 0;
+        el._moved = false;
         clearTimeout(el._settle);
+      },
+      onTouchmove: (e) => {
+        const el = e.currentTarget;
+        if (!el._moved && Math.abs(((e.touches[0] || {}).clientX || 0) - (el._tx || 0)) > 4) el._moved = true;
       },
       onTouchend: (e) => {
         const el = e.currentTarget;
@@ -3724,7 +3732,7 @@ function balanceCard() {
         // the unit tag on a phone took most of a second to change the number
         // while the same tap on a laptop (the mouse path has always had this
         // guard) was instant.
-        if (Math.abs(el.scrollLeft - (el._x0 || 0)) < 2) { endCarouselDrag(); return; }
+        if (!el._moved && Math.abs(el.scrollLeft - (el._x0 || 0)) < 2) { endCarouselDrag(); return; }
         // The finger is up: lift the render hold (the strip stays frozen via
         // _skipMorph) and commit the predicted landing NOW, so the history
         // below loads under the glide instead of after it.

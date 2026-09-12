@@ -99,6 +99,27 @@ try {
     dialled.filter((u) => u.includes('example.invalid')).join(' ') || 'neither dialled');
   check('...and our own relays are still asked as well',
     dialled.some((u) => u.includes('relay.coinos.io')), dialled.length + ' sockets');
+
+  // The feed opens at twenty posts and grows as you reach the bottom, however
+  // many it is holding.
+  await page.evaluate((k) => {
+    const notes = [];
+    const now = Math.floor(Date.now() / 1000);
+    for (let i = 0; i < 60; i++) notes.push({ id: String(i).padStart(64, '0'), pubkey: 'f'.repeat(64), kind: 1, created_at: now - i * 60, content: 'post ' + i, tags: [] });
+    localStorage.setItem(k + ':feedNotes', JSON.stringify(notes));
+  }, base);
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await waitText('receive', 20000);
+  await page.evaluate(() => { const b = [...document.querySelectorAll('button')].find((e) => /message/i.test(e.getAttribute('aria-label') || '')); if (b) b.click(); });
+  await sleep(1000);
+  await clickItem('feed');
+  await sleep(1500);
+  const first = await page.evaluate(() => document.querySelectorAll('.notes-feed > .row').length);
+  check('the feed opens at twenty posts, not sixty', first === 20, first + ' rows');
+  await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+  await sleep(1200);
+  const second = await page.evaluate(() => document.querySelectorAll('.notes-feed > .row').length);
+  check('reaching the bottom shows twenty more', second === 40, second + ' rows');
 } finally { await browser.close(); server.stop(true); }
 console.log(ok ? '\n✅ follows and feed' : '\n❌ failed');
 process.exit(ok ? 0 : 1);

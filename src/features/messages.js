@@ -2453,6 +2453,7 @@ export function messagesFeature(ctx) {
   // rather than a spinner, exactly like the profile pages do.
   const FEED_CACHE = 'feedNotes';
   const FEED_LIMIT = 80;
+  const FEED_PAGE = 20;    // posts on screen at once, grown as you scroll
   const FEED_KEEP = 200;   // in memory
   const FEED_STORE = 50;   // ...and on disk
   let feed = null;         // { status, notes, end, loadingMore }
@@ -2466,7 +2467,7 @@ export function messagesFeature(ctx) {
     if (!feed) {
       let stored = [];
       try { stored = wallet.loadFeatureState(FEED_CACHE, []) || []; } catch {}
-      feed = { status: stored.length ? 'ready' : 'loading', notes: stored };
+      feed = { status: stored.length ? 'ready' : 'loading', notes: stored, shown: FEED_PAGE };
       refreshFeed();
     }
     return feed;
@@ -2483,6 +2484,9 @@ export function messagesFeature(ctx) {
     const add = (evs || []).filter((e) => e.kind === 1 && !isReply(e) && !seen.has(e.id) && seen.add(e.id));
     if (!add.length) return false;
     c.notes = [...c.notes, ...add].sort((a, b) => b.created_at - a.created_at).slice(0, FEED_KEEP);
+    // posts arriving at the TOP shouldn't cost you the ones you'd scrolled to
+    const fresh = add.filter((e) => e.created_at >= (c.notes[0] || {}).created_at).length;
+    if (fresh) c.shown = Math.min((c.shown || FEED_PAGE) + fresh, c.notes.length);
     try { wallet.saveFeatureState(FEED_CACHE, c.notes.slice(0, FEED_STORE).map(slimNote)); } catch {}
     return true;
   }
@@ -2525,15 +2529,24 @@ export function messagesFeature(ctx) {
     for (const u of feedUnsubs) { try { u(); } catch {} }
     feedUnsubs = [];
   }
+  // Reaching the bottom shows another twenty. Only when the window has caught
+  // up with everything we hold do we go back to the relays for older posts —
+  // rendering a hundred notes to show twenty was the whole cost here.
   async function loadOlderFeed() {
     const c = feedNow();
+    if (c.shown < c.notes.length) {
+      c.shown = Math.min(c.shown + FEED_PAGE, c.notes.length);
+      render();
+      if (c.shown < c.notes.length) return; // still serving from what we have
+    }
     if (c.status !== 'ready' || c.loadingMore || c.end) return;
     const oldest = c.notes[c.notes.length - 1];
     if (!oldest || !feedAuthors().length) { c.end = true; return; }
     c.loadingMore = true;
     render();
     try {
-      if (!await feedPass({ until: oldest.created_at - 1 })) c.end = true;
+      if (await feedPass({ until: oldest.created_at - 1 })) c.shown += FEED_PAGE;
+      else c.end = true;
     } catch {} finally {
       c.loadingMore = false;
       render();
@@ -3356,7 +3369,7 @@ export function messagesFeature(ctx) {
   function feedView() {
     const c = feedNow();
     const authors = feedAuthors();
-    const rows = c.notes.flatMap((ev, i) => [
+    const rows = c.notes.slice(0, c.shown || FEED_PAGE).flatMap((ev, i) => [
       i ? h('div', { style: 'height:1px;background:var(--border,rgba(128,128,128,.18));margin:0 -14px' }) : null,
       noteRow(ev.pubkey, ev, displayName(ev.pubkey)),
     ]);

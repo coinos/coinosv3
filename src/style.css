@@ -542,6 +542,14 @@ hr.divider { margin: 16px 0; }
     border-left: none; border-right: none; border-radius: 0;
   }
 }
+/* Inside the chat page the posts ARE the page, not a card sitting in one:
+   they step out through its padding to the container's own edge and drop the
+   inner walls, leaving one continuous list with a hairline top and bottom. */
+.chat-page .notes-feed {
+  margin-left: -20px; margin-right: -20px;
+  border-left: none; border-right: none; border-radius: 0;
+  box-shadow: none;
+}
 
 
 /* Inline move-money panel on the balance card. */

@@ -52,6 +52,10 @@ public final class Push {
   private static final String KEY_DIST = "distributor";
   private static final String KEY_ENDPOINT = "endpoint";
   private static final String KEY_SENT = "endpointSent";
+  private static final String KEY_TRY = "tryIndex";
+  private static final String KEY_TRY_AT = "tryAt";
+  /** How long a distributor gets to answer before we try the next one. */
+  private static final long TRY_MS = 60_000;
 
   static SharedPreferences prefs(Context c) {
     return c.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
@@ -81,15 +85,39 @@ public final class Push {
     return out;
   }
 
+  /**
+   * Which distributor to ask.
+   *
+   * <p>Not simply the first one installed. Several apps embed a distributor
+   * for their own use and export it anyway — a phone here had three, and the
+   * first two were Element's and Yakihonne's internal ones, which will never
+   * hand an endpoint to anybody else. The spec's answer is to let the user
+   * choose, but this app has no settings screen to choose in, so it works
+   * through them instead: ask one, and if no endpoint has arrived by the next
+   * launch, ask the next. Whoever answers is remembered for good.
+   */
   static String distributor(Context c) {
-    String saved = prefs(c).getString(KEY_DIST, null);
+    SharedPreferences p = prefs(c);
     List<String> all = distributors(c);
-    // a distributor that's been uninstalled is not a distributor
-    if (saved != null && all.contains(saved)) return saved;
     if (all.isEmpty()) return null;
-    String pick = all.get(0);
-    prefs(c).edit().putString(KEY_DIST, pick).apply();
+    String saved = p.getString(KEY_DIST, null);
+    // one that answered, and is still installed, is the one we keep
+    if (saved != null && all.contains(saved) && p.getString(KEY_ENDPOINT, null) != null) return saved;
+    // otherwise the one we're currently trying, moving on if it's had its
+    // chance and produced nothing
+    int idx = p.getInt(KEY_TRY, 0);
+    long since = p.getLong(KEY_TRY_AT, 0);
+    if (saved != null && since > 0 && System.currentTimeMillis() - since > TRY_MS) idx++;
+    if (idx >= all.size()) idx = 0;
+    String pick = all.get(idx);
+    p.edit().putString(KEY_DIST, pick).putInt(KEY_TRY, idx).putLong(KEY_TRY_AT, System.currentTimeMillis()).apply();
     return pick;
+  }
+
+  /** Give up on the current distributor; the next call picks another. */
+  static void nextDistributor(Context c) {
+    SharedPreferences p = prefs(c);
+    p.edit().putInt(KEY_TRY, p.getInt(KEY_TRY, 0) + 1).putLong(KEY_TRY_AT, 0).remove(KEY_DIST).apply();
   }
 
   static String endpoint(Context c) {

@@ -36,7 +36,12 @@ public class PushReceiver extends BroadcastReceiver {
         if (endpoint != null && !endpoint.isEmpty()) Push.setEndpoint(context, endpoint);
         break;
       }
-      case Push.ACTION_REGISTRATION_FAILED:
+      case Push.ACTION_REGISTRATION_FAILED: {
+        // this one won't have us — try the next one at the next opportunity
+        Push.nextDistributor(context);
+        Push.register(context);
+        break;
+      }
       case Push.ACTION_UNREGISTERED: {
         Push.prefs(context).edit().remove("endpoint").putBoolean("endpointSent", false).apply();
         break;

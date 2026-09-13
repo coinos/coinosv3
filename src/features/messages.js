@@ -2658,6 +2658,54 @@ export function messagesFeature(ctx) {
   // reach innerHTML. URLs become links (image URLs inline), npub mentions a
   // clickable @name, other nostr: refs a dim stub.
   const NOTE_SPLIT = /(https?:\/\/[^\s]+|nostr:(?:npub|nprofile|note|nevent|naddr)1[a-z0-9]+)/gi;
+
+  // A YouTube link is a video, so show the video. All three shapes it comes
+  // in: the long one, the short one, and a Shorts link.
+  const YT = /^https?:\/\/(?:www\.|m\.)?(?:youtube\.com\/(?:watch\?(?:[^\s]*&)?v=([\w-]{6,})|shorts\/([\w-]{6,})|live\/([\w-]{6,}))|youtu\.be\/([\w-]{6,}))/i;
+  const youtubeId = (url) => { const m = YT.exec(url || ''); return m ? (m[1] || m[2] || m[3] || m[4]) : null; };
+  const ytStart = (url) => {
+    const m = /[?&](?:t|start)=(\d+)/.exec(url || '') || /[?&]t=(\d+)s/.exec(url || '');
+    return m ? Math.max(0, parseInt(m[1], 10) || 0) : 0;
+  };
+
+  // The still, with a play button over it, and the player itself only once
+  // it's tapped. A feed of ten videos would otherwise load ten YouTube
+  // players — every one of them telling Google what you're scrolling past
+  // before you've decided to watch anything. One tap, and it plays in place.
+  function youtubeEmbed(url, vid) {
+    const start = ytStart(url);
+    const src = 'https://www.youtube-nocookie.com/embed/' + vid
+      + '?autoplay=1&rel=0' + (start ? '&start=' + start : '');
+    const frame = h('div', { class: 'yt-embed' },
+      h('img', {
+        class: 'yt-poster', loading: 'lazy', alt: '',
+        src: 'https://i.ytimg.com/vi/' + vid + '/hqdefault.jpg',
+        onError: (e) => { e.target.style.display = 'none'; },
+      }),
+      h('button', {
+        class: 'yt-play', 'aria-label': t('playVideo'), title: t('playVideo'),
+        onClick: (e) => {
+          e.stopPropagation();
+          const box = e.currentTarget.parentElement;
+          if (!box || box.dataset.playing) return;
+          box.dataset.playing = '1';
+          box.textContent = '';
+          const f = document.createElement('iframe');
+          f.src = src;
+          f.title = 'YouTube';
+          f.allow = 'accelerometer; autoplay; encrypted-media; picture-in-picture; web-share';
+          f.referrerPolicy = 'strict-origin-when-cross-origin';
+          f.allowFullscreen = true;
+          box.append(f);
+        },
+      }, h('span', { style: 'display:flex', html: '<svg width="30" height="30" viewBox="0 0 24 24" fill="currentColor" style="display:block"><path d="M8 5v14l11-7z"/></svg>' })),
+      h('a', {
+        class: 'yt-open', href: url, target: '_blank', rel: 'noopener noreferrer',
+        title: t('openInYouTube'), onClick: (e) => e.stopPropagation(),
+      }, '\u2197'));
+    return frame;
+  }
+
   function noteBody(text) {
     const out = [];
     for (const part of String(text || '').split(NOTE_SPLIT)) {
@@ -2677,6 +2725,8 @@ export function messagesFeature(ctx) {
           out.push(h('video', { src: part, class: 'note-video', controls: true,
             preload: 'metadata', playsinline: true,
             onError: (e) => { e.target.style.display = 'none'; } }));
+        } else if (youtubeId(part)) {
+          out.push(youtubeEmbed(part, youtubeId(part)));
         } else {
           out.push(h('a', { href: part, target: '_blank', rel: 'noopener noreferrer' },
             part.length > 64 ? part.slice(0, 61) + '…' : part));

@@ -194,6 +194,8 @@ const STR = {
     msgZap: 'Zap',
     zapTallyTitle: '{n} sats zapped',
     close: 'Close',
+    playVideo: 'Play',
+    openInYouTube: 'Open on YouTube',
     accountsThisOne: 'signed in',
     worthThen: 'Worth then',
     worthNow: 'Worth now',

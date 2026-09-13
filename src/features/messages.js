@@ -2859,7 +2859,7 @@ export function messagesFeature(ctx) {
         avatar(ev.pubkey, 'chat-avatar mini', false),
         h('span', { class: 'quote-name' }, displayName(ev.pubkey)),
         h('span', { class: 'small faint', style: 'white-space:nowrap' }, timeLabel(ev.created_at * 1000))),
-      h('div', { class: 'small', style: 'white-space:pre-wrap;overflow-wrap:anywhere' },
+      h('div', { class: 'note-text', style: 'white-space:pre-wrap;overflow-wrap:anywhere' },
         // one level deep only: a quote of a quote of a quote is a rabbit
         // hole, and the inner one stays a link you can follow
         ...noteBody(ev.content, depth + 1)));
@@ -3244,7 +3244,7 @@ export function messagesFeature(ctx) {
           h('div', { class: 'row', style: 'gap:7px;align-items:baseline;min-width:0' },
             h('span', {
               // the name, like the avatar, is its own tap-target (profile)
-              style: 'font-weight:600;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer',
+              style: 'font-weight:600;font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer',
               onClick: (e) => { e.stopPropagation(); openProfile(pk); },
             }, name),
             h('span', { class: 'small faint', style: 'white-space:nowrap' },
@@ -3257,7 +3257,7 @@ export function messagesFeature(ctx) {
             style: 'flex-shrink:0',
             onClick: (e) => { e.stopPropagation(); ui.noteSheet = ev; render(); },
           }, '\u22ef')),
-        h('div', { class: 'small', style: 'white-space:pre-wrap;overflow-wrap:anywhere' }, ...noteBody(ev.content)),
+        h('div', { class: 'note-text', style: 'white-space:pre-wrap;overflow-wrap:anywhere' }, ...noteBody(ev.content)),
         pending ? null : noteActions(pk, ev, { canZap })));
   }
 

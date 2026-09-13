@@ -104,6 +104,13 @@ h1, h2, h3 { margin: 0; font-weight: 650; letter-spacing: -0.01em; }
 .muted { color: var(--muted); }
 .faint { color: var(--faint); }
 .small { font-size: 13px; }
+/* The reading size for a post or a message — the copy you actually read,
+   as opposed to a caption or a row subtitle, which is what .small is for.
+   Post bodies wore .small (13px) and a feed of them read like footnotes on
+   a phone. 16px is Amethyst's own default for a note body, and at the
+   inherited 1.45 line-height the line pitch lands within a pixel of what
+   Amethyst renders. Measured on a Pixel 9, side by side. */
+.note-text { font-size: 16px; }
 .mono { font-family: var(--mono); }
 .center { text-align: center; }
 .break { word-break: break-all; }
@@ -408,7 +415,7 @@ hr.divider { margin: 16px 0; }
 .chat-avatar.spacer { background: transparent; height: 0; }
 .chat-body { min-width: 0; flex: 1; }
 .chat-meta { display: flex; align-items: baseline; gap: 7px; margin-bottom: 2px; }
-.chat-name { font-size: 14px; font-weight: 650; }
+.chat-name { font-size: 15px; font-weight: 650; }
 .chat-badge {
   font-size: 10px; font-weight: 650; color: var(--accent-fg); background: var(--accent);
   border-radius: 5px; padding: 1px 5px; margin-left: 5px; vertical-align: 1px;
@@ -417,7 +424,7 @@ hr.divider { margin: 16px 0; }
 .chat-bubble {
   position: relative; display: inline-block; max-width: 100%;
   background: var(--paper); border: 1px solid var(--line); border-radius: 12px;
-  padding: 7px 11px; font-size: 15px; line-height: 1.45;
+  padding: 7px 11px; font-size: 16px; line-height: 1.45;
   overflow-wrap: break-word; white-space: pre-wrap;
 }
 /* the messages surfaces run edge to edge on phones, like the notes feed —
@@ -507,10 +514,10 @@ hr.divider { margin: 16px 0; }
 /* Messages v2 — home lists, DM threads, invite panel. */
 .chat-back { font-size: 22px; line-height: 1; padding: 2px 10px 4px; flex-shrink: 0; }
 .chat-thread-row { display: flex; gap: 10px; align-items: center; cursor: pointer; }
-/* list rows read at message size: names 15, previews/member counts 14 —
-   the generic .small (12px) made the inbox feel like fine print */
-.chat-thread-row .chat-name { font-size: 15px; }
-.chat-thread-row .small { font-size: 14px; }
+/* list rows read at message size: names 16, previews/member counts 15 —
+   the generic .small (13px) made the inbox feel like fine print */
+.chat-thread-row .chat-name { font-size: 16px; }
+.chat-thread-row .small { font-size: 15px; }
 .chat-preview { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .thread-when { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; }
 .thread-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--red); flex-shrink: 0; }
@@ -591,7 +598,8 @@ html.no-scroll { overflow: hidden; scrollbar-gutter: auto; }
 .quote-card.clickable { cursor: pointer; }
 .quote-card.clickable:hover { border-color: var(--line-strong); }
 .quote-loading { flex-direction: row; align-items: center; gap: 8px; }
-.quote-name { font-weight: 600; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.quote-card .note-text { font-size: 14px; }
+.quote-name { font-weight: 600; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .quote-card .note-img { max-height: 220px; }
 .quote-card .yt-embed { margin-top: 4px; }
 

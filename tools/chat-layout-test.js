@@ -8,6 +8,11 @@ import puppeteer from 'puppeteer-core';
 import { generateMnemonic } from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english';
 import { buildHtml } from '../build.js';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+// the shot goes somewhere every machine has, not one session's scratch dir
+const shotPath = join(tmpdir(), 'chat-layout.png');
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let ok = true;
@@ -38,7 +43,7 @@ try {
       await page.evaluate(() => localStorage.setItem('btc-wallet-network', 'regtest'));
       await page.reload({ waitUntil: 'domcontentloaded' });
       await sleep(400);
-      await click('button', 'I already have a wallet');
+      await click('button', 'Get started');
       await sleep(300);
       await click('button', 'Import existing');
       await sleep(300);
@@ -46,7 +51,10 @@ try {
       await page.type('textarea', generateMnemonic(wordlist));
       await click('button', 'Open wallet');
       await waitText('receive', 15000);
-      await page.evaluate(() => document.querySelector('.header-msgs')?.click());
+      // .header-msgs is the shared header-button class — settings, lock and
+      // search wear it too, and the first one is no longer this one
+      await page.evaluate(() => [...document.querySelectorAll('button')]
+        .find((b) => /message/i.test(b.getAttribute('aria-label') || ''))?.click());
       await sleep(800);
       await click('button', 'Create');
       await sleep(300);
@@ -86,7 +94,7 @@ try {
   }
   await page.setViewport({ width: 1280, height: 800 });
   await sleep(500);
-  await page.screenshot({ path: '/tmp/claude-1000/-home-adam-halwallet/11ef6049-3f7a-4687-a8e8-79c6f9403a6b/scratchpad/chat-layout.png' });
+  await page.screenshot({ path: shotPath });
 
   console.log('\n[the channel header]');
   const one = await page.evaluate(() => ({

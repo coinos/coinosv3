@@ -884,7 +884,7 @@ export function nwcFeature(ctx) {
       list.length
         ? h('div', { class: 'col', style: 'gap:6px;border-top:1px solid var(--border,rgba(128,128,128,.2));padding-top:8px' },
           load().pushUnavailable && !load().background
-            ? h('div', { class: 'small faint' }, t('nwcNoPushService'))
+            ? h('div', { class: 'small faint' }, hook('pushAdvice') || t('nwcNoPushService'))
             : null,
           h('div', { class: 'row between' },
             h('span', { class: 'small' }, t('nwcBackground')),

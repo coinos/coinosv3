@@ -854,6 +854,8 @@ const STR = {
     nwcBackground: 'Answer while closed',
     nwcNoPushHere: 'This browser can\u2019t receive push messages.',
     nwcNoPermission: 'Notifications weren\u2019t allowed.',
+    upNoDistributor: 'To be reached while this app is closed you need a push app installed alongside it — ntfy is the usual one (F\u2011Droid or the Play Store). Install it, open it once, then reopen coinos. Until then, payments and messages arrive whenever coinos is open.',
+    upWaiting: 'Waiting for {app} to hand over a push address \u2014 reopen coinos in a moment and it should be here.',
     nwcNoPushService: 'This browser has no push service, so it can\u2019t be woken while closed. On Android that\u2019s usually a phone without Google Play Services \u2014 Firefox brings its own push and works there. Zaps are still answered whenever coinos is open.',
     nwcOn: 'On',
     nwcOff: 'Off',

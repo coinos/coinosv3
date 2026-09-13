@@ -17,6 +17,8 @@ import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 
+import java.util.List;
+
 /**
  * The wallet, in a WebView this app owns.
  *
@@ -108,8 +110,28 @@ public class MainActivity extends Activity {
         && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
       try { requestPermissions(new String[] { Manifest.permission.POST_NOTIFICATIONS }, REQ_PERMS); } catch (Exception ignored) {}
     }
+    // The page can ask where it's running and whether anything on this phone
+    // can deliver a push — the advice it gives is useless otherwise ("use
+    // Firefox" makes no sense inside a WebView that IS the app).
+    web.addJavascriptInterface(new Host(), "CoinosHost");
     Push.register(this);
     web.loadUrl(urlFor(getIntent()));
+  }
+
+  /** What the page is allowed to ask about its surroundings. */
+  private class Host {
+    @android.webkit.JavascriptInterface
+    public String env() {
+      String dist = Push.distributor(MainActivity.this);
+      List<String> all = Push.distributors(MainActivity.this);
+      String endpoint = Push.endpoint(MainActivity.this);
+      return "{\"app\":\"graphene\",\"distributors\":" + all.size()
+          + ",\"distributor\":" + (dist == null ? "null" : "\"" + dist + "\"")
+          + ",\"endpoint\":" + (endpoint != null) + "}";
+    }
+    /** The wake job's bridge has this too; here it's a no-op. */
+    @android.webkit.JavascriptInterface
+    public void done() {}
   }
 
   /** A scheme intent (lightning:, bitcoin:, nostr:) rides in as ?u=, like the TWA's. */

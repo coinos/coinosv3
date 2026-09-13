@@ -1284,6 +1284,25 @@ export function messagesFeature(ctx) {
     } catch {}
   })();
 
+  // What to tell someone whose phone can't be woken. In a browser that's
+  // "your browser has no push service"; inside the UnifiedPush build of the
+  // Android app it's about the distributor, because that build IS the push —
+  // telling a WebView to go and use Firefox would be nonsense.
+  function pushAdvice() {
+    const env = hostEnv();
+    if (!env || env.app !== 'graphene') return t('nwcNoPushService');
+    if (!env.distributors) return t('upNoDistributor');
+    if (!env.endpoint) return t('upWaiting', { app: (env.distributor || '').split('.').pop() });
+    return t('nwcNoPushService');
+  }
+  function hostEnv() {
+    try {
+      const h2 = typeof window !== 'undefined' && window.CoinosHost;
+      if (!h2 || typeof h2.env !== 'function') return null;
+      return JSON.parse(h2.env());
+    } catch { return null; }
+  }
+
   async function registerPush({ interactive = false } = {}) {
     try {
       // A UnifiedPush endpoint needs no permission and no push service: it's
@@ -4038,9 +4057,10 @@ export function messagesFeature(ctx) {
           }, t('msgDismiss')))));
     // A browser with no push service at all: the offer above is beside the
     // point (permission may even be granted), so say what's actually wrong
-    // wherever the user got to.
+    // wherever the user got to. Inside the Android build that carries its own
+    // push, the answer is a different one — see pushAdvice.
     if (st().noPushService && !st().push)
-      kids.push(h('div', { class: 'notice info small' }, t('nwcNoPushService')));
+      kids.push(h('div', { class: 'notice info small' }, pushAdvice()));
 
     // ---- the feed, above the conversations: it's the thing you read, they're
     // the things you answer
@@ -4548,6 +4568,8 @@ export function messagesFeature(ctx) {
     // Also the way a zap sent from a form reaches the tally right away,
     // without waiting on its receipt.
     zapSettled(eventId, ok, sats) { settleZap(eventId, ok, sats); return true; },
+    // the right thing to say about push on THIS device, wherever it's asked
+    pushAdvice() { return pushAdvice(); },
     // Chat lives behind a header button and takes over the whole screen —
     // no balance card, no tabs; each view carries its own way back.
     // The bare avatar node for the app header's identity menu.

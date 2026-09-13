@@ -14,6 +14,7 @@ import puppeteer from 'puppeteer-core';
 import { generateMnemonic } from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english';
 import { buildHtml } from '../build.js';
+import { cacheKeyFor } from '../src/wallet.js';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let ok = true;
 const check = (n, c, d = '') => { console.log(` ${c ? '✓' : '✗'} ${n}${d ? ' — ' + d : ''}`); if (!c) ok = false; };
@@ -57,7 +58,8 @@ try {
   await click('get started'); await sleep(500);
   await click('import existing'); await sleep(400);
   await page.waitForSelector('textarea');
-  await page.type('textarea', generateMnemonic(wordlist));
+  const mn = generateMnemonic(wordlist);
+  await page.type('textarea', mn);
   await click('open wallet');
   await waitText('receive', 20000);
 
@@ -78,6 +80,28 @@ try {
   const txt = await page.evaluate(() => document.body.innerText);
   check('the browser\'s own dead push is no longer the story', !/no push service/i.test(txt),
     (txt.match(/[^\n]*push service[^\n]*/i) || [''])[0].slice(0, 50));
+
+  // Inside the Android build, the advice about push is about the
+  // distributor, not about browsers — it IS the browser.
+  await page.evaluateOnNewDocument(() => {
+    window.CoinosHost = { env: () => JSON.stringify({ app: 'graphene', distributors: 0, distributor: null, endpoint: false }) };
+  });
+  // a phone that has never managed a push: no endpoint, and the browser's
+  // own push already known to be dead
+  await page.evaluate((k) => {
+    localStorage.removeItem('coinos-unifiedpush');
+    const st = JSON.parse(localStorage.getItem(k) || '{}');
+    st.push = false; st.noPushService = true;
+    localStorage.setItem(k, JSON.stringify(st));
+  }, cacheKeyFor(mn + '\n') + ':messages');
+  await page.goto('http://localhost:5263/', { waitUntil: 'domcontentloaded' });
+  await waitText('receive', 20000);
+  await page.evaluate(() => { const b = [...document.querySelectorAll('button')].find((e) => /message/i.test(e.getAttribute('aria-label') || '')); if (b) b.click(); });
+  await sleep(2500);
+  const advice = await page.evaluate(() => document.body.innerText);
+  check('with no distributor installed it says to install one', /ntfy/i.test(advice),
+    (advice.match(/[^\n]*ntfy[^\n]*/i) || ['nothing about a distributor'])[0].slice(0, 60));
+  check('...and not to go and use Firefox', !/Firefox/.test(advice));
 
   // The WebView build wakes the wallet off-screen with ?wake=<payload> and a
   // CoinosHost bridge. The page has to notice, tidy the URL, and say when

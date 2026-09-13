@@ -65,7 +65,7 @@ try {
   await sleep(400);
 
   console.log('\n[1] import + core wallet');
-  await clickText('button', 'Get started'); // the front door gained a step
+  await clickText('button', 'Create a new wallet'); // the front door gained a step
   await sleep(300);
   await clickText('button', 'Import existing');
   await sleep(200);

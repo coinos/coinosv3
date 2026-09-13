@@ -25,7 +25,7 @@ const waitText = async (x, ms = 20000) => { for (let i = 0; i < ms / 250; i++) {
 try {
   await page.goto('http://localhost:5234/', { waitUntil: 'domcontentloaded' });
   await sleep(400);
-  await click('button', 'Get started');
+  await click('button', 'Create a new wallet');
   await sleep(300);
   await click('button', 'Import existing');
   await sleep(300);

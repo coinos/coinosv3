@@ -43,7 +43,7 @@ try {
       await page.evaluate(() => localStorage.setItem('btc-wallet-network', 'regtest'));
       await page.reload({ waitUntil: 'domcontentloaded' });
       await sleep(400);
-      await click('button', 'Get started');
+      await click('button', 'Create a new wallet');
       await sleep(300);
       await click('button', 'Import existing');
       await sleep(300);

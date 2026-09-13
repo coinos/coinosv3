@@ -1,7 +1,7 @@
 // A signed-in wallet must never flash the signed-out welcome screen. Anything
 // that renders before boot has restored the session (a deferred feature chunk
 // landing, an emitter tick) is rendering without knowing whether anyone is
-// signed in, and "Get started" over a wallet that's about to open is the one
+// signed in, and the start page over a wallet that's about to open is the one
 // wrong guess that's unmistakable.
 //
 // The race is widened here (the locale fetch is delayed, so the deferred
@@ -27,7 +27,7 @@ try {
   await page.evaluate(() => localStorage.setItem('btc-wallet-network', 'regtest'));
   await page.reload({ waitUntil: 'domcontentloaded' });
   await sleep(400);
-  await click('get started'); await sleep(500);
+  await click('create a new wallet'); await sleep(500);
   await click('import existing'); await sleep(400);
   await page.waitForSelector('textarea');
   await page.type('textarea', generateMnemonic(wordlist));
@@ -48,7 +48,7 @@ try {
     window.__sawSignin = null;
     const tick = () => {
       const txt = (document.body && document.body.innerText) || '';
-      if (!window.__sawSignin && /get started|sign in with/i.test(txt)) window.__sawSignin = Math.round(performance.now());
+      if (!window.__sawSignin && /create a new wallet|sign in with/i.test(txt)) window.__sawSignin = Math.round(performance.now());
       if (!window.__walletAt && document.querySelector('.balance')) window.__walletAt = Math.round(performance.now());
       if (!window.__walletAt) requestAnimationFrame(tick);
     };

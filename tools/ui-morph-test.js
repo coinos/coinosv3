@@ -29,12 +29,12 @@ check('app booted to a screen with buttons', hasButton);
 
 // walk into a wallet if the entry button exists
 const clicked = await page.evaluate(() => {
-  const btn = [...document.querySelectorAll('button')].find((b) => /get started/i.test(b.textContent));
+  const btn = [...document.querySelectorAll('button')].find((b) => /create a new wallet/i.test(b.textContent));
   if (btn) { btn.click(); return true; }
   return false;
 });
 await sleep(4000);
-check('entered next screen', await page.evaluate(() => document.body.textContent.length > 100), clicked ? '' : '(no Get started button — already in wallet)');
+check('entered next screen', await page.evaluate(() => document.body.textContent.length > 100), clicked ? '' : '(no start button — already in wallet)');
 
 // node identity across background renders: tag a button, force renders, compare
 const identity = await page.evaluate(async () => {

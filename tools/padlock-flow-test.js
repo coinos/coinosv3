@@ -29,7 +29,7 @@ try {
   await page.evaluate(() => localStorage.setItem('btc-wallet-network', 'regtest'));
   await page.reload({ waitUntil: 'domcontentloaded' });
   await sleep(400);
-  await click('button', 'Get started');
+  await click('button', 'Create a new wallet');
   await sleep(500);
   await click('button', 'Import existing');
   await sleep(400);
@@ -117,7 +117,7 @@ try {
   await p2.evaluate(() => localStorage.setItem('btc-wallet-network', 'regtest'));
   await p2.reload({ waitUntil: 'domcontentloaded' });
   await sleep(400);
-  await click2('Get started');
+  await click2('Create a new wallet');
   await sleep(500);
   check('wallet A open', await importWallet());
   await sleep(2000);

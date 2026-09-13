@@ -1280,6 +1280,12 @@ async function enterWallet(mnemonic, passphrase, opts = {}) {
     mnemonic: (mnemonic || '').trim().replace(/\s+/g, ' '),
     passphrase: passphrase || '',
   });
+  // Has this person ever had the recovery phrase in front of them? Creating
+  // a wallet shows it; importing one means they typed it. A sign-in DERIVES
+  // it — Google, a passkey and a nostr key all end up at a seed the user has
+  // never seen, and which nobody can reissue for them. That is the one case
+  // worth asking about, so it's recorded once and never guessed at again.
+  if (acc.seedSeen === undefined) acc.seedSeen = !opts.nostrPubkey;
   await activateAccount(acc, { ...opts, fresh: true });
 }
 
@@ -2888,7 +2894,12 @@ function recoveryCard(a) {
           a.passphrase ? copyBtn(a.passphrase, t('copyPassphrase')) : null,
           h('button', { class: 'btn-sm grow', onClick: () => { ui.revealShown = false; render(); } }, t('hide')))
       : h('div', { class: 'row gap6' },
-          h('button', { class: 'btn-primary grow', onClick: () => { ui.revealShown = 'words'; render(); } }, t('revealWords')),
+          h('button', { class: 'btn-primary grow', onClick: () => {
+            ui.revealShown = 'words';
+            // seeing it here counts: no need to be asked again elsewhere
+            if (!a.seedSeen) { a.seedSeen = true; persistAccounts(); if (a.persisted) writeVault(); }
+            render();
+          } }, t('revealWords')),
           h('button', { class: 'btn-sm', onClick: () => { ui.revealShown = false; render(); } }, t('hide')))
   );
 }
@@ -3080,14 +3091,23 @@ function onboardScreen() {
   // the login finishes.
   if ((o.step === 'welcome' || o.step === 'seed' || o.step === 'signin')
       && ui.screen === 'wallet' && activeAccount() && !ui.nostrLoginBusy) {
-    ui.onb = null;
-    try { localStorage.removeItem(ONB_STEP_KEY); } catch {}
-    // On-chain first: the wizard's promise is "your keys, your coins", and
-    // Spending stays out of sight until the user sets it up.
-    ui.account = 'savings';
-    try { localStorage.setItem(ACCOUNT_KEY, 'savings'); } catch {}
-    ui.tab = 'history';
-    return null; // the caller falls through to the wallet itself
+    // A wallet that arrived by SIGN-IN has a recovery phrase its owner has
+    // never seen. Show it once, here, while it still reads as part of
+    // setting up — rather than leaving it buried in settings until the day
+    // they lose the Google account and find out it was never a backup.
+    // Handled further down, where page()/title() exist.
+    const arrived = activeAccount();
+    if (arrived && arrived.mnemonic && !arrived.seedSeen) o.step = 'backup';
+    else {
+      ui.onb = null;
+      try { localStorage.removeItem(ONB_STEP_KEY); } catch {}
+      // On-chain first: the wizard's promise is "your keys, your coins", and
+      // Spending stays out of sight until the user sets it up.
+      ui.account = 'savings';
+      try { localStorage.setItem(ACCOUNT_KEY, 'savings'); } catch {}
+      ui.tab = 'history';
+      return null; // the caller falls through to the wallet itself
+    }
   }
   if (o.step === 'spend') {
     const addr = featureHook('namesAddress');
@@ -3164,14 +3184,24 @@ function onboardScreen() {
     return page([
       h('div', { class: 'onb-hero' }, brandHeader(false)),
       title(t('onbWelcomeTitle')),
-      // Starting is the primary path; bringing a nostr account is the
-      // alternative, offered here rather than as a question of its own.
-      h('button', { class: 'btn-primary btn-block', style: 'font-size:17px;padding:14px', onClick: () => {
-        ui.unlockTab = 'create';
-        ui.unlockError = '';
-        o.step = 'seed';
-        render();
-      } }, t('onbStart')),
+      // What this wallet IS, before the buttons. Four equally weighted
+      // buttons with only the sign-in ones saying what they do sent people
+      // straight past the seed phrase — which is the wallet — into a login
+      // that is only a convenience wrapped around it.
+      h('p', { class: 'muted', style: 'margin:0' }, t('onbWelcomeBody')),
+      // Making your own keys is the path; a sign-in is the alternative,
+      // below the line.
+      h('button', {
+        // a stable hook for tests, so this button survives its own copy
+        id: 'onb-create',
+        class: 'btn-primary btn-block', style: 'font-size:17px;padding:14px', onClick: () => {
+          ui.unlockTab = 'create';
+          ui.unlockError = '';
+          o.step = 'seed';
+          render();
+        } }, t('onbStart')),
+      h('p', { class: 'small muted', style: 'margin:-6px 0 0;text-align:center' }, t('onbStartHint')),
+      h('div', { class: 'onb-or' }, h('span', {}, t('onbOrSignIn'))),
       // All the sign-in doors right on the welcome screen (Google, passkey,
       // Nostr) — the feature supplies them; the single-button fallback keeps
       // builds without it working.
@@ -3184,6 +3214,42 @@ function onboardScreen() {
           h('span', { style: 'display:flex;flex-shrink:0', html: NOSTR_MARK }),
           t('nlSignIn'))),
       ui.onbError ? h('div', { class: 'notice err' }, ui.onbError) : null,
+    ]);
+  }
+  if (o.step === 'backup') {
+    const acc = activeAccount();
+    // the wallet went away (switched, logged out) — nothing to back up
+    if (!acc || !acc.mnemonic) { ui.onb = null; try { localStorage.removeItem(ONB_STEP_KEY); } catch {} return null; }
+    const words = acc.mnemonic.split(' ');
+    const done = () => {
+      acc.seedSeen = true;
+      persistAccounts();
+      if (acc.persisted) writeVault();
+      ui.onb = null;
+      try { localStorage.removeItem(ONB_STEP_KEY); } catch {}
+      ui.account = 'savings';
+      try { localStorage.setItem(ACCOUNT_KEY, 'savings'); } catch {}
+      ui.tab = 'history';
+      render();
+    };
+    return page([
+      title(t('onbBackupTitle')),
+      h('p', { class: 'muted', style: 'margin:0' }, t('onbBackupBody')),
+      h('div', { class: 'warn-box' }, t('writeDownWarn')),
+      h('div', { class: 'words' }, words.map((w, i) =>
+        h('div', { class: 'w' }, h('span', { class: 'n' }, i + 1), h('span', { class: 't' }, w)))),
+      h('div', { class: 'row gap6' }, copyBtn(acc.mnemonic, t('copyPhrase'))),
+      h('button', { class: 'btn-primary btn-block', style: 'padding:14px', onClick: done }, t('onbBackupDone')),
+      // Later means later, not never: seedSeen stays false, so the wallet
+      // keeps a quiet reminder until the phrase has actually been seen.
+      h('button', { class: 'btn-ghost btn-block', onClick: () => {
+        ui.onb = null;
+        try { localStorage.removeItem(ONB_STEP_KEY); } catch {}
+        ui.account = 'savings';
+        try { localStorage.setItem(ACCOUNT_KEY, 'savings'); } catch {}
+        ui.tab = 'history';
+        render();
+      } }, t('onbBackupLater')),
     ]);
   }
   if (o.step === 'seed') {
@@ -3439,10 +3505,29 @@ function walletScreen() {
     brandHeader(true),
     h('div', { class: 'mt16' }, balanceCard()),
     ui.offlineFallback && wallet.offline ? offlineBanner() : null,
+    backupNotice(),
     ...featureAll('walletNotices'),
     tabsBar(),
     pane
   );
+}
+
+// A wallet whose recovery phrase has never been on screen keeps one quiet
+// line about it. "Later" is a real answer, so this is a row and not a modal —
+// but it doesn't dismiss, because the risk doesn't go away on its own. It
+// disappears the moment the phrase is actually seen (here or in settings).
+function backupNotice() {
+  const a = activeAccount();
+  if (!a || !a.mnemonic || a.seedSeen || wallet.watchOnly) return null;
+  return h('div', { class: 'small muted', style: 'margin:10px 0 0;text-align:center' },
+    t('backupReminder'),
+    ' ',
+    h('button', { class: 'linklike small', onClick: () => {
+      ui.tab = 'settings';
+      ui.settingsPage = 'wallet';
+      ui.revealShown = 'masked';
+      render();
+    } }, t('backupReminderGo')));
 }
 
 function offlineBanner() {

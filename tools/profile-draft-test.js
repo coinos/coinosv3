@@ -41,7 +41,7 @@ try {
   await page.goto(origin);
   await page.evaluate(() => localStorage.setItem('btc-wallet-network', 'regtest'));
   await page.reload({ waitUntil: 'domcontentloaded' });
-  await click('Get started');
+  await click('Create a new wallet');
   await click('Import existing');
   await page.waitForSelector('textarea');
   const mnemonic = generateMnemonic(wordlist);

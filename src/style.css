@@ -865,6 +865,15 @@ body::after {
    column to the 420px cap even on narrower phones, overflowing the page. */
 .onb { width: 100%; max-width: 420px; margin: 8vh auto 0; padding: 0 8px; }
 .onb-title { margin: 0; font-size: 26px; letter-spacing: -0.02em; }
+/* The line between making your own keys and signing in with someone else's
+   account. Without it the four buttons read as four equal choices. */
+.onb-or {
+  display: flex; align-items: center; gap: 12px; margin: 4px 0 -4px;
+  color: var(--faint); font-size: 13px;
+}
+.onb-or::before, .onb-or::after {
+  content: ''; flex: 1; height: 1px; background: var(--line);
+}
 .onb-hero { margin-bottom: 8px; }
 .onb-punks { display: flex; gap: 10px; overflow-x: auto; padding: 6px 2px; }
 .onb-punk { width: 56px; height: 56px; border-radius: 50%; flex-shrink: 0; cursor: pointer; border: 3px solid transparent; transition: transform .15s, border-color .15s; }

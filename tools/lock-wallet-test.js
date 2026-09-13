@@ -44,7 +44,7 @@ try {
   await page.evaluate(() => localStorage.setItem('btc-wallet-network', 'regtest'));
   await page.reload({ waitUntil: 'domcontentloaded' });
   await sleep(400);
-  await click('button', 'Get started');
+  await click('button', 'Create a new wallet');
   await sleep(500);
   await click('button', 'Import existing');
   await sleep(400);
@@ -76,7 +76,7 @@ try {
   await logout();
   txt = await body();
   check('it does not ask a second time', !/protect this device/i.test(txt), txt.slice(0, 120).replace(/\n+/g, ' | '));
-  check('logout means the front door', /create new|get started|sign in/i.test(txt), txt.slice(0, 120).replace(/\n+/g, ' | '));
+  check('logout means the front door', /create a new wallet|sign in/i.test(txt), txt.slice(0, 120).replace(/\n+/g, ' | '));
   await page.reload({ waitUntil: 'domcontentloaded' });
   check('and a saved passwordless wallet is one reload away', await waitText('receive'));
   await sleep(1000);
@@ -109,7 +109,7 @@ try {
   check('back in the wallet', await waitText('receive'));
   await logout();
   txt = await body();
-  check('logout is still the front door', /create new|get started|sign in/i.test(txt), txt.slice(0, 120).replace(/\n+/g, ' | '));
+  check('logout is still the front door', /create a new wallet|sign in/i.test(txt), txt.slice(0, 120).replace(/\n+/g, ' | '));
   check('the wallet is still saved', (await vaultSize()) > 0);
   await page.reload({ waitUntil: 'domcontentloaded' });
   await sleep(800);
@@ -148,7 +148,7 @@ try {
   await sleep(1200);
   txt = await body();
   check('everything is gone', (await vaultSize()) === 0);
-  check('back at the start page', /get started/i.test(txt), txt.slice(0, 120).replace(/\n+/g, ' | '));
+  check('back at the start page', /create a new wallet/i.test(txt), txt.slice(0, 120).replace(/\n+/g, ' | '));
 } catch (e) {
   check('run completed', false, e.message);
 } finally {

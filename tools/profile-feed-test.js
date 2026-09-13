@@ -25,7 +25,7 @@ const waitText = async (x, ms = 20000) => { for (let i = 0; i < ms / 250; i++) {
 try {
   await page.goto('http://localhost:5234/', { waitUntil: 'domcontentloaded' });
   await sleep(400);
-  await click('button', 'I already have a wallet');
+  await click('button', 'Get started');
   await sleep(300);
   await click('button', 'Import existing');
   await sleep(300);
@@ -34,7 +34,11 @@ try {
   await click('button', 'Open wallet');
   check('wallet opens', await waitText('receive', 20000));
 
-  await page.evaluate(() => document.querySelector('.header-msgs')?.click());
+  // .header-msgs is the shared header-button class — settings, lock and
+  // search wear it too, and the first one is no longer this. Ask for the
+  // messages button by name.
+  await page.evaluate(() => [...document.querySelectorAll('button')]
+    .find((b) => /message/i.test(b.getAttribute('aria-label') || ''))?.click());
   await sleep(800);
   check('chat home opens', await waitText('coinos', 10000));
   await click('.item, .chat-thread-row', 'coinos');

@@ -13,7 +13,7 @@
 // listens for both identities and decrypts with whichever keys are present.
 
 import {
-  subscribeOn, publishOn, queryOn, fetchNostrProfile, fetchInboxRelays,
+  subscribeOn, publishOn, queryOn, fetchInboxRelays,
   npubOf, neventOf, parseNostrPubkey, parseNostrRef, generateSecretKey, getPublicKey, finalizeEvent, nip44,
   PROFILE_RELAYS, openWrapsOffthread, unwrapDMsOffthread,
 } from '../nostr.js';
@@ -450,33 +450,108 @@ export function messagesFeature(ctx) {
     })();
   }
 
-  // A profile that came back EMPTY is usually a cold boot's 5s query racing
-  // relays that were still dialing — not proof there's no kind 0. Trusting it
-  // for the full TTL once dressed a real account in a punk and an npub for a
-  // whole day; an empty answer is retried in minutes instead.
+  // A profile that came back EMPTY is usually not proof there's no kind 0.
+  // A feed holds a couple of dozen relay subscriptions open, relays cap what
+  // one connection may ask at once, and a batch of a dozen pubkeys routinely
+  // comes back with seven — the rest aren't missing, they're crowded out.
+  // Trusting that silence for ten minutes is what left real accounts wearing
+  // a punk and an npub. So a miss is retried soon and backs off only if it
+  // keeps missing: fifteen seconds, then half a minute, then a minute, up to
+  // the ten minutes that's right for someone who genuinely has no profile.
   const EMPTY_RETRY = 10 * 60_000;
+  const emptyRetry = (p) => Math.min(15_000 * Math.pow(2, Math.max(0, (p && p.miss) || 1) - 1), EMPTY_RETRY);
   function profileOf(pk) {
     warmProfiles();
     const cur = profiles.get(pk);
     if (cur !== undefined && (cur === null
-      || Date.now() - (cur.t || 0) < (!cur.name && !cur.picture ? EMPTY_RETRY : PROFILE_TTL))) return cur;
+      || Date.now() - (cur.t || 0) < (!cur.name && !cur.picture ? emptyRetry(cur) : PROFILE_TTL))) return cur;
     profiles.set(pk, cur || null); // null = loading, no fallback art yet
-    fetchNostrProfile(pk).then((p) => {
-      // An empty answer on a cold boot (relays still dialing, the 5s query
-      // came back with nothing) must never clobber a remembered face with a
-      // punk — keep the stale fields and just refresh the clock, so the
-      // known avatar holds while the full-profile fetch does its rounds.
-      const prev = profiles.get(pk);
-      const entry = keepThumb(pk, p ? { ...p, t: Date.now() } : { ...(prev || {}), t: Date.now() });
-      profiles.set(pk, entry);
-      persistProfile(pk, entry);
-      preloadPicture(entry);
-      scheduleRepaint();
-    }).catch(() => {
-      const prev = profiles.get(pk);
-      profiles.set(pk, { ...(prev || {}), t: Date.now() });
-    });
+    wantProfile(pk);
     return cur || null;
+  }
+
+  // Profiles are asked for in BATCHES.
+  //
+  // One REQ per pubkey was the old shape, and it looked fine until a feed
+  // painted eighty rows at once: eighty REQs in the same breath, against
+  // relays that cap how many a connection may have open. Most were refused,
+  // the five-second timeout expired, and an empty answer was remembered for
+  // ten minutes — which is the punk-and-a-shortened-npub row. Measured
+  // against this wallet's own feed, 131 of the 133 people on screen had a
+  // kind 0 sitting on relays we were already connected to.
+  const PROF_BATCH = 200;
+  let profQueue = new Set(), profTimer = null, profInFlight = new Set();
+  function wantProfile(pk) {
+    if (!pk || profQueue.has(pk) || profInFlight.has(pk)) return;
+    profQueue.add(pk);
+    if (profTimer) return;
+    // a short beat, so one paint's worth of rows becomes one request
+    profTimer = setTimeout(() => { profTimer = null; const b = [...profQueue]; profQueue = new Set(); fetchProfiles(b).catch(() => {}); }, 250);
+  }
+
+  function applyProfile(pk, ev) {
+    let m = null;
+    try { m = JSON.parse(ev.content); } catch { m = null; }
+    const p = m ? {
+      name: m.display_name || m.name || null,
+      picture: m.picture || null,
+      nip05: m.nip05 || null,
+      lud16: typeof m.lud16 === 'string' ? m.lud16.trim() : null,
+    } : null;
+    // An empty answer must never clobber a remembered face with a punk: keep
+    // what we had and just refresh the clock.
+    const prev = profiles.get(pk);
+    const entry = keepThumb(pk, p ? { ...p, t: Date.now(), miss: 0 } : { ...(prev || {}), t: Date.now() });
+    profiles.set(pk, entry);
+    persistProfile(pk, entry);
+    preloadPicture(entry);
+  }
+
+  async function fetchProfiles(pks) {
+    for (const pk of pks) profInFlight.add(pk);
+    try {
+      const found = new Set();
+      for (let i = 0; i < pks.length; i += PROF_BATCH) {
+        const slice = pks.slice(i, i + PROF_BATCH);
+        const evs = await queryOn(zapRelays(), { kinds: [0], authors: slice }, 5000).catch(() => []);
+        const newest = new Map();
+        for (const ev of evs || []) {
+          const c = newest.get(ev.pubkey);
+          if (!c || ev.created_at > c.created_at) newest.set(ev.pubkey, ev);
+        }
+        for (const [pk, ev] of newest) { applyProfile(pk, ev); found.add(pk); }
+        // paint what this batch found before going after the stragglers —
+        // the outbox fallback below can take seconds, and there's no reason
+        // for a face we already have to wait behind one we don't
+        if (newest.size) scheduleRepaint();
+      }
+      // Whoever our relays have never heard of: ask the relays they publish
+      // to. Same outbox plan the feed uses, so it costs the lists we already
+      // have rather than a round trip each.
+      const left = pks.filter((pk) => !found.has(pk));
+      if (left.length) {
+        await fetchRelayLists(left);
+        await Promise.all(outboxPlan(left).map(async ({ relays, authors }) => {
+          const evs = await queryOn(relays, { kinds: [0], authors }, 5000).catch(() => []);
+          const newest = new Map();
+          for (const ev of evs || []) {
+            const c = newest.get(ev.pubkey);
+            if (!c || ev.created_at > c.created_at) newest.set(ev.pubkey, ev);
+          }
+          for (const [pk, ev] of newest) { applyProfile(pk, ev); found.add(pk); }
+        }));
+      }
+      // nobody has one: mark the clock so it's retried in minutes, not asked
+      // again on every paint
+      for (const pk of pks) {
+        if (found.has(pk)) continue;
+        const prev = profiles.get(pk);
+        profiles.set(pk, { ...(prev || {}), t: Date.now(), miss: ((prev && prev.miss) || 0) + 1 });
+      }
+      scheduleRepaint();
+    } finally {
+      for (const pk of pks) profInFlight.delete(pk);
+    }
   }
   const displayName = (pk) => {
     const p = profileOf(pk);
@@ -3137,7 +3212,13 @@ export function messagesFeature(ctx) {
   }
 
   function noteRow(pk, ev, name, { open = true, focus = false } = {}) {
-    prefetchProfilePage(pk); // rows are tap-targets: have the page warm
+    // NOT prefetchProfilePage: that fetches the author's whole page — their
+    // kind 0, their relay list, their last thirty notes — and a feed row is
+    // not a profile tap. Twenty rows meant sixty requests, which is how the
+    // batched profile fetch below ended up starved and the rows settled as
+    // punks. The name and face come from the batch; the page loads when the
+    // profile is actually opened.
+    profileOf(pk);
     const isReply = ev.tags.some((x) => x[0] === 'e');
     const canZap = !isMe(pk) && !!(hook('arkReady') || hook('canLnZap'));
     // an optimistic post mid-publish: visible but not yet a real event —
@@ -4137,7 +4218,7 @@ export function messagesFeature(ctx) {
     syncInbox().catch(() => {});
     for (const jm of communities()) ensureRoom(jm);
 
-    for (const peer of threads.keys()) prefetchProfilePage(peer);
+    for (const peer of threads.keys()) profileOf(peer); // names and faces, in one batch
     const dmRows = [...threads.entries()]
       .map(([peer, m]) => {
         const last = [...m.values()].sort((a, b) => a.rumor.created_at - b.rumor.created_at).at(-1);

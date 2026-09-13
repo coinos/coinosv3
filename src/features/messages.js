@@ -310,7 +310,8 @@ export function messagesFeature(ctx) {
     if (!p || (!p.name && !p.picture)) return;
     const s = wallet.loadFeatureState('profiles', {});
     s[pk] = { name: p.name || null, picture: p.picture || null, nip05: p.nip05 || null, lud16: p.lud16 || null, t: Date.now(),
-      ...(p.thumbFor === p.picture && p.thumb ? { thumb: p.thumb, thumbFor: p.thumbFor } : {}),
+      ...(p.thumbFor === p.picture && p.thumb
+        ? { thumb: p.thumb, thumbFor: p.thumbFor, thumbPx: p.thumbPx || 0 } : {}),
       ...(p.thumbFail ? { thumbFail: p.thumbFail, thumbFailAt: p.thumbFailAt || 0, thumbFails: p.thumbFails || 1,
         thumbFailVersion: p.thumbFailVersion || 0 } : {}) };
     // Thumbnails are the bulk of this blob, so they live on a budget: the
@@ -353,7 +354,11 @@ export function messagesFeature(ctx) {
   const keepThumb = (pk, entry) => {
     const prev = profiles.get(pk);
     if (!prev || !entry || !entry.picture) return entry;
-    if (prev.thumb && prev.thumbFor === entry.picture) { entry.thumb = prev.thumb; entry.thumbFor = prev.thumbFor; }
+    if (prev.thumb && prev.thumbFor === entry.picture) {
+      // thumbPx rides along: without it a refreshed profile looks like a
+      // thumbnail of unknown size and gets remade on every relay refresh
+      entry.thumb = prev.thumb; entry.thumbFor = prev.thumbFor; entry.thumbPx = prev.thumbPx || 0;
+    }
     if (prev.thumbFail === entry.picture) {
       entry.thumbFail = prev.thumbFail;
       entry.thumbFailAt = prev.thumbFailAt || 0;
@@ -379,10 +384,21 @@ export function messagesFeature(ctx) {
   // Reading the pixels needs CORS (a tainted canvas can't be exported). Most
   // avatar hosts allow it; the ones that don't are remembered as failures and
   // keep today's behaviour rather than being retried every boot.
-  const THUMB_PX = 96;       // 30px circles at 3x; the 64px profile avatar
-                             // layers the original over it anyway
-  const THUMB_MAX = 9000;    // chars of data URL for one face
-  const THUMB_BUDGET = 180_000; // ...and for all of them together
+  const THUMB_PX = 144;      // the 44px feed circle at 3x, with room to spare;
+                             // the 64px profile avatar layers the original
+                             // over it anyway
+  // Chars of data URL for one face. Scaled with THUMB_PX: the busiest
+  // picture on hand fit 9000 at 96px and needs 12827 at 144px — measured in
+  // the browser, not estimated, because its own webp encoder is nothing
+  // like as kind to noise as an offline one. A face over the cap keeps
+  // painting from its original, which is the old behaviour, so the cap only
+  // decides who gets the fast path.
+  const THUMB_MAX = 16_000;
+  // ...and for all of them together. Raised with THUMB_PX: a 144px face
+  // costs about 5.4KB against 96px's 3.2KB, and the budget is what decides
+  // how many faces paint instantly rather than fetching their original —
+  // this holds about fifty, which covers a feed and an inbox at once.
+  const THUMB_BUDGET = 280_000;
   const THUMB_SLOW = 20_000; // a host that won't answer must not hold a slot
   const THUMB_RETRY = 6 * 3600_000; // ...and must not be written off for good
   const THUMB_RETRY_MAX = 14 * 24 * 3600_000; // a host that never works, backed off
@@ -392,7 +408,9 @@ export function messagesFeature(ctx) {
   const thumbing = new Set();
   function makeThumb(pk, p) {
     if (!p || !p.picture || typeof document === 'undefined') return;
-    if (p.thumbFor === p.picture) return;
+    // thumbPx: a thumbnail made when the circles were smaller is too soft for
+    // today's, so it's remade once. The old one keeps painting until then.
+    if (p.thumbFor === p.picture && p.thumbPx === THUMB_PX) return;
     if (localPunk(p.picture)) return; // our own art, already the right size on disk
     // A failed attempt is usually the network, not the host: these images sit
     // on CDNs that answer in 700ms one minute and time out the next. So every
@@ -445,7 +463,7 @@ export function messagesFeature(ctx) {
         if (!data.startsWith('data:image/webp')) data = c.toDataURL('image/jpeg', 0.7);
         if (data.length > THUMB_MAX) data = c.toDataURL('image/webp', 0.5); // a busy picture, leaned on harder
         if (data.length > THUMB_MAX) throw new Error('too big');
-        done({ thumb: data, thumbFor: url });
+        done({ thumb: data, thumbFor: url, thumbPx: THUMB_PX });
       } catch { failed(); } finally { try { bmp && bmp.close(); } catch {} }
     })();
   }
@@ -3238,7 +3256,7 @@ export function messagesFeature(ctx) {
     },
       // the avatar is its own tap-target (profile), even inside an openable
       // row — its handler stops propagation, so the row still opens the thread
-      avatar(pk),
+      avatar(pk, 'chat-avatar note-avatar'),
       h('div', { class: 'col grow', style: 'min-width:0;gap:3px' },
         h('div', { class: 'row between', style: 'align-items:center;gap:8px' },
           h('div', { class: 'row', style: 'gap:7px;align-items:baseline;min-width:0' },

@@ -109,7 +109,32 @@ try {
   });
   check('a thumbnail was made and persisted', row.hasThumb, row.kind + ' ' + row.len + ' chars');
   check('it is pinned to the picture it came from', row.thumbFor);
-  check('it is small', row.len > 0 && row.len < 12000, row.len + ' chars');
+  check('it is small', row.len > 0 && row.len < 16000, row.len + ' chars');
+
+  // The whole point of the thumbnail is that no circle in the app ever has
+  // to fetch the original again. The feed's face is the biggest of them, so
+  // the thumbnail has to cover IT at phone pixel density — if someone grows
+  // that circle without growing THUMB_PX, every feed row quietly starts
+  // pulling down full-size originals again.
+  const covers = await page.evaluate(() => {
+    const el = document.createElement('div');
+    el.className = 'chat-avatar note-avatar';
+    el.style.position = 'absolute'; el.style.visibility = 'hidden';
+    document.body.appendChild(el);
+    const css = parseFloat(getComputedStyle(el).width);
+    el.remove();
+    const rows = Object.keys(localStorage).filter((k) => /^btc-wallet-cache:[0-9a-f]+:profiles$/.test(k))
+      .flatMap((k) => Object.values(JSON.parse(localStorage.getItem(k) || '{}')));
+    const r = rows.find((x) => x && (x.thumb || '').length) || {};
+    return new Promise((done) => {
+      const i = new Image();
+      i.onload = () => done({ css, thumb: i.naturalWidth });
+      i.onerror = () => done({ css, thumb: 0 });
+      i.src = r.thumb || '';
+    });
+  });
+  check('the thumbnail covers the biggest circle at 3x',
+    covers.thumb >= covers.css * 3, `${covers.thumb}px thumbnail for a ${covers.css}px circle`);
 
   // the small avatar paints from the thumbnail alone
   const style = await page.evaluate(() => {
@@ -187,7 +212,12 @@ try {
   const redirThumb = await page.evaluate(() => {
     const rows = Object.keys(localStorage).filter((k) => /^btc-wallet-cache:[0-9a-f]+:profiles$/.test(k))
       .flatMap((k) => Object.values(JSON.parse(localStorage.getItem(k) || '{}')));
-    const r = rows.find((x) => x && /redir/.test(x.picture || '')) || {};
+    // The seed above wrote this profile into EVERY wallet's cache, but only
+    // the one actually on screen paints the avatar and so makes the
+    // thumbnail. Asking the first matching row was a coin toss on
+    // localStorage key order — take the best copy, not an arbitrary one.
+    const all = rows.filter((x) => x && /redir/.test(x.picture || ''));
+    const r = all.find((x) => (x.thumb || '').length) || all[0] || {};
     return { thumb: (r.thumb || '').length, fail: !!r.thumbFail };
   });
   check('an old thumbnail failure retries immediately and clears on success', redirThumb.thumb > 0 && !redirThumb.fail,

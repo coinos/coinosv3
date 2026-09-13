@@ -502,6 +502,11 @@ export function messagesFeature(ctx) {
   // against this wallet's own feed, 131 of the 133 people on screen had a
   // kind 0 sitting on relays we were already connected to.
   const PROF_BATCH = 200;
+  // Relays that exist to index profiles rather than to carry conversation.
+  // We don't read notes from these, so they never appear in the batch above —
+  // but they are the ones most likely to hold the kind 0 of someone whose
+  // own relays we can't reach.
+  const PROFILE_INDEX_RELAYS = ['wss://purplepag.es', 'wss://user.kindpag.es', 'wss://relay.nostr.band'];
   let profQueue = new Set(), profTimer = null, profInFlight = new Set();
   function wantProfile(pk) {
     if (!pk || profQueue.has(pk) || profInFlight.has(pk)) return;
@@ -556,9 +561,23 @@ export function messagesFeature(ctx) {
       }
       // Whoever our relays have never heard of: ask the relays they publish
       // to. Same outbox plan the feed uses, so it costs the lists we already
-      // have rather than a round trip each.
+      // have rather than a round trip each — plus the relays whose whole job
+      // is holding kind 0s, which we deliberately don't read notes from and
+      // so never ask in the batch above.
       const left = pks.filter((pk) => !found.has(pk));
       if (left.length) {
+        const idx = await queryOn(PROFILE_INDEX_RELAYS, { kinds: [0], authors: left }, 5000).catch(() => []);
+        const idxNewest = new Map();
+        for (const ev of idx || []) {
+          const c = idxNewest.get(ev.pubkey);
+          if (!c || ev.created_at > c.created_at) idxNewest.set(ev.pubkey, ev);
+        }
+        for (const [pk, ev] of idxNewest) { applyProfile(pk, ev); found.add(pk); }
+        if (idxNewest.size) scheduleRepaint();
+      }
+      const stillLeft = pks.filter((pk) => !found.has(pk));
+      if (stillLeft.length) {
+        const left = stillLeft;
         await fetchRelayLists(left);
         await Promise.all(outboxPlan(left).map(async ({ relays, authors }) => {
           const evs = await queryOn(relays, { kinds: [0], authors }, 5000).catch(() => []);
@@ -2452,6 +2471,8 @@ export function messagesFeature(ctx) {
   // only runs once a wallet opens.
   if (typeof window !== 'undefined') {
     window.addEventListener('scroll', () => {
+      // back at the top of the feed: the waiting posts belong on screen now
+      if (ui.chatOpen && ui.msgView === 'feed' && atFeedTop()) flushPending(false);
       if (!ui.profilePk && !(ui.chatOpen && ui.msgView === 'feed')) return;
       if (window.innerHeight + window.scrollY < (document.documentElement.scrollHeight || 0) - 600) return;
       if (ui.profilePk) loadOlderNotes(ui.profilePk).catch(() => {});
@@ -2741,11 +2762,26 @@ export function messagesFeature(ctx) {
     feedAt = 0;
     refreshFeed();
   }
-  function mergeFeed(evs) {
+  // How far from the top counts as "reading", rather than "sitting at the top
+  // of the feed". Inserting a post above what someone is reading moves the
+  // words under their eyes; at the top there is nothing to disturb.
+  const FEED_TOP_PX = 120;
+  const atFeedTop = () => {
+    try { return (window.scrollY || 0) < FEED_TOP_PX; } catch { return true; }
+  };
+
+  function mergeFeed(evs, opts = {}) {
     const c = feedNow();
-    const seen = new Set(c.notes.map((e) => e.id));
-    const add = (evs || []).filter((e) => e.kind === 1 && !isReply(e) && !isMuted(e.pubkey) && !seen.has(e.id) && seen.add(e.id));
+    const known = new Set([...c.notes, ...(c.pending || [])].map((e) => e.id));
+    const add = (evs || []).filter((e) => e.kind === 1 && !isReply(e) && !isMuted(e.pubkey) && !known.has(e.id) && known.add(e.id));
     if (!add.length) return false;
+    // A post that arrived on its own while you were reading waits behind the
+    // pill instead of shoving the page down. Anything you asked for — a
+    // refresh, a scroll to the bottom, the first load — goes straight in.
+    if (opts.live && !atFeedTop() && c.notes.length) {
+      c.pending = [...(c.pending || []), ...add].sort((a, b) => b.created_at - a.created_at).slice(0, FEED_KEEP);
+      return true;
+    }
     c.notes = [...c.notes, ...add].sort((a, b) => b.created_at - a.created_at).slice(0, FEED_KEEP);
     // posts arriving at the TOP shouldn't cost you the ones you'd scrolled to
     const fresh = add.filter((e) => e.created_at >= (c.notes[0] || {}).created_at).length;
@@ -2753,10 +2789,30 @@ export function messagesFeature(ctx) {
     try { wallet.saveFeatureState(FEED_CACHE, c.notes.slice(0, FEED_STORE).map(slimNote)); } catch {}
     return true;
   }
+
+  // Let the waiting posts in. Called by the pill, and by simply scrolling
+  // back to the top — once you are up there they cost nothing to show.
+  function flushPending(scroll) {
+    const c = feed;
+    if (!c || !(c.pending || []).length) return;
+    const add = c.pending;
+    c.pending = [];
+    const seen = new Set(c.notes.map((e) => e.id));
+    c.notes = [...c.notes, ...add.filter((e) => !seen.has(e.id))]
+      .sort((a, b) => b.created_at - a.created_at).slice(0, FEED_KEEP);
+    c.shown = Math.min((c.shown || FEED_PAGE) + add.length, c.notes.length);
+    try { wallet.saveFeatureState(FEED_CACHE, c.notes.slice(0, FEED_STORE).map(slimNote)); } catch {}
+    render();
+    if (scroll) { try { window.scrollTo({ top: 0, behavior: 'smooth' }); } catch { window.scrollTo(0, 0); } }
+  }
   // One pass over the plan: each relay is asked only for the authors it
   // actually carries. The slowest relay doesn't hold up the rest — every
   // answer merges as it lands.
-  async function feedPass(extra = {}) {
+  // `merge` rides along to mergeFeed: a catch-up after being away is exactly
+  // as disruptive as a live arrival if you were reading halfway down, so it
+  // goes behind the pill too. A first load, or paging older posts onto the
+  // bottom, does not.
+  async function feedPass(extra = {}, merge = {}) {
     const authors = feedAuthors();
     if (!authors.length) return false;
     await fetchRelayLists(authors);
@@ -2767,16 +2823,16 @@ export function messagesFeature(ctx) {
       for (let i = 0; i < a.length; i += REQ_AUTHORS) chunks.push(a.slice(i, i + REQ_AUTHORS));
       return chunks.map(async (chunk) => {
         const evs = await queryOn(relays, { kinds: [1], authors: chunk, limit: FEED_LIMIT, ...extra }, 5000).catch(() => []);
-        if (mergeFeed(evs)) { got = true; scheduleRepaint(); }
+        if (mergeFeed(evs, merge)) { got = true; scheduleRepaint(); }
       });
     }));
     return got;
   }
-  async function refreshFeed() {
+  async function refreshFeed(opts = {}) {
     if (!feedAuthors().length) { if (feed) feed.status = 'ready'; return; }
-    if (Date.now() - feedAt < 30_000) return;
+    if (!opts.force && Date.now() - feedAt < 30_000) return;
     feedAt = Date.now();
-    try { await feedPass(); } catch {} finally {
+    try { await feedPass({}, { live: !!opts.force }); } catch {} finally {
       if (feed) feed.status = 'ready';
       scheduleRepaint();
     }
@@ -2791,7 +2847,7 @@ export function messagesFeature(ctx) {
     for (const { relays, authors } of outboxPlan(feedAuthors()))
       for (let i = 0; i < authors.length; i += REQ_AUTHORS)
         feedUnsubs.push(subscribeOn(relays, { kinds: [1], authors: authors.slice(i, i + REQ_AUTHORS), since },
-          (ev) => { if (mergeFeed([ev])) scheduleRepaint(); }));
+          (ev) => { if (mergeFeed([ev], { live: true })) scheduleRepaint(); }));
   }
   function stopFeedWatch() {
     for (const u of feedUnsubs) { try { u(); } catch {} }
@@ -4082,8 +4138,19 @@ export function messagesFeature(ctx) {
       i ? h('div', { style: 'height:1px;background:var(--border,rgba(128,128,128,.18));margin:0 -14px' }) : null,
       noteRow(ev.pubkey, ev, displayName(ev.pubkey)),
     ]);
+    // Posts that arrived while you were reading, waiting to be let in. A
+    // floating pill rather than an insertion: it says how many, and the tap
+    // that shows them also takes you up to them.
+    const waiting = (c.pending || []).length;
+    const pill = waiting
+      ? h('button', {
+          class: 'feed-new-pill',
+          onClick: () => flushPending(true),
+        }, '↑ ' + (waiting === 1 ? t('feedOneNew') : t('feedNNew', { n: waiting })))
+      : null;
     // the chat shell draws the brand header; this is just the page under it
     return h('div', { class: 'card col chat-page', style: 'gap:10px' },
+        pill,
         h('div', { class: 'row gap6', style: 'align-items:center' },
           backBtn(() => { ui.msgView = 'home'; stopFeedWatch(); render(); }),
           h('h3', { style: 'margin:0' }, t('feedTitle')),
@@ -4890,6 +4957,20 @@ export function messagesFeature(ctx) {
 
   return {
     id: 'messages',
+    // The app came back after being backgrounded. A phone freezes a hidden
+    // tab: the relay sockets are cut and every post made in the meantime is
+    // simply missing, which is why the feed used to sit there looking stale
+    // until you pulled it down by hand. So: re-dial and catch up. The gap is
+    // fetched (force, past the thirty-second throttle) and the live
+    // subscriptions are rebuilt, since the ones we had are talking to
+    // sockets that no longer exist.
+    resumed(awayMs) {
+      if (!ui.chatOpen || ui.msgView !== 'feed') return;
+      // a blink between apps didn't kill anything
+      if (awayMs && awayMs < 5_000) return;
+      refreshFeed({ force: true }).catch(() => {});
+      return true;
+    },
     // A zap flow reporting how its payment went, so the chip that appeared
     // on tap can stop pulsing (paid) or disappear (failed / never fired).
     // Also the way a zap sent from a form reaches the tally right away,

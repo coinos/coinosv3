@@ -715,6 +715,8 @@ const STR = {
     arkLnPaidTitle: 'Paid!',
     or: 'or',
     nlSignIn: 'Sign in',
+    feedOneNew: '1 new post',
+    feedNNew: '{n} new posts',
     composePreview: 'Preview',
     composePreviewHide: 'Hide preview',
     composePreviewTag: 'Preview',

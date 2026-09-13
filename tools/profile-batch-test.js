@@ -89,13 +89,17 @@ try {
 
   const reqs = await page.evaluate(() => window.__k0);
   const rowCount = await page.evaluate(() => document.querySelectorAll('.notes-feed > .row').length);
-  // A screenful of faces must cost a handful of asks, not one per row. (A few
-  // singles are expected and fine: our own profile, which onboarding reads
-  // before it writes a name, and the outbox fallback chasing one straggler to
-  // the relay only they publish to.)
+  // A screenful of faces must cost a fixed handful of asks — the number must
+  // not grow with the rows, which is the bug this whole thing is about (one
+  // REQ per row, eighty at once, most refused). The bound is a constant, not
+  // a fraction of the rows, because that is the actual property: a couple of
+  // debounced batches, each of which may also ask the profile-index relays
+  // and then chase stragglers to their own relays. Singles are expected among
+  // them — our own profile, and one straggler on a relay only they use.
+  const ASK_CEILING = 12;
   const asks = await page.evaluate(() => [...(window.__k0asks || [])].length);
-  check('a screenful of faces costs a handful of asks, not one per row',
-    reqs.length > 0 && asks <= Math.max(4, rowCount / 4),
+  check('a screenful of faces costs a fixed handful of asks, however many rows',
+    reqs.length > 0 && asks <= ASK_CEILING,
     `${asks} asks for ${rowCount} rows, batches of ${[...new Set(reqs)].filter((n) => n > 1).join(',')}`);
   check('...one request covers the screen', Math.max(0, ...reqs) >= 8, 'biggest carried ' + Math.max(0, ...reqs) + ' pubkeys');
 

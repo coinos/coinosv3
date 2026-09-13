@@ -2051,6 +2051,12 @@ function onAppVisible() {
   const awayAt = _awayAt(); _clearAwayAt();
   if (awayAt) evaluateOverdue(Date.now() - awayAt);
   armUnlockDeadline(); // background tabs throttle timers — recheck on return
+  // A phone freezes a backgrounded tab: timers stop, relay sockets are cut,
+  // and nothing that happened while you were away ever arrives. Features that
+  // hold live connections get told how long the app was gone so they can
+  // catch up rather than sit on a dead subscription.
+  const away = awayAt ? Date.now() - awayAt : 0;
+  for (const f of FEATURES) { try { f.resumed && f.resumed(away); } catch {} }
 }
 
 // At boot the in-memory timer is gone (reload / discarded tab). Drop overdue

@@ -598,6 +598,27 @@ html.no-scroll { overflow: hidden; scrollbar-gutter: auto; }
 .quote-card.clickable { cursor: pointer; }
 .quote-card.clickable:hover { border-color: var(--line-strong); }
 .quote-loading { flex-direction: row; align-items: center; gap: 8px; }
+/* Posts that landed while you were reading further down. Floats over the
+   feed near the top, out of the way of the thumb, and takes you up to them
+   when tapped. Fixed, not sticky: the feed is the page scroller, and a
+   sticky element inside the card would scroll away with the card. */
+.feed-new-pill {
+  /* The header scrolls away with the page, so this rides at the very top of
+     the window — floating over a post for the moment it is there beats
+     sitting in the middle of one. */
+  position: fixed; top: calc(env(safe-area-inset-top, 0px) + 10px);
+  left: 50%; transform: translateX(-50%);
+  z-index: 30; width: auto; padding: 7px 16px; border-radius: 999px;
+  background: var(--accent); color: var(--accent-fg); border: none;
+  font-size: 13px; font-weight: 650; cursor: pointer;
+  box-shadow: 0 3px 12px rgba(0, 0, 0, .28);
+  animation: pill-in .18s ease-out;
+}
+@keyframes pill-in {
+  from { opacity: 0; transform: translate(-50%, -8px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+
 /* What a draft will look like once it's out there. Framed and labelled, so
    it can hold real post content — pictures, players, quoted notes — without
    ever being mistaken for the post itself. */

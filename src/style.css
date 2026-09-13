@@ -581,6 +581,20 @@ html.no-scroll { overflow: hidden; scrollbar-gutter: auto; }
 .lightbox-x:hover { background: rgba(255, 255, 255, .24); }
 @keyframes lightbox-in { from { opacity: 0; } to { opacity: 1; } }
 .note-video { display: block; max-width: 100%; max-height: 360px; border-radius: 10px; margin-top: 6px; background: #000; }
+/* A quoted note, inside the post that quotes it: its own little card, so the
+   two voices don't run together. Context, not another post to act on — the
+   action row stops at the outer post. */
+.quote-card {
+  margin-top: 8px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px;
+  background: var(--surface2); display: flex; flex-direction: column; gap: 4px;
+}
+.quote-card.clickable { cursor: pointer; }
+.quote-card.clickable:hover { border-color: var(--line-strong); }
+.quote-loading { flex-direction: row; align-items: center; gap: 8px; }
+.quote-name { font-weight: 600; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.quote-card .note-img { max-height: 220px; }
+.quote-card .yt-embed { margin-top: 4px; }
+
 /* A YouTube link, shown as the video it is: the still, a play button, and a
    corner link out. The player replaces all of it on the first tap — see
    youtubeEmbed for why it isn't there from the start. */

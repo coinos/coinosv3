@@ -2706,7 +2706,56 @@ export function messagesFeature(ctx) {
     return frame;
   }
 
-  function noteBody(text) {
+  // ---- quoted notes ---------------------------------------------------------
+  // A nostr:note1/nevent1 in someone's post IS a post, so show it: the thing
+  // they're talking about, inside what they said about it. Fetched once per
+  // id and remembered, so a feed that quotes the same note ten times asks for
+  // it once.
+  const quoted = new Map(); // id -> { status, ev }
+  function quotedNote(ref) {
+    let c = quoted.get(ref.id);
+    if (c) return c;
+    c = { status: 'loading', ev: null };
+    quoted.set(ref.id, c);
+    (async () => {
+      const relays = [...new Set([...(ref.relays || []), ...zapRelays()])];
+      const evs = await queryOn(relays, { ids: [ref.id] }, 4500).catch(() => []);
+      c.ev = (evs || [])[0] || null;
+      c.status = c.ev ? 'ready' : 'missing';
+      scheduleRepaint();
+    })();
+    return c;
+  }
+
+  // The card. Deliberately not a noteRow: a quote is context, not another
+  // post to act on — no reply, no boost, no zap of its own. Tapping it opens
+  // the note properly, which is where those live.
+  function quoteCard(ref, depth) {
+    const c = quotedNote(ref);
+    if (c.status === 'loading') {
+      return h('div', { class: 'quote-card quote-loading' },
+        h('span', { class: 'spinner sm' }), h('span', { class: 'small faint' }, t('noteRefLoading')));
+    }
+    if (!c.ev) {
+      return h('div', { class: 'quote-card' },
+        h('span', { class: 'small faint' }, t('noteRefNotFound')));
+    }
+    const ev = c.ev;
+    return h('div', {
+      class: 'quote-card clickable',
+      onClick: (e) => { e.stopPropagation(); openNoteThread(ev); },
+    },
+      h('div', { class: 'row gap6', style: 'align-items:center;min-width:0' },
+        avatar(ev.pubkey, 'chat-avatar mini', false),
+        h('span', { class: 'quote-name' }, displayName(ev.pubkey)),
+        h('span', { class: 'small faint', style: 'white-space:nowrap' }, timeLabel(ev.created_at * 1000))),
+      h('div', { class: 'small', style: 'white-space:pre-wrap;overflow-wrap:anywhere' },
+        // one level deep only: a quote of a quote of a quote is a rabbit
+        // hole, and the inner one stays a link you can follow
+        ...noteBody(ev.content, depth + 1)));
+  }
+
+  function noteBody(text, depth = 0) {
     const out = [];
     for (const part of String(text || '').split(NOTE_SPLIT)) {
       if (!part) continue;
@@ -2736,13 +2785,14 @@ export function messagesFeature(ctx) {
         if (ref && ref.type === 'pubkey') out.push(h('a', { href: '#', onClick: (e) => { e.preventDefault(); openProfile(ref.pk); } }, '@' + displayName(ref.pk)));
         else out.push(h('span', { class: 'faint' }, part.slice(6, 18) + '…'));
       } else if (/^nostr:(note|nevent)1/i.test(part)) {
-        // a referenced note opens right here as a thread — fetched by id
-        // (with the reference's relay hints) when tapped
         const ref = parseNostrRef(part.slice(6));
-        if (ref && ref.type === 'event') out.push(h('a', {
-          href: '#', onClick: (e) => { e.preventDefault(); openNoteRef(ref); },
-        }, t('noteRefLink')));
-        else out.push(h('span', { class: 'faint' }, part.slice(6, 18) + '…'));
+        if (ref && ref.type === 'event') {
+          // the note they're quoting, shown inside what they said about it —
+          // except one level down, where it goes back to being a link
+          out.push(depth ? h('a', {
+            href: '#', onClick: (e) => { e.preventDefault(); e.stopPropagation(); openNoteRef(ref); },
+          }, t('noteRefLink')) : quoteCard(ref, depth));
+        } else out.push(h('span', { class: 'faint' }, part.slice(6, 18) + '…'));
       } else if (/^nostr:/i.test(part)) {
         out.push(h('span', { class: 'faint' }, part.slice(6, 18) + '…'));
       } else out.push(part);
@@ -4812,7 +4862,7 @@ export function messagesFeature(ctx) {
       stopFeedWatch();
       follows = null; followsAt = 0; feed = null; feedAt = 0; relayLists = null;
       mutes = null; mutesAt = 0;
-      reacts.clear(); boosts.clear(); seenNoteEv.clear(); myReactEv.clear();
+      reacts.clear(); boosts.clear(); seenNoteEv.clear(); myReactEv.clear(); quoted.clear();
       clearTimeout(zapSaveT); zapSaveT = null; zapSeed = null;
       zapTotals.clear(); zapAsked.clear(); zapPending.clear(); // 'mine' is per identity — refetch under the next
     },

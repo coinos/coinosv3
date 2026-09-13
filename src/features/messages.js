@@ -2452,7 +2452,10 @@ export function messagesFeature(ctx) {
   // sockets that between them reach everyone rather than one socket each.
   const RELAY_LISTS = 'relayLists';
   const RELAY_LIST_TTL = 7 * 24 * 3600_000;
-  const OUTBOX_MAX = 10;  // sockets we'll open for one pass
+  // Sockets we'll open for one pass. Ten covered all but 66 of a real
+  // 862-follow list; twenty-five covered all but 26. Amethyst runs near a
+  // hundred — this is the same idea, kept to a number a phone can hold.
+  const OUTBOX_MAX = 24;
   const PER_AUTHOR = 3;   // write relays taken from any one list
   let relayLists = null;  // pk -> { r: [url], t }
 
@@ -2480,8 +2483,17 @@ export function messagesFeature(ctx) {
       wallet.saveFeatureState(RELAY_LISTS, out);
     } catch {}
   }
+  // A relay list is written by whoever owns it, and some of them are wrong:
+  // one in this wallet's follows has three URLs crammed into a single r tag,
+  // space-separated. Fed to the pool that throws, and every author covered by
+  // that relay quietly returns nothing. So each one has to parse as a URL,
+  // and anything else is dropped rather than trusted.
+  const okRelay = (u) => {
+    if (typeof u !== 'string' || /\s/.test(u) || u.length > 200) return false;
+    try { const p2 = new URL(u); return p2.protocol === 'wss:' && !!p2.host; } catch { return false; }
+  };
   const writeRelaysIn = (ev) => [...new Set((ev.tags || [])
-    .filter((x) => x[0] === 'r' && x[1] && x[2] !== 'read' && /^wss:\/\//i.test(x[1]))
+    .filter((x) => x[0] === 'r' && x[2] !== 'read' && okRelay(x[1]))
     .map((x) => String(x[1]).replace(/\/+$/, '')))].slice(0, PER_AUTHOR);
 
   // One REQ per hundred authors, against our own relays — a relay list is
@@ -2561,8 +2573,26 @@ export function messagesFeature(ctx) {
   let feedUnsubs = [];
   let feedAt = 0;
 
-  const isReply = (ev) => (ev.tags || []).some((x) => x[0] === 'e');
-  const feedAuthors = () => [...followsNow().set].slice(0, 500);
+  // A reply, as against a post that merely POINTS at another one. NIP-10
+  // marks a reply's e tags 'root' or 'reply'; a quote's are 'mention', and
+  // NIP-18 quotes carry a q tag instead. Treating every e tag as a reply hid
+  // quote-posts from the feed — the thing Amethyst shows as a card with the
+  // quoted note inside it.
+  const isReply = (ev) => {
+    const es = (ev.tags || []).filter((x) => x[0] === 'e');
+    if (!es.length) return false;
+    if (es.some((x) => x[3] === 'root' || x[3] === 'reply')) return true;
+    if (es.every((x) => x[3] === 'mention')) return false;
+    // unmarked (the deprecated positional form): a q tag means it's a quote,
+    // otherwise assume the older convention, where e meant reply
+    return !(ev.tags || []).some((x) => x[0] === 'q');
+  };
+  // Everyone you follow. This was capped at 500, which on an 862-follow list
+  // meant 362 people were silently missing from the feed — 164 of the 166
+  // posts a wider net found in one six-hour window were theirs.
+  const FEED_AUTHORS_MAX = 2000;
+  const REQ_AUTHORS = 400; // authors per REQ, so one filter stays a sane size
+  const feedAuthors = () => [...followsNow().set].slice(0, FEED_AUTHORS_MAX);
 
   function feedNow() {
     if (!feed) {
@@ -2600,9 +2630,13 @@ export function messagesFeature(ctx) {
     await fetchRelayLists(authors);
     const plan = outboxPlan(authors);
     let got = false;
-    await Promise.all(plan.map(async ({ relays, authors: a }) => {
-      const evs = await queryOn(relays, { kinds: [1], authors: a, limit: FEED_LIMIT, ...extra }, 5000).catch(() => []);
-      if (mergeFeed(evs)) { got = true; scheduleRepaint(); }
+    await Promise.all(plan.flatMap(({ relays, authors: a }) => {
+      const chunks = [];
+      for (let i = 0; i < a.length; i += REQ_AUTHORS) chunks.push(a.slice(i, i + REQ_AUTHORS));
+      return chunks.map(async (chunk) => {
+        const evs = await queryOn(relays, { kinds: [1], authors: chunk, limit: FEED_LIMIT, ...extra }, 5000).catch(() => []);
+        if (mergeFeed(evs)) { got = true; scheduleRepaint(); }
+      });
     }));
     return got;
   }
@@ -2623,8 +2657,9 @@ export function messagesFeature(ctx) {
     if (!feedAuthors().length || !ui.chatOpen || ui.msgView !== 'feed') return;
     const since = Math.floor(Date.now() / 1000) - 60;
     for (const { relays, authors } of outboxPlan(feedAuthors()))
-      feedUnsubs.push(subscribeOn(relays, { kinds: [1], authors, since },
-        (ev) => { if (mergeFeed([ev])) scheduleRepaint(); }));
+      for (let i = 0; i < authors.length; i += REQ_AUTHORS)
+        feedUnsubs.push(subscribeOn(relays, { kinds: [1], authors: authors.slice(i, i + REQ_AUTHORS), since },
+          (ev) => { if (mergeFeed([ev])) scheduleRepaint(); }));
   }
   function stopFeedWatch() {
     for (const u of feedUnsubs) { try { u(); } catch {} }

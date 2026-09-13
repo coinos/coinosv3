@@ -229,7 +229,11 @@ export function nsecOf(sk) { try { return nsecEncode(sk); } catch { return null;
 
 // Profiles live across the network, so look them up on popular relays (broader
 // than the sync relays).
-export const PROFILE_RELAYS = ['wss://relay.coinos.io', 'wss://nos.lol', 'wss://relay.primal.net'];
+// Where we look for people who haven't said where they write. Measured
+// against a real 862-follow list: nos.lol carries 267 of them, damus.io 249,
+// primal 170 — and damus wasn't here, which left 232 follows with no relay
+// list of their own leaning on two relays instead of three.
+export const PROFILE_RELAYS = ['wss://relay.coinos.io', 'wss://nos.lol', 'wss://relay.damus.io', 'wss://relay.primal.net'];
 // Fetch a recipient's profile (name + picture) for a pubkey, newest across relays.
 export async function fetchNostrProfile(pubkeyHex, relays = PROFILE_RELAYS) {
   let events;

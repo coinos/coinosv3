@@ -1437,6 +1437,20 @@ function loginPkOf(a) {
   } catch { return null; }
 }
 
+// Whose wallet this is: the nostr login it carries, else the key its seed
+// derives, else whatever was last stamped on the record. The accounts screen
+// and the identity switcher have to agree on this or they describe different
+// worlds.
+function identityPkOf(a) {
+  if (!a) return null;
+  let dir = [];
+  try { dir = JSON.parse(localStorage.getItem(WATCH_KEY) || '[]'); } catch {}
+  const stamped = (a.xpub && (dir.find((d) => d.xpub === a.xpub) || {}).nostrPk) || null;
+  return loginPkOf(a)
+    || (a.mnemonic ? seedPubkey(a.mnemonic, a.passphrase || '', a.deriveIndex || 0) : null)
+    || a.nostrPk || stamped;
+}
+
 // The identities on this device — one per seed (a seed's Spending and
 // Savings faces are the same person), each with the nostr key its header
 // avatar wears: the nostr login when there is one, else the seed's own key.
@@ -1444,12 +1458,7 @@ function loginPkOf(a) {
 // (saveDirectory) and in the durable directory by xpub is only the fallback,
 // for a watch-only entry whose seed isn't here to ask.
 function identities() {
-  let dir = [];
-  try { dir = JSON.parse(localStorage.getItem(WATCH_KEY) || '[]'); } catch {}
-  const dirPk = (a) => (a.xpub && (dir.find((d) => d.xpub === a.xpub) || {}).nostrPk) || null;
-  const pkOf = (a) => loginPkOf(a)
-    || (a.mnemonic ? seedPubkey(a.mnemonic, a.passphrase || '', a.deriveIndex || 0) : null)
-    || a.nostrPk || dirPk(a);
+  const pkOf = identityPkOf;
   const bySeed = new Map();
   for (const a of accounts) {
     if (a.provisional) continue;
@@ -2733,7 +2742,13 @@ function accountsScreen() {
     h('div', { class: 'card col' },
       h('h3', {}, t('accounts')),
       h('div', { class: 'col', style: 'gap:0' },
-        accounts.flatMap((a) => viewsOf(a).map((view) => {
+        // Grouped by whose they are. Three signed-in identities used to give
+        // three rows all called "Savings", indistinguishable from each other
+        // and from duplicates — the wallets are per-identity, so the screen
+        // has to say which identity.
+        ...groupAccounts().flatMap(({ pk, rows }) => [
+          identityHeading(pk),
+          ...rows.flatMap((a) => viewsOf(a).map((view) => {
           const isActive = a.id === activeId && accountSel() === view;
           const netTag = a.network && a.network !== 'mainnet' ? ' · ' + a.network : '';
           const seedTag = '';
@@ -2762,7 +2777,8 @@ function accountsScreen() {
                   a.persisted ? t('forgetDevice') : t('saveDevice'))
               : null
           );
-        }))
+        })),
+        ])
       ),
       h('button', { class: 'btn-block', onClick: () => { ui.addWallet = { kind: 'spending', from: 'new' }; render(); } }, t('addWallet')),
       hasVault() ? h('button', { class: 'btn-ghost btn-block', onClick: startChangePw }, t('changePassword')) : null,
@@ -2770,6 +2786,34 @@ function accountsScreen() {
     ),
     h('button', { class: 'btn-ghost btn-block', onClick: () => goBack(() => { ui.screen = 'wallet'; }) }, t('back'))
   );
+}
+
+// The accounts on this device, gathered under the identity each belongs to,
+// in the order they first appear.
+function groupAccounts() {
+  const out = [];
+  const byPk = new Map();
+  for (const a of accounts) {
+    const pk = identityPkOf(a) || 'none';
+    if (!byPk.has(pk)) { const g = { pk: pk === 'none' ? null : pk, rows: [] }; byPk.set(pk, g); out.push(g); }
+    byPk.get(pk).rows.push(a);
+  }
+  return out;
+}
+
+// Who a group of wallets belongs to: their face and name, and a mark when
+// it's the identity you're currently using. One identity on the device needs
+// no heading at all — there's nothing to tell apart.
+function identityHeading(pk) {
+  if (!pk || groupAccounts().length < 2) return null;
+  const me = ctx.shownPubkey && ctx.shownPubkey();
+  const chip = featureHook('profileChip', pk);
+  return h('div', {
+    class: 'row gap6',
+    style: 'align-items:center;padding:10px 0 4px;border-bottom:1px solid var(--line)',
+  },
+    chip || h('span', { class: 'small muted' }, (npubOf(pk) || pk).slice(0, 14) + '…'),
+    pk === me ? h('span', { class: 'tag conf', style: 'margin-left:auto' }, t('accountsThisOne')) : null);
 }
 
 function renameAccount(id) {

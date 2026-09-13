@@ -194,6 +194,7 @@ const STR = {
     msgZap: 'Zap',
     zapTallyTitle: '{n} sats zapped',
     close: 'Close',
+    accountsThisOne: 'signed in',
     worthThen: 'Worth then',
     worthNow: 'Worth now',
     worthNowInline: '{v} now',

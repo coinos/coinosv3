@@ -598,6 +598,19 @@ html.no-scroll { overflow: hidden; scrollbar-gutter: auto; }
 .quote-card.clickable { cursor: pointer; }
 .quote-card.clickable:hover { border-color: var(--line-strong); }
 .quote-loading { flex-direction: row; align-items: center; gap: 8px; }
+/* What a draft will look like once it's out there. Framed and labelled, so
+   it can hold real post content — pictures, players, quoted notes — without
+   ever being mistaken for the post itself. */
+.draft-preview {
+  border: 1px dashed var(--line-strong); border-radius: 10px;
+  padding: 10px 12px; background: var(--surface2);
+  display: flex; flex-direction: column; gap: 6px;
+}
+.draft-preview-tag {
+  font-size: 11px; font-weight: 650; letter-spacing: .04em;
+  text-transform: uppercase; color: var(--faint);
+}
+.attach-btn.on { color: var(--accent-ink); border-color: var(--accent); }
 .quote-card .note-text { font-size: 14px; }
 .quote-name { font-weight: 600; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .quote-card .note-img { max-height: 220px; }

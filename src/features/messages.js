@@ -3464,12 +3464,16 @@ export function messagesFeature(ctx) {
     const row = (ev) => noteRow(ev.pubkey, ev, displayName(ev.pubkey), { open: false, focus: ev.id === s.focusId && ev.id !== c.rootId });
     // The reply box sits INLINE, right under the note it answers — it used
     // to live at the bottom of the thread, where nobody scrolled to find it.
-    const replyBox = () => h('div', { class: 'row', style: 'gap:8px;align-items:center;padding:2px 0 10px' },
+    const replyBox = () => h('div', { class: 'col', style: 'gap:8px;padding:2px 0 10px' },
+      s.preview ? draftPreview(s.draft) : null,
+      h('div', { class: 'row', style: 'gap:8px;align-items:center' },
       h('input', {
         type: 'text', class: 'grow thread-reply-input', placeholder: t('threadReplyHint'),
         value: s.draft || '',
-        onInput: (e) => { s.draft = e.target.value; },
-        onKeydown: (e) => { if (e.key === 'Enter') e.target.parentElement.querySelector('.thread-reply-send')?.click(); },
+        // a render per keystroke only while the preview is open; the morph
+        // leaves a focused field alone, so this can't fight the typing
+        onInput: (e) => { s.draft = e.target.value; if (s.preview) render(); },
+        onKeydown: (e) => { if (e.key === 'Enter') e.target.closest('.col').querySelector('.thread-reply-send')?.click(); },
       }),
       // A reply can carry a picture too — same upload, same imeta tag, same
       // paperclip. The URL lands in the draft, which is what every client
@@ -3487,9 +3491,11 @@ export function messagesFeature(ctx) {
             s.draft = ((s.draft || '').replace(/\s+$/, '') + ' ' + url).trim();
             const inp = document.querySelector('.thread-reply-input');
             if (inp) inp.value = s.draft;
+            s.preview = true; // same as the composer: show what was attached
           });
         },
       }),
+      previewBtn(!!s.preview, () => { s.preview = !s.preview; render(); }),
       h('button', {
         class: 'btn-primary thread-reply-send', disabled: !!s.sending || !!ui.postUploading,
         onClick: async () => {
@@ -3508,7 +3514,7 @@ export function messagesFeature(ctx) {
           } catch (e) { if (!e.silent) toast(e.message); }
           s.sending = false; render();
         },
-      }, s.sending ? h('span', { class: 'spinner sm' }) : t('threadReplySend')));
+      }, s.sending ? h('span', { class: 'spinner sm' }) : t('threadReplySend'))));
     // rows with the reply box slotted under the focused note (the root when
     // nothing narrower is focused; appended at the end if the focused note
     // hasn't loaded yet, so the box never disappears entirely)
@@ -3990,8 +3996,34 @@ export function messagesFeature(ctx) {
     const next = (cur ? cur + '\n' : '') + url;
     ui.profCompose = next;
     setDraft(POST_DRAFT, next);
+    // you just attached a picture; showing it IS the answer to the question
+    // attaching one raises
+    ui.postPreview = true;
   });
   const CLIP = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:block"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>';
+  const EYE = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:block"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
+
+  // ---- draft preview --------------------------------------------------------
+  // A post is written as plain text, but it doesn't ARRIVE as plain text: a
+  // URL ending in .jpg becomes a picture, a youtu.be link becomes a player, a
+  // nostr: reference becomes the note it points at, an npub becomes a name.
+  // You could only find out by posting. This runs the draft through noteBody
+  // — the very renderer the feed uses — so the preview is not a lookalike of
+  // the real thing, it IS the real thing.
+  function draftPreview(text) {
+    const body = String(text || '').trim();
+    return h('div', { class: 'draft-preview' },
+      h('div', { class: 'draft-preview-tag' }, t('composePreviewTag')),
+      body
+        ? h('div', { class: 'note-text', style: 'white-space:pre-wrap;overflow-wrap:anywhere' }, ...noteBody(body))
+        : h('div', { class: 'small faint' }, t('composePreviewEmpty')));
+  }
+  const previewBtn = (on, toggle) => h('button', {
+    class: 'attach-btn' + (on ? ' on' : ''),
+    title: on ? t('composePreviewHide') : t('composePreview'),
+    'aria-label': on ? t('composePreviewHide') : t('composePreview'),
+    onClick: toggle,
+  }, h('span', { style: 'display:flex', html: EYE }));
   function postComposer() {
     if (ui.profCompose == null && !draftFor(POST_DRAFT)) return null;
     const text = composeText();
@@ -4000,8 +4032,16 @@ export function messagesFeature(ctx) {
         rows: '3', placeholder: t('profComposePh'),
         style: 'font-family:var(--sans);min-height:64px',
         value: text,
-        onInput: (ev) => { ui.profCompose = ev.target.value; setDraft(POST_DRAFT, ev.target.value); },
+        onInput: (ev) => {
+          ui.profCompose = ev.target.value;
+          setDraft(POST_DRAFT, ev.target.value);
+          // only while the preview is open — otherwise typing costs a render
+          // per keystroke for nothing. The morph never rewrites a focused
+          // field, so this can't fight the typing.
+          if (ui.postPreview) render();
+        },
       }),
+      ui.postPreview ? draftPreview(text) : null,
       h('div', { class: 'row gap6' },
         h('button', { class: 'btn-primary grow', disabled: !!ui.postUploading, onClick: async () => {
           const body = composeText().trim();
@@ -4025,6 +4065,7 @@ export function messagesFeature(ctx) {
           class: 'attach-btn', title: t('feedAttach'), 'aria-label': t('feedAttach'), disabled: !!ui.postUploading,
           onClick: () => document.getElementById('post-file')?.click(),
         }, ui.postUploading ? h('span', { class: 'spinner sm' }) : h('span', { style: 'display:flex', html: CLIP })) : null,
+        previewBtn(!!ui.postPreview, () => { ui.postPreview = !ui.postPreview; render(); }),
         h('input', {
           type: 'file', id: 'post-file', accept: 'image/*,video/*', style: 'display:none',
           onChange: async (e) => { const f = e.target.files && e.target.files[0]; e.target.value = ''; await attachMedia(f); },

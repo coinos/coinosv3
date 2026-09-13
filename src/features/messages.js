@@ -309,7 +309,8 @@ export function messagesFeature(ctx) {
     // spreads a cold-relay miss across sessions.
     if (!p || (!p.name && !p.picture)) return;
     const s = wallet.loadFeatureState('profiles', {});
-    s[pk] = { name: p.name || null, picture: p.picture || null, nip05: p.nip05 || null, lud16: p.lud16 || null, t: Date.now(),
+    s[pk] = { name: p.name || null, picture: p.picture || null, nip05: p.nip05 || null, lud16: p.lud16 || null,
+      about: p.about || null, banner: p.banner || null, t: Date.now(),
       ...(p.thumbFor === p.picture && p.thumb
         ? { thumb: p.thumb, thumbFor: p.thumbFor, thumbPx: p.thumbPx || 0 } : {}),
       ...(p.thumbFail ? { thumbFail: p.thumbFail, thumbFailAt: p.thumbFailAt || 0, thumbFails: p.thumbFails || 1,
@@ -397,8 +398,11 @@ export function messagesFeature(ctx) {
   // ...and for all of them together. Raised with THUMB_PX: a 144px face
   // costs about 5.4KB against 96px's 3.2KB, and the budget is what decides
   // how many faces paint instantly rather than fetching their original —
-  // this holds about fifty, which covers a feed and an inbox at once.
-  const THUMB_BUDGET = 280_000;
+  // this holds about fifty, which covers a feed and an inbox at once. The
+  // blob carries each profile's bio and banner as well now — a couple of
+  // hundred bytes each, and the reason a profile page paints on the first
+  // tap — so the ceiling is raised to keep the same number of faces.
+  const THUMB_BUDGET = 320_000;
   const THUMB_SLOW = 20_000; // a host that won't answer must not hold a slot
   const THUMB_RETRY = 6 * 3600_000; // ...and must not be written off for good
   const THUMB_RETRY_MAX = 14 * 24 * 3600_000; // a host that never works, backed off
@@ -515,6 +519,13 @@ export function messagesFeature(ctx) {
       picture: m.picture || null,
       nip05: m.nip05 || null,
       lud16: typeof m.lud16 === 'string' ? m.lud16.trim() : null,
+      // The batch downloaded this person's WHOLE kind 0 to get their name.
+      // Keeping the bio and the banner costs one more field each and is the
+      // difference between a profile page that paints and one that jumps
+      // when the fetch lands a second later. 1000 chars is what the page
+      // renders anyway.
+      about: typeof m.about === 'string' ? m.about.slice(0, 1000) : null,
+      banner: typeof m.banner === 'string' ? m.banner.slice(0, 400) : null,
     } : null;
     // An empty answer must never clobber a remembered face with a punk: keep
     // what we had and just refresh the clock.
@@ -1979,6 +1990,12 @@ export function messagesFeature(ctx) {
     if (p && p.picture) makeThumb(pk, p);
     if (clickable) {
       node.classList.add('clickable');
+      // Start the profile's own fetches on touch-DOWN, not on click. The gap
+      // between the two is a hundred-odd milliseconds of free head start,
+      // and unlike prefetching every row on paint (which cost sixty requests
+      // for twenty rows and starved the profile batch) this only ever asks
+      // about the person actually being tapped.
+      node.addEventListener('pointerdown', () => { try { prefetchProfilePage(pk); } catch {} }, { passive: true });
       node.addEventListener('click', (e) => { e.stopPropagation(); openProfile(pk); });
     }
     return hook('wrapAvatar', pk, node) || hatStamp(pk, node) || node;
@@ -2053,6 +2070,8 @@ export function messagesFeature(ctx) {
       const entry = {
         name: m.display_name || m.name || null, picture: m.picture || null,
         nip05: m.nip05 || null, lud16: typeof m.lud16 === 'string' ? m.lud16.trim() : null,
+        about: typeof m.about === 'string' ? m.about.slice(0, 1000) : null,
+        banner: typeof m.banner === 'string' ? m.banner.slice(0, 400) : null,
         t: Date.now(),
       };
       keepThumb(pk, entry);
@@ -2379,14 +2398,34 @@ export function messagesFeature(ctx) {
   }
   const notesRelays = async (pk) => [...new Set([...NOTE_RELAYS, ...(await relaysOf(pk))])];
 
+  // Posts of theirs we already hold. Tapping a face in the feed is the
+  // common way onto a profile, and the feed we just came from is full of
+  // that person's posts — an open thread holds their replies too. Painting
+  // those first means the page opens with real content instead of an empty
+  // column that fills in a beat later, and the relay fetch below replaces
+  // them the moment it answers.
+  function notesInHand(pk) {
+    const out = new Map();
+    for (const e of (feed && feed.notes) || []) if (e.pubkey === pk) out.set(e.id, e);
+    for (const c of threadCache.values()) {
+      if (c.root && c.root.pubkey === pk) out.set(c.root.id, c.root);
+      for (const e of c.replies || []) if (e.pubkey === pk) out.set(e.id, e);
+    }
+    return [...out.values()].sort((a, b) => b.created_at - a.created_at);
+  }
+
   function notesFor(pk) {
     let c = notesCache.get(pk);
     if (c) return c;
     // stored posts paint the page instantly; the relay fetch below freshens
     const stored = pageCache().notes[pk];
+    const seed = stored ? stored.v : notesInHand(pk);
+    // Seeded from memory the status stays 'loading': these are posts we
+    // happen to have, not their page, so the real answer still replaces
+    // them — but there is something to read while it comes.
     c = stored
       ? { status: 'ready', notes: stored.v }
-      : { status: 'loading', notes: [] };
+      : { status: 'loading', notes: seed };
     notesCache.set(pk, c);
     (async () => {
       const evs = await queryOn(await notesRelays(pk), { kinds: [1], authors: [pk], limit: 30 }, 4500);
@@ -3263,6 +3302,7 @@ export function messagesFeature(ctx) {
             h('span', {
               // the name, like the avatar, is its own tap-target (profile)
               style: 'font-weight:600;font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer',
+              onPointerdown: () => { try { prefetchProfilePage(pk); } catch {} },
               onClick: (e) => { e.stopPropagation(); openProfile(pk); },
             }, name),
             h('span', { class: 'small faint', style: 'white-space:nowrap' },
@@ -3711,8 +3751,15 @@ export function messagesFeature(ctx) {
     const nip05 = rawNip05 ? String(rawNip05).replace(/^_@/, '') : null;
     const lud16 = (full && full.lud16 ? String(full.lud16) : null) || lp.lud16 || null;
     const showLud = lud16 && !/^npub1/i.test(lud16) && lud16 !== nip05;
-    // an about of "~" or a lone character is noise, not a bio
-    const about = full && typeof full.about === 'string' ? full.about.trim() : '';
+    // an about of "~" or a lone character is noise, not a bio.
+    // Until the full kind 0 lands, the light profile cache answers — it was
+    // filled by the same batched fetch that named this person in the feed,
+    // so the bio is already in hand and the page doesn't grow a paragraph
+    // half a second after it opens. Once `full` is known it is the truth,
+    // including when it says there is no bio.
+    const about = full !== undefined
+      ? (typeof full.about === 'string' ? full.about.trim() : '')
+      : (typeof lp.about === 'string' ? lp.about.trim() : '');
     const showAbout = about.length > 1;
     // The cover photo: nostr's standard kind-0 `banner`. Legacy coinos.io
     // wore these proudly — migrated accounts bring theirs along, and anyone
@@ -3723,7 +3770,10 @@ export function messagesFeature(ctx) {
     const draft = mine && ui.profEdit ? ui.profEdit : null;
     const urlish = (s) => (typeof s === 'string' && /^https?:\/\//i.test(s.trim()) ? s.trim() : null);
     const bannerUrl = draft ? urlish(draft.banner)
-      : (full && urlish(full.banner)) || null;
+      : full !== undefined ? urlish(full.banner)
+      // same as the bio: the cached copy holds the space so the whole page
+      // doesn't drop by the height of a cover photo when it arrives
+      : urlish(lp.banner);
     const draftPic = draft && urlish(draft.picture);
     return h('div', { class: 'col', style: 'gap:16px' },
       // full header on profiles too — losing the search button here made
@@ -3891,9 +3941,11 @@ export function messagesFeature(ctx) {
       // edge, no card walls (see .notes-feed).
       (() => {
         const c = notesFor(pk);
-        // while loading: an invisible copy of the empty-state line holds the
-        // height, so the page doesn't jump when the answer lands (no spinner)
-        if (c.status === 'loading')
+        // while loading with nothing to show: an invisible copy of the
+        // empty-state line holds the height, so the page doesn't jump when
+        // the answer lands (no spinner). With posts already in hand — from
+        // the feed we came from — those are shown instead of the blank.
+        if (c.status === 'loading' && !c.notes.length)
           return h('div', { class: 'small faint', style: 'text-align:center;visibility:hidden' }, t('profNotesNone'));
         if (!c.notes.length)
           return h('div', { class: 'small faint', style: 'text-align:center' }, t('profNotesNone'));

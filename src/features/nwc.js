@@ -57,7 +57,27 @@ export function nwcFeature(ctx) {
     // how long a pay_invoice error (or a sibling's success) waits for the
     // device that actually paid to speak first
     errGraceMs = 3000,
+    claim = claimOn,
   } = ctx.nwcTransport || {};
+
+  // Cross-device leadership for a pay request. Every awake device of the
+  // wallet hears every request within the same second; the tab lock only
+  // covers one browser profile, and two profiles (or two machines) each
+  // locked an HTLC for the same zap. The notifier hands each request to the
+  // first device that asks. Unreachable notifier → answer anyway: a lone
+  // device must never go silent over a hiccup here.
+  const claimAs = Math.random().toString(36).slice(2, 12);
+  async function claimOn(id) {
+    try {
+      const r = await fetch(`${NOTIFIER}/claim`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ event: id, by: claimAs }),
+        signal: AbortSignal.timeout ? AbortSignal.timeout(4000) : undefined,
+      });
+      if (!r.ok) return true;
+      return (await r.json()).ok !== false;
+    } catch { return true; }
+  }
 
   // ---- persisted connections -------------------------------------------
   // { id, name, secret (client sk hex), clientPk, servicePk, serviceSk,
@@ -350,7 +370,8 @@ export function nwcFeature(ctx) {
       await reply(c, ev, scheme, payload);
     };
     try {
-      const out = await handle(c, method, params);
+      const out = await handle(c, method, params, () => claim(ev.id));
+      if (out && out.silent) return console.log('nwc: standing down — another device claimed', ev.id.slice(0, 8));
       await sendChecked({ result_type: method, ...out });
     } catch (e) {
       await sendChecked({ result_type: method, ...errRes('INTERNAL', e.message || 'failed') });
@@ -358,7 +379,7 @@ export function nwcFeature(ctx) {
     render();
   }
 
-  async function handle(c, method, params) {
+  async function handle(c, method, params, claimReq) {
     if (!hook('arkReady')) return errRes('UNAUTHORIZED', 'Ark is not configured in this wallet');
 
     if (method === 'get_info') {
@@ -398,6 +419,10 @@ export function nwcFeature(ctx) {
       if (dec.amountSat > left) {
         return errRes('QUOTA_EXCEEDED', `over the remaining daily budget (${left} sat)`);
       }
+      // Everything local has passed; now make sure this device is the one
+      // that pays. Claiming before the checks would block a sibling behind
+      // a refusal it would not itself have given.
+      if (claimReq && !(await claimReq())) return { silent: true };
       let res;
       try {
         res = await hook('arkPayInvoice', invoice, { maxAmountSat: c.maxSat });

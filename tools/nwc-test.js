@@ -14,6 +14,7 @@ globalThis.localStorage = { getItem:k=>k in store?store[k]:null, setItem:(k,v)=>
 
 let subHandler = null;
 let priorReplies = [];
+let claimOk = true;
 const published = [];
 // fake relay transport: capture the subscription handler and any replies
 const nwcTransport = {
@@ -21,6 +22,7 @@ const nwcTransport = {
   publish: async (relays, evt) => { published.push(evt); return true; },
   query: async () => priorReplies, // what other devices have answered (none, unless a test says so)
   errGraceMs: 20,        // the sibling-first hold, shortened for the harness
+  claim: async () => claimOk, // the notifier's first-come-first-pays verdict
 };
 let paid = [];
 const wallet = {
@@ -131,6 +133,17 @@ console.log('\n[sibling payment in flight]');
   check('sibling failure surfaces as an error', /already in progress/.test(r?.error?.message || ''), JSON.stringify(r));
   hooks.arkPayInvoice = payer;
   delete hooks.arkLnOutcome;
+}
+
+console.log('\n[cross-device claim]');
+{
+  claimOk = false;
+  const n = published.length, wasPaid = paid.length;
+  await request('pay_invoice', { invoice: INV21 });
+  check('unclaimed pay request stays silent and unpaid', published.length === n && paid.length === wasPaid);
+  claimOk = true;
+  r = await request('get_balance', {});
+  check('non-pay methods need no claim', r?.result?.balance === 42000*1000);
 }
 
 console.log('\n[nip04 fallback]');

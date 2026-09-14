@@ -183,6 +183,19 @@ export async function respondFromBg(data, {
       return !!(await r.json()).answered;
     } catch { return false; }
   };
+  // ...and hands each pay request to the first device that claims it, so
+  // two awake devices don't each lock an HTLC for one zap. Unreachable →
+  // proceed: a lone worker must not go silent over a notifier hiccup.
+  const claim = async () => {
+    try {
+      const r = await fetchFn(`${notifier}/claim`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ event: ev.id, by: `sw-${walletKey}`.slice(0, 64) }),
+      });
+      if (!r.ok) return true;
+      return (await r.json()).ok !== false;
+    } catch { return true; }
+  };
 
   if (method === 'get_info') {
     await publish({
@@ -268,6 +281,7 @@ export async function respondFromBg(data, {
     }
     return true;
   };
+  if (!(await claim())) { log('another device claimed this request — standing down'); return true; }
   const deadline = Date.now() + PAY_WAIT_MS;
   let a = null;
   for (let attempt = 0; ; attempt++) {

@@ -51,6 +51,9 @@ function harness({ rec = baseRec(), recs = null, answered = false } = {}) {
       published.push(JSON.parse(opts.body).event);
       return { ok: true, json: async () => ({ ok: true }) };
     }
+    if (url.includes('/claim')) {
+      return { ok: true, json: async () => ({ ok: true }) };
+    }
     if (url.includes('/answered')) {
       return { ok: true, json: async () => ({ answered: typeof answered === 'function' ? answered() : answered }) };
     }

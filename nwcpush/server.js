@@ -255,13 +255,21 @@ const RES_KIND = 23195;
 let answeredSub = null;
 const recentReqs = new Map();  // request event id -> ts
 const answeredIds = new Map(); // request event id -> ts a 23195 e-tagged it
+// First come, first pays: request event id -> { by, ts }. Every awake device
+// of a wallet sees every pay request, and two spending at once each lock an
+// HTLC for the same invoice — the loser's refusal then reached the client as
+// a failure. A device claims a request before spending; a claim held by
+// someone else means stand down. Memory only, minutes of life, no keys.
+const claims = new Map();
 function noteRequest(id) {
   recentReqs.set(id, Date.now());
-  if (recentReqs.size > 2000) {
-    const cut = Date.now() - 300_000;
-    for (const [k, t] of recentReqs) if (t < cut) recentReqs.delete(k);
-    for (const [k, t] of answeredIds) if (t < cut) answeredIds.delete(k);
-  }
+  if (recentReqs.size > 2000) pruneRequests();
+}
+function pruneRequests() {
+  const cut = Date.now() - 300_000;
+  for (const [k, t] of recentReqs) if (t < cut) recentReqs.delete(k);
+  for (const [k, t] of answeredIds) if (t < cut) answeredIds.delete(k);
+  for (const [k, c] of claims) if (c.ts < cut) claims.delete(k);
 }
 
 // De-dupe: the same event arrives from several relays.
@@ -377,6 +385,21 @@ const server = Bun.serve({
         n++;
       }
       return json({ ok: true, devices: n });
+    }
+
+    // Claim a pay request before spending on it. The first claimant (or the
+    // same one again) gets ok:true; anyone else ok:false and stands down.
+    if (url.pathname === '/claim' && req.method === 'POST') {
+      const ip = req.headers.get('cf-connecting-ip') || req.headers.get('x-forwarded-for') || 'local';
+      if (!rateOk(ip)) return json({ error: 'rate limited' }, 429);
+      const body = await req.json().catch(() => null);
+      const id = body?.event, by = String(body?.by || '').slice(0, 64);
+      if (!/^[0-9a-f]{64}$/.test(id || '') || !by) return json({ error: 'event and by required' }, 400);
+      if (claims.size > 5000) pruneRequests();
+      const cur = claims.get(id);
+      if (cur && cur.by !== by && Date.now() - cur.ts < 300_000) return json({ ok: false, by: cur.by });
+      claims.set(id, { by, ts: Date.now() });
+      return json({ ok: true });
     }
 
     // Was a request we pushed already answered by someone? Lets a worker

@@ -3181,6 +3181,12 @@ export function arkFeature(ctx) {
     startLnPay(invoice, meta) { return startArkLnPay(invoice, meta); },
     // ---- headless seam for the NWC wallet service ----
     arkPayInvoice(invoice, opts) { return payInvoiceHeadless(invoice, opts); },
+    // The settled outcome of a payment another device of this wallet
+    // started (the ASP refuses a second HTLC for the same invoice).
+    async arkLnOutcome(paymentHash, timeoutMs) {
+      const mgr = await connectArk();
+      return mgr.lnOutcome(paymentHash, timeoutMs);
+    },
     arkSpendableSat() { const b = arkBalance(); return b ? b.spendableSat : 0; },
     arkReady() { return arkAvailable(); },
     async arkMakeInvoice(amountSat, description) {

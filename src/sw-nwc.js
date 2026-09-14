@@ -5,6 +5,7 @@
 // when it can't.
 
 import { respondFromBg } from './nwc-respond.js';
+import { withRequestLock } from './nwc-lock.js';
 import { bgAutoWithdraw } from './bg-autowithdraw.js';
 import { allInboxes, classifyDm, shouldNotifyDm } from './dm-inbox.js';
 
@@ -67,10 +68,9 @@ self.addEventListener('push', (e) => {
     setTimeout(() => { bgAutoWithdraw({ log: (m) => console.log('[sw-aw]', m) }).catch(() => {}); }, 0);
     let handled = false;
     try {
-      handled = await respondFromBg(data, {
-        notifier: NOTIFIER,
-        log: (m) => console.log('[sw-nwc]', m),
-      });
+      handled = await withRequestLock(data.event && data.event.id,
+        () => respondFromBg(data, { notifier: NOTIFIER, log: (m) => console.log('[sw-nwc]', m) }),
+        () => { console.log('[sw-nwc] another context holds this request'); return true; });
     } catch (err) {
       console.warn('[sw-nwc] auto-answer failed:', err && err.message);
     }

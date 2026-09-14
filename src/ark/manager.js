@@ -957,6 +957,22 @@ export class ArkManager {
 
   _expiryMargin() { return this.network === 'regtest' ? 12 : 144; }
 
+  // The settled outcome of a payment by hash, polled until the ASP's node
+  // decides or the wait runs out. For a payment another device of this
+  // wallet started (the server refuses a second HTLC for the same invoice)
+  // this is the only way to learn whether it paid.
+  async lnOutcome(paymentHash, timeoutMs = 60000) {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const res = await checkLightningPayment(this.arkUrl, hex.decode(paymentHash), false).catch(() => null);
+      if (res && res.status === 'success' && res.preimage
+          && hex.encode(sha256(hex.decode(res.preimage))) === paymentHash) return res;
+      if (res && res.status === 'failed') return res;
+      if (Date.now() >= deadline) return { status: 'pending' };
+      await new Promise((r) => setTimeout(r, 1500));
+    }
+  }
+
   lnAction(id) {
     return this.state.actions.find((a) => a.id === id && a.type.startsWith('ln-'));
   }
@@ -1140,7 +1156,12 @@ export class ArkManager {
           action.step = 'failed';
           action.error = e.message;
           this._recordExpiryRejection(action);
-          this._movement({ type: 'ln-send', amountSat: action.amountSat, status: 'failed', detail: e.message });
+          // "already in progress" means another device of this wallet is
+          // paying this very invoice — that payment's row is the history,
+          // a failed row beside it would read as a lost zap.
+          if (!/already in progress/i.test(e.message)) {
+            this._movement({ type: 'ln-send', amountSat: action.amountSat, status: 'failed', detail: e.message });
+          }
           this._save();
           return;
         }

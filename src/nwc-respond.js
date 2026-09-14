@@ -293,6 +293,19 @@ export async function respondFromBg(data, {
     }
     break;
   }
+  if (a && a.step === 'failed' && /already in progress/i.test(a.error || '')) {
+    // Another device of this wallet started this same payment first. Its
+    // outcome is ours: wait on it, and only speak if the payer stays quiet.
+    log('a sibling device is paying this invoice — waiting on its outcome');
+    const out = await mgr.lnOutcome(dec.paymentHash, Math.max(3000, deadline - Date.now()));
+    if (out.status === 'failed') return failQuietly(a.error);
+    if (out.status !== 'success') { log('sibling payment still pending — leaving it to them'); return true; }
+    await new Promise((r) => setTimeout(r, errGraceMs));
+    if (!(await answered())) {
+      await publish({ result_type: 'pay_invoice', result: { preimage: out.preimage, fees_paid: 0 } });
+    }
+    return true;
+  }
   if (!a || a.step === 'failed') {
     return failQuietly((a && a.error) || 'payment failed');
   }

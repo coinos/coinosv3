@@ -32,6 +32,7 @@ import { getNetwork } from '../api.js';
 import { loadBg, saveBg, clearBg } from '../nwc-bg.js';
 import { encodeNoffer } from '../noffer.js';
 import { maybeBolt11 } from '../ark/lightning.js';
+import { withRequestLock } from '../nwc-lock.js';
 
 const REQ_KIND = 23194;
 const RES_KIND = 23195;
@@ -51,7 +52,12 @@ export function nwcFeature(ctx) {
   const { h, ui, render, wallet, hook, fmtAmount, unitLabel, copyBtn, toast } = ctx;
   // Relay transport, injectable so the protocol can be driven in tests
   // without a live relay.
-  const { subscribe = subscribeOn, publish = publishOn, query = queryOn } = ctx.nwcTransport || {};
+  const {
+    subscribe = subscribeOn, publish = publishOn, query = queryOn,
+    // how long a pay_invoice error (or a sibling's success) waits for the
+    // device that actually paid to speak first
+    errGraceMs = 3000,
+  } = ctx.nwcTransport || {};
 
   // ---- persisted connections -------------------------------------------
   // { id, name, secret (client sk hex), clientPk, servicePk, serviceSk,
@@ -263,6 +269,12 @@ export function nwcFeature(ctx) {
     if (ev.created_at && nowSec() - ev.created_at > MAX_AGE_SEC) {
       return console.log('nwc: guard drop — too old', nowSec() - ev.created_at, 's');
     }
+    // Same wallet, several tabs: the first to claim the request answers it.
+    return withRequestLock(ev.id, () => serve(c, ev),
+      () => console.log('nwc: skip — another tab or the worker holds', ev.id.slice(0, 8)));
+  }
+
+  async function serve(c, ev) {
     // only the client this connection was issued to
     if (ev.pubkey !== c.clientPk) {
       return console.log(`nwc: guard drop — pubkey mismatch got=${ev.pubkey.slice(0, 8)} want=${c.clientPk.slice(0, 8)}`);
@@ -323,13 +335,18 @@ export function nwcFeature(ctx) {
     // device's success: two tabs can pass the pre-check together, and the
     // one that loses (stale state, mid-init, refused vtxo) would otherwise
     // reply an error AFTER the winner's preimage, which some clients trust.
+    // The same hold covers a success learned from a sibling's payment: the
+    // device that paid owns the reply, this one only fills in if it never
+    // comes.
     const sendChecked = async (payload) => {
-      if (method === 'pay_invoice' && payload.error) {
+      if (method === 'pay_invoice' && (payload.error || payload.sibling)) {
+        await new Promise((r) => setTimeout(r, errGraceMs));
         const prior = await query(NWC_RELAYS, { kinds: [RES_KIND], '#e': [ev.id] }, 1500).catch(() => []);
         if (prior && prior.length) {
-          return console.log('nwc: suppressing error — request answered elsewhere', ev.id.slice(0, 8));
+          return console.log('nwc: staying quiet — request answered elsewhere', ev.id.slice(0, 8));
         }
       }
+      delete payload.sibling;
       await reply(c, ev, scheme, payload);
     };
     try {
@@ -372,7 +389,6 @@ export function nwcFeature(ctx) {
       // to answer; sendChecked then suppresses this if anyone did.
       const netOf = (n) => (n === 'mutinynet' ? 'signet' : n);
       if (dec.network && netOf(getNetwork()) !== dec.network) {
-        await new Promise((r) => setTimeout(r, 3000));
         return errRes('INTERNAL', `invoice is for ${dec.network}, wallet is on ${netOf(getNetwork())}`);
       }
       const { left } = spendRoom(c);
@@ -382,7 +398,19 @@ export function nwcFeature(ctx) {
       if (dec.amountSat > left) {
         return errRes('QUOTA_EXCEEDED', `over the remaining daily budget (${left} sat)`);
       }
-      const res = await hook('arkPayInvoice', invoice, { maxAmountSat: c.maxSat });
+      let res;
+      try {
+        res = await hook('arkPayInvoice', invoice, { maxAmountSat: c.maxSat });
+      } catch (e) {
+        // The ASP already holds a payment for this invoice: another device
+        // of this wallet took the same request first. Its outcome is ours —
+        // wait for it rather than report a failure over a zap that is
+        // paying. The payer records the spend; this side only relays.
+        if (!/already in progress/i.test(e.message || '')) throw e;
+        const out = await hook('arkLnOutcome', dec.paymentHash, 60000);
+        if (!out || out.status !== 'success') throw e;
+        return { sibling: true, result: { preimage: out.preimage, fees_paid: 0 } };
+      }
       // the ark seam throws on failure, so reaching here means it settled
       recordSpend(c, (res.amountSat || 0) + (res.feeSat || 0));
       notifySent(c, res.amountSat || 0, res.feeSat || 0);
@@ -445,6 +473,10 @@ export function nwcFeature(ctx) {
     if (handled.has(ev.id)) return;
     handled.add(ev.id);
     if (ev.created_at && nowSec() - ev.created_at > MAX_AGE_SEC) return;
+    return withRequestLock(ev.id, () => serveOffer(ev));
+  }
+
+  async function serveOffer(ev) {
     const o = load().offer;
     if (!o) return;
     const sk = hex.decode(o.sk);

@@ -13,12 +13,14 @@ const store = {};
 globalThis.localStorage = { getItem:k=>k in store?store[k]:null, setItem:(k,v)=>{store[k]=v;}, removeItem:k=>{delete store[k];} };
 
 let subHandler = null;
+let priorReplies = [];
 const published = [];
 // fake relay transport: capture the subscription handler and any replies
 const nwcTransport = {
   subscribe: (relays, filter, on) => { subHandler = on; return () => { subHandler = null; }; },
   publish: async (relays, evt) => { published.push(evt); return true; },
-  query: async () => [], // no other device has answered anything in tests
+  query: async () => priorReplies, // what other devices have answered (none, unless a test says so)
+  errGraceMs: 20,        // the sibling-first hold, shortened for the harness
 };
 let paid = [];
 const wallet = {
@@ -105,6 +107,30 @@ check('second payment succeeds', !!r?.result?.preimage, JSON.stringify(r?.error 
 {
   const spent = JSON.parse(store['fs:nwc']).conns.find((x) => x.id === 'test1').spentToday;
   check('spend accumulates across payments', spent === 52, String(spent)); // 2 × (25 + 1 fee) from the mock seam
+}
+
+console.log('\n[sibling payment in flight]');
+{
+  // The ASP refuses a second HTLC for an invoice another device is paying.
+  // This device must relay THAT payment's outcome, not report a failure.
+  const payer = hooks.arkPayInvoice;
+  hooks.arkPayInvoice = async () => { throw new Error('grpc bark_server.ArkService/RequestLightningPayHtlcCosign: status 3: error making payment: bad user input: payment already in progress for this invoice'); };
+  hooks.arkLnOutcome = async () => ({ status: 'success', preimage: '12'.repeat(32) });
+  r = await request('pay_invoice', { invoice: INV21 });
+  check('sibling success relayed with its preimage', r?.result?.preimage === '12'.repeat(32), JSON.stringify(r));
+  const spent = JSON.parse(store['fs:nwc']).conns.find((x) => x.id === 'test1').spentToday;
+  check('relayed payment not counted as our spend', spent === 52, String(spent));
+  // ...and stays quiet when the payer's own reply is already on the relay
+  priorReplies = [{ id: 'x' }];
+  const n = published.length;
+  r = await request('pay_invoice', { invoice: INV21 });
+  check('silent when the payer already replied', published.length === n);
+  priorReplies = [];
+  hooks.arkLnOutcome = async () => ({ status: 'failed' });
+  r = await request('pay_invoice', { invoice: INV21 });
+  check('sibling failure surfaces as an error', /already in progress/.test(r?.error?.message || ''), JSON.stringify(r));
+  hooks.arkPayInvoice = payer;
+  delete hooks.arkLnOutcome;
 }
 
 console.log('\n[nip04 fallback]');

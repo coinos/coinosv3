@@ -5281,6 +5281,13 @@ export function messagesFeature(ctx) {
     const q = quotedNote({ id, relays: [] });
     return q.ev || null;
   }
+  // A one-line excerpt: mentions read as names, not as nostr:nprofile1… keys.
+  function plainExcerpt(text) {
+    return String(text || '').replace(/nostr:(npub|nprofile)1[a-z0-9]+/gi, (m) => {
+      const ref = parseNostrRef(m.slice(6));
+      return ref && ref.type === 'pubkey' ? '@' + displayName(ref.pk) : m.slice(6, 18) + '\u2026';
+    }).replace(/\s+/g, ' ').trim();
+  }
   function notifLabel(x) {
     if (x.what === 'zap') return t('alertZap', { sats: fmtSats(x.sats) + ' sats' });
     if (x.what === 'react') return t('alertReact', { emoji: x.emoji });
@@ -5292,8 +5299,8 @@ export function messagesFeature(ctx) {
     profileOf(x.actor);
     const target = x.what === 'reply' || x.what === 'mention' ? null : notifTarget(x.target);
     const excerpt = x.what === 'reply' || x.what === 'mention'
-      ? x.text
-      : target ? String(target.content || '').slice(0, 140) : null;
+      ? plainExcerpt(x.text)
+      : target ? plainExcerpt(String(target.content || '').slice(0, 140)) : null;
     const open = () => {
       if (x.what === 'reply' || x.what === 'mention') {
         const ev = notifNotes.get(x.id);

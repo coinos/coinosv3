@@ -291,7 +291,7 @@ export async function respondFromBg(data, {
     } catch (e) {
       return failQuietly(e.message);
     }
-    a = mgr.lnAction(id);
+    a = await mgr.awaitLnPay(id, Math.max(1000, deadline - Date.now())).catch(() => mgr.lnAction(id));
     while (a && !['done', 'failed'].includes(a.step) && Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, 1500));
       await mgr.driveLn(id).catch(() => {});

@@ -144,6 +144,15 @@ console.log('\n[cross-device claim]');
   claimOk = true;
   r = await request('get_balance', {});
   check('non-pay methods need no claim', r?.result?.balance === 42000*1000);
+  // no verdict from the notifier → the relay look-back decides
+  claimOk = null; priorReplies = [{ id: 'x' }];
+  const n2 = published.length;
+  await request('pay_invoice', { invoice: INV21 });
+  check('no verdict + a reply on the relays → silent', published.length === n2);
+  priorReplies = [];
+  r = await request('pay_invoice', { invoice: INV21 });
+  check('no verdict + nothing on the relays → pays', !!r?.result?.preimage);
+  claimOk = true;
 }
 
 console.log('\n[nip04 fallback]');

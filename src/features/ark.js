@@ -763,6 +763,17 @@ export function arkFeature(ctx) {
   }
   function pollArkLn(id, onSettle) {
     stopArkLnPoll(id);
+    // One held call brings the settlement the moment the server has it;
+    // the interval below is the fallback pace if that call breaks.
+    if (ark) {
+      ark.awaitLnPay(id).then((a) => {
+        if (a && ['done', 'failed'].includes(a.step) && arkLnTimers.has(id)) {
+          stopArkLnPoll(id);
+          onSettle(a);
+        }
+        render();
+      }).catch(() => {});
+    }
     arkLnTimers.set(id, setInterval(async () => {
       if (!ark) return;
       const a = await ark.driveLn(id).catch(() => null);
@@ -882,6 +893,7 @@ export function arkFeature(ctx) {
     for (let attempt = 0; attempt < 3; attempt++) {
       const routingFeeSat = attempt === 0 ? undefined : (last?.routingFeeSat ?? 0) + 1;
       const id = await mgr.payLnInvoice(invoice, { routingFeeSat });
+      await mgr.awaitLnPay(id).catch(() => {});
       for (let i = 0; i < 60; i++) {
         const a = mgr.lnAction(id);
         if (!a || ['done', 'failed'].includes(a.step)) break;

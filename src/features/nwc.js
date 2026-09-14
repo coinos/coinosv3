@@ -66,6 +66,8 @@ export function nwcFeature(ctx) {
   // locked an HTLC for the same zap. The notifier hands each request to the
   // first device that asks. Unreachable notifier → answer anyway: a lone
   // device must never go silent over a hiccup here.
+  // Returns true (ours), false (someone else's) or null (no verdict: the
+  // notifier could not be reached).
   const claimAs = Math.random().toString(36).slice(2, 12);
   async function claimOn(id) {
     try {
@@ -74,10 +76,14 @@ export function nwcFeature(ctx) {
         body: JSON.stringify({ event: id, by: claimAs }),
         signal: AbortSignal.timeout ? AbortSignal.timeout(4000) : undefined,
       });
-      if (!r.ok) return true;
+      if (!r.ok) return null;
       return (await r.json()).ok !== false;
-    } catch { return true; }
+    } catch { return null; }
   }
+  // A phone answering from behind another app is throttled to a crawl and
+  // still tends to win a race it will then lose by ten seconds; let any
+  // desktop tab claim first.
+  const mobile = typeof navigator !== 'undefined' && /Mobi|Android/i.test(navigator.userAgent || '');
 
   // ---- persisted connections -------------------------------------------
   // { id, name, secret (client sk hex), clientPk, servicePk, serviceSk,
@@ -335,17 +341,28 @@ export function nwcFeature(ctx) {
     if (!METHODS.includes(method)) {
       return reply(c, ev, scheme, { result_type: method, ...errRes('NOT_IMPLEMENTED', 'method not supported') });
     }
+    // Leader election across the user's open devices: every tab sees every
+    // request. The notifier's claim decides in one round trip; only when it
+    // gives no verdict do we fall back to the old dance — defer a beat, then
+    // stay SILENT if any reply for this request already exists on the relays
+    // (a late tab, woken with the request still inside the replay window,
+    // once re-answered zaps another device had paid). A request older than a
+    // few seconds is a replay or a wake-up: check the relays first, since a
+    // reply very likely exists and the claim may have expired with it.
+    let claimed = null; // this device's verdict, resolved before any spend
     if (method === 'pay_invoice') {
-      // Loose leader election across the user's open devices: every tab sees
-      // every request, and a late tab (woken with the request still inside
-      // the replay window) once re-answered zaps another device had already
-      // paid — its error replies made successful zaps look failed. Defer a
-      // beat, then stay SILENT if any reply for this request already exists.
       const age = nowSec() - (ev.created_at || 0);
-      await new Promise((r) => setTimeout(r, age > 5 ? 0 : 300 + Math.random() * 900));
-      const prior = await query(NWC_RELAYS, { kinds: [RES_KIND], '#e': [ev.id] }, 1500);
-      if (prior && prior.length) {
-        return console.log('nwc: skip — request already answered elsewhere', ev.id.slice(0, 8));
+      const lookBack = async () => {
+        const prior = await query(NWC_RELAYS, { kinds: [RES_KIND], '#e': [ev.id] }, 1500);
+        return !!(prior && prior.length);
+      };
+      if (age > 5 && await lookBack()) return console.log('nwc: skip — request already answered elsewhere', ev.id.slice(0, 8));
+      if (mobile && age <= 5) await new Promise((r) => setTimeout(r, 1000));
+      claimed = await claim(ev.id);
+      if (claimed === false) return console.log('nwc: standing down — another device claimed', ev.id.slice(0, 8));
+      if (claimed === null && age <= 5) {
+        await new Promise((r) => setTimeout(r, 300 + Math.random() * 900));
+        if (await lookBack()) return console.log('nwc: skip — request already answered elsewhere', ev.id.slice(0, 8));
       }
     }
     updateConn(c.id, { lastUsed: Date.now() });
@@ -370,8 +387,7 @@ export function nwcFeature(ctx) {
       await reply(c, ev, scheme, payload);
     };
     try {
-      const out = await handle(c, method, params, () => claim(ev.id));
-      if (out && out.silent) return console.log('nwc: standing down — another device claimed', ev.id.slice(0, 8));
+      const out = await handle(c, method, params);
       await sendChecked({ result_type: method, ...out });
     } catch (e) {
       await sendChecked({ result_type: method, ...errRes('INTERNAL', e.message || 'failed') });
@@ -379,7 +395,7 @@ export function nwcFeature(ctx) {
     render();
   }
 
-  async function handle(c, method, params, claimReq) {
+  async function handle(c, method, params) {
     if (!hook('arkReady')) return errRes('UNAUTHORIZED', 'Ark is not configured in this wallet');
 
     if (method === 'get_info') {
@@ -419,10 +435,6 @@ export function nwcFeature(ctx) {
       if (dec.amountSat > left) {
         return errRes('QUOTA_EXCEEDED', `over the remaining daily budget (${left} sat)`);
       }
-      // Everything local has passed; now make sure this device is the one
-      // that pays. Claiming before the checks would block a sibling behind
-      // a refusal it would not itself have given.
-      if (claimReq && !(await claimReq())) return { silent: true };
       let res;
       try {
         res = await hook('arkPayInvoice', invoice, { maxAmountSat: c.maxSat });

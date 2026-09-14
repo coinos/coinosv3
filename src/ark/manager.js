@@ -973,6 +973,21 @@ export class ArkManager {
     }
   }
 
+  // Wait on the server for a Lightning send to settle or fail, then drive
+  // the action to its terminal step. One held call instead of polling every
+  // couple of seconds — the preimage reaches the caller the moment CLN has
+  // it. A broken long call (proxy timeout, network) just returns the action
+  // as it stands, and the caller's polling takes over.
+  async awaitLnPay(id, timeoutMs = 90_000) {
+    const a = this.lnAction(id);
+    if (!a || a.step !== 'initiated') return this.driveLn(id);
+    await Promise.race([
+      checkLightningPayment(this.arkUrl, hex.decode(a.paymentHash), true).catch(() => null),
+      new Promise((r) => setTimeout(r, timeoutMs)),
+    ]);
+    return this.driveLn(id);
+  }
+
   lnAction(id) {
     return this.state.actions.find((a) => a.id === id && a.type.startsWith('ln-'));
   }

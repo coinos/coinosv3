@@ -30,7 +30,15 @@ const signed = (content, ago) => finalizeEvent(
 const seeded = Array.from({ length: 25 }, (_, i) => signed('post number ' + (i + 1), 600 + i * 60));
 
 const html = await buildHtml({ minify: true, pwa: false });
-const server = Bun.serve({ port: 5296, fetch: () => new Response(html, { headers: { 'content-type': 'text/html' } }) });
+// a picture that takes its time, so a post showing it must have waited
+const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64');
+const server = Bun.serve({ port: 5296, fetch: async (req) => {
+  if (new URL(req.url).pathname === '/slow.png') {
+    await sleep(700);
+    return new Response(PNG, { headers: { 'content-type': 'image/png', 'cache-control': 'no-store' } });
+  }
+  return new Response(html, { headers: { 'content-type': 'text/html' } });
+} });
 const browser = await puppeteer.launch({ executablePath: '/usr/bin/google-chrome', headless: 'new', args: ['--no-sandbox'] });
 const page = await browser.newPage();
 await page.evaluateOnNewDocument(() => {
@@ -111,7 +119,10 @@ try {
   const fresh = signed('BRAND NEW POST', 0);
   const delivered = await page.evaluate((ev) => window.__inject(ev), fresh);
   check('...a post really arrives on a live subscription', delivered > 0, delivered + ' socket(s)');
-  await sleep(900);
+  // A post waits at the door for its author's face and its pictures (or the
+  // two-second deadline, for a face nobody has) before it is even counted —
+  // so give it that long, and no longer.
+  await sleep(2600);
   const after = await page.evaluate(() => ({
     y: Math.round(window.scrollY),
     pill: (document.querySelector('.feed-new-pill') || {}).textContent || '',
@@ -144,6 +155,30 @@ try {
   check('...and scrolling to the top lets it in by itself',
     await page.evaluate(() => /ANOTHER ONE/.test(document.querySelector('.notes-feed')?.innerText || '')
       && !document.querySelector('.feed-new-pill')));
+
+  console.log('\n[a post arrives whole]');
+  // A row used to paint first and fill in its picture after. Watch the feed
+  // from the instant the post is injected: the first time the row exists,
+  // its image must already be decoded.
+  await page.evaluate(() => {
+    window.__firstSight = null;
+    const feed = document.querySelector('.notes-feed');
+    const look = () => {
+      if (window.__firstSight) return;
+      const row = [...feed.querySelectorAll('.row')].find((n) => /PICTURE POST/.test(n.innerText || ''));
+      if (!row) return;
+      const img = row.querySelector('img.note-img');
+      window.__firstSight = { img: !!img, ready: !!(img && img.complete && img.naturalWidth > 0), at: performance.now() };
+    };
+    new MutationObserver(look).observe(feed, { childList: true, subtree: true });
+  });
+  const t0 = await page.evaluate(() => performance.now());
+  await page.evaluate((ev) => window.__inject(ev), signed('PICTURE POST http://localhost:5296/slow.png?' + Date.now(), 0));
+  await sleep(3000);
+  const sight = await page.evaluate(() => window.__firstSight);
+  check('the post is in the feed', !!sight && sight.img, JSON.stringify(sight));
+  check('...and its picture was already decoded the first time the row existed', !!sight && sight.ready);
+  check('...having waited for the slow host', !!sight && sight.at - t0 >= 700, sight ? Math.round(sight.at - t0) + 'ms' : '');
 
   console.log('\n[coming back after being away]');
   // the throttle would otherwise swallow a refresh this soon after the last

@@ -2453,6 +2453,7 @@ export function messagesFeature(ctx) {
         .filter((e) => !seen.has(e.id) && seen.add(e.id))
         .sort((a, b) => b.created_at - a.created_at);
       if (fresh.length || !c.notes.length) {
+        await notesReady(fresh.slice(0, FEED_PAGE)); // the first screen arrives whole
         c.notes = fresh;
         persistPage('notes', pk, fresh.slice(0, 20).map(slimNote)); // cache stays bounded
       }
@@ -2493,7 +2494,7 @@ export function messagesFeature(ctx) {
       const older = (evs || [])
         .filter((e) => !seen.has(e.id) && seen.add(e.id))
         .sort((a, b) => b.created_at - a.created_at);
-      if (older.length) c.notes = [...c.notes, ...older];
+      if (older.length) { await notesReady(older); c.notes = [...c.notes, ...older]; }
       else c.end = true; // the relays have nothing older
     } catch {} finally {
       c.loadingMore = false;
@@ -2774,6 +2775,9 @@ export function messagesFeature(ctx) {
       let stored = [];
       try { stored = wallet.loadFeatureState(FEED_CACHE, []) || []; } catch {}
       feed = { status: stored.length ? 'ready' : 'loading', notes: stored, shown: FEED_PAGE };
+      // the cached page is on screen already; warm what it shows so the
+      // scroll below the fold, and the next boot, paint whole too
+      notesReady(stored.slice(0, FEED_PAGE)).catch(() => {});
       refreshFeed();
     }
     return feed;
@@ -2792,11 +2796,70 @@ export function messagesFeature(ctx) {
     try { return (window.scrollY || 0) < FEED_TOP_PX; } catch { return true; }
   };
 
-  function mergeFeed(evs, opts = {}) {
+  // ---- a post arrives whole ------------------------------------------------
+  // A row used to paint the moment its event landed, and then finish itself
+  // over the next second or two: a punk turning into a photograph, a blank
+  // gap becoming the picture. So a post now waits at the door until its
+  // author's face and the images in its body are fetched and decoded — or
+  // have had a fair chance. A slow host holds a post for a couple of seconds,
+  // not forever, and a batch never waits longer than one post would.
+  const READY_MS = 2000;
+  const mediaReady = new Set(); // URLs decoded (or given up on) this session
+  const warmMedia = (url) => new Promise((resolve) => {
+    if (!url || mediaReady.has(url) || typeof Image === 'undefined') return resolve();
+    const done = () => { mediaReady.add(url); resolve(); };
+    try {
+      const img = new Image();
+      img.onload = () => { (img.decode ? img.decode() : Promise.resolve()).then(done, done); };
+      img.onerror = done; // a picture that won't load won't get better by waiting
+      img.src = url;
+    } catch { done(); }
+  });
+  // The pictures a body will show: inline images (by extension, or markdown
+  // saying so outright) and a video's poster still. Four at most — a
+  // gallery post shows its first row whole and fills in the rest.
+  function noteMediaUrls(content) {
+    const urls = [];
+    for (const part of String(content || '').split(NOTE_SPLIT)) {
+      if (!part || urls.length >= 4) continue;
+      const md = MD_PARTS.exec(part);
+      const url = md ? md[3] : (/^https?:\/\//i.test(part) ? part : null);
+      if (!url) continue;
+      if ((md && md[1]) || /\.(png|jpe?g|gif|webp|avif)(\?[^\s]*)?$/i.test(url)) urls.push(url);
+      else if (youtubeId(url)) urls.push('https://i.ytimg.com/vi/' + youtubeId(url) + '/hqdefault.jpg');
+    }
+    return urls;
+  }
+  // The face: wait for the profile to land (the batch asks within a beat),
+  // then for whatever avatarBg would paint from — the local thumbnail is a
+  // data URL and costs nothing; an original goes through the network once.
+  async function warmAvatar(pk, deadline) {
+    let p = profileOf(pk);
+    while ((p === null || (p && p.loading && !p.picture)) && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 100));
+      p = profiles.get(pk);
+    }
+    if (!p || !p.picture) return; // punk art: drawn from the pubkey, no fetch
+    if (localPunk(p.picture) || (p.thumb && p.thumbFor === p.picture)) return;
+    await warmMedia(p.picture);
+  }
+  function noteReady(ev, deadline = Date.now() + READY_MS) {
+    const wait = Promise.all([warmAvatar(ev.pubkey, deadline), ...noteMediaUrls(ev.content).map(warmMedia)]);
+    return Promise.race([wait, new Promise((r) => setTimeout(r, Math.max(0, deadline - Date.now())))]).catch(() => {});
+  }
+  const notesReady = (evs) => { const deadline = Date.now() + READY_MS; return Promise.all(evs.map((e) => noteReady(e, deadline))); };
+
+  // Posts at the door: filtered in synchronously, so the same note from a
+  // second relay is dropped while the first copy is still warming.
+  const feedStaged = new Set();
+  async function mergeFeed(evs, opts = {}) {
     const c = feedNow();
     const known = new Set([...c.notes, ...(c.pending || [])].map((e) => e.id));
-    const add = (evs || []).filter((e) => e.kind === 1 && !isReply(e) && !isMuted(e.pubkey) && !known.has(e.id) && known.add(e.id));
+    const add = (evs || []).filter((e) => e.kind === 1 && !isReply(e) && !isMuted(e.pubkey)
+      && !known.has(e.id) && !feedStaged.has(e.id) && known.add(e.id) && feedStaged.add(e.id));
     if (!add.length) return false;
+    await notesReady(add);
+    for (const e of add) feedStaged.delete(e.id);
     // A post that arrived on its own while you were reading waits behind the
     // pill instead of shoving the page down. Anything you asked for — a
     // refresh, a scroll to the bottom, the first load — goes straight in.
@@ -2845,7 +2908,7 @@ export function messagesFeature(ctx) {
       for (let i = 0; i < a.length; i += REQ_AUTHORS) chunks.push(a.slice(i, i + REQ_AUTHORS));
       return chunks.map(async (chunk) => {
         const evs = await queryOn(relays, { kinds: [1], authors: chunk, limit: FEED_LIMIT, ...extra }, 5000).catch(() => []);
-        if (mergeFeed(evs, merge)) { got = true; scheduleRepaint(); }
+        if (await mergeFeed(evs, merge)) { got = true; scheduleRepaint(); }
       });
     }));
     return got;
@@ -2869,7 +2932,7 @@ export function messagesFeature(ctx) {
     for (const { relays, authors } of outboxPlan(feedAuthors()))
       for (let i = 0; i < authors.length; i += REQ_AUTHORS)
         feedUnsubs.push(subscribeOn(relays, { kinds: [1], authors: authors.slice(i, i + REQ_AUTHORS), since },
-          (ev) => { if (mergeFeed([ev], { live: true })) scheduleRepaint(); }));
+          (ev) => { mergeFeed([ev], { live: true }).then((ok) => { if (ok) scheduleRepaint(); }).catch(() => {}); }));
   }
   function stopFeedWatch() {
     for (const u of feedUnsubs) { try { u(); } catch {} }

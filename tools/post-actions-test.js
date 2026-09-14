@@ -128,7 +128,7 @@ try {
   await page.evaluate(() => { const b = [...document.querySelectorAll('button')].find((e) => /message/i.test(e.getAttribute('aria-label') || '')); if (b) b.click(); });
   await sleep(2500);
   const opened = await page.evaluate(() => {
-    const row = [...document.querySelectorAll('.chat-thread-row')].find((r) => !/feed/i.test(r.textContent));
+    const row = [...document.querySelectorAll('.chat-thread-row')].find((r) => !/feed|notifications/i.test(r.textContent));
     if (!row) return 'no dm row';
     row.click();
     return 'opened';

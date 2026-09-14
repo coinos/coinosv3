@@ -554,6 +554,19 @@ hr.divider { margin: 16px 0; }
 .note-act.on[aria-label="Boost"] { color: var(--green); }
 .note-act-emoji { font-size: 17px; line-height: 1; }
 .note-act-n { font-size: 12px; font-weight: 600; color: var(--muted); }
+.note-who-chev { display: flex; transition: transform .2s; }
+.note-who-chev.open { transform: rotate(180deg); }
+/* who reacted, boosted and zapped: opened by the chevron on the bar */
+.note-who { margin-top: 6px; padding: 8px 10px; gap: 8px; background: var(--surface2); border: 1px solid var(--line); border-radius: 10px; font-size: 13px; }
+.note-who-line { gap: 10px; align-items: flex-start; min-width: 0; }
+.note-who-lead { flex: 0 0 22px; display: flex; justify-content: center; color: var(--muted); padding-top: 3px; }
+.note-who-people { gap: 6px 10px; align-items: center; min-width: 0; }
+.note-who-person { display: inline-flex; align-items: center; gap: 5px; padding: 2px 6px 2px 2px; border: 0; background: transparent; color: var(--ink); font: inherit; border-radius: 999px; cursor: pointer; min-width: 0; }
+.note-who-person:hover { background: var(--surface); }
+.note-who-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 140px; }
+.note-who-sats { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.alert-row.fresh { background: var(--accent-soft, rgba(128,128,128,.08)); border-radius: 8px; padding-left: 8px !important; padding-right: 8px !important; margin: 0 -8px; }
+.alert-excerpt { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* The attach button sits between Post and Cancel: a square the size of the
    buttons beside it, not the sliver a .btn-sm made of a 20px icon. */
 .attach-btn {

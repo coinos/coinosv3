@@ -2160,6 +2160,7 @@ export function messagesFeature(ctx) {
   const seenNoteEv = new Set(); // event ids already counted
   const myReactEv = new Map();  // note id -> the id of OUR reaction, so it can be withdrawn
   const zapTotals = new Map(); // id -> { sats, seen: Set<receipt id>, mine }
+  const zapWho = new Map();    // id -> Map(receipt id -> { pk, sats, ts, text }) — the tally, by person
   const zapAsked = new Set();
   let zapQueue = new Set(), zapTimer = null, zapLiveUnsub = null, zapRecent = [];
   const zapRelays = () => [...new Set([...NOTE_RELAYS, ...((wallet.nostrRelays && wallet.nostrRelays()) || [])])];
@@ -2177,6 +2178,12 @@ export function messagesFeature(ctx) {
       const req = JSON.parse(tagOf(ev, 'description') || 'null');
       return Math.floor((parseInt(tagOf(req, 'amount'), 10) || 0) / 1000);
     } catch { return 0; }
+  }
+  // The note the zapper typed with it, if any (it rides inside the zap
+  // request the receipt carries).
+  function zapText(ev) {
+    if (ev.kind === 9737) return String(ev.content || '').slice(0, 200);
+    try { return String((JSON.parse(tagOf(ev, 'description') || 'null') || {}).content || '').slice(0, 200); } catch { return ''; }
   }
   function zapperOf(ev) {
     if (ev.kind === 9737) return ev.pubkey;
@@ -2224,6 +2231,10 @@ export function messagesFeature(ctx) {
       if (cur.seen.has(ev.id)) continue;
       cur.seen.add(ev.id);
       cur.sats += sats;
+      if (from) {
+        if (!zapWho.has(x[1])) zapWho.set(x[1], new Map());
+        zapWho.get(x[1]).set(ev.id, { pk: from, sats, ts: ev.created_at, text: zapText(ev) });
+      }
       // our own zap's receipt: the real thing has landed, so the optimistic
       // amount the chip has been carrying since the tap steps aside
       if (from && my.includes(from)) { cur.mine = true; voidPending(x[1], ev.created_at * 1000); }
@@ -3461,7 +3472,62 @@ export function messagesFeature(ctx) {
       // tap to choose how you feel about it; tap again to take it back
       btn(mineReact || I_HEART(false), t('postLike'), likeN, !!mineReact,
         () => { if (mineReact) unreact(ev).catch(() => {}); else { ui.reactPick = ev; render(); } }),
-      canZap ? btn(I_ZAP, t('zapTitle'), 0, false, () => { zapNote(pk, ev); recheckZap(ev.id); }) : null);
+      canZap ? btn(I_ZAP, t('zapTitle'), 0, false, () => { zapNote(pk, ev); recheckZap(ev.id); }) : null,
+      // who did all that: a small chevron, only once there is anyone to show
+      whoCount(ev.id)
+        ? h('button', {
+            class: 'note-act note-who-toggle' + (whoOpen(ev.id) ? ' on' : ''),
+            title: t('postWho'), 'aria-label': t('postWho'), 'aria-expanded': whoOpen(ev.id) ? 'true' : 'false',
+            onClick: (e) => { e.stopPropagation(); toggleWho(ev.id); },
+          }, h('span', { class: 'note-who-chev' + (whoOpen(ev.id) ? ' open' : ''), html: I_CHEV }))
+        : null);
+  }
+
+  // ---- who reacted, boosted and zapped ------------------------------------
+  // The counts on the bar say how many; this says who, and with what. Opened
+  // per post by the chevron, the way Amethyst does it, and remembered for
+  // the session so a repaint doesn't fold it back up.
+  const I_CHEV = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:block"><path d="M6 9l6 6 6-6"/></svg>';
+  const whoOpenIds = new Set();
+  const whoOpen = (id) => whoOpenIds.has(id);
+  const toggleWho = (id) => { if (whoOpenIds.has(id)) whoOpenIds.delete(id); else whoOpenIds.add(id); render(); };
+  function whoCount(id) {
+    const rm = reacts.get(id);
+    let n = rm ? [...rm.values()].reduce((k, who) => k + who.size, 0) : 0;
+    n += (boosts.get(id) || new Set()).size;
+    n += (zapWho.get(id) || new Map()).size;
+    return n;
+  }
+  function whoPanel(ev) {
+    const rm = reacts.get(ev.id) || new Map();
+    const bs = boosts.get(ev.id) || new Set();
+    const zs = [...(zapWho.get(ev.id) || new Map()).values()].sort((a, b) => b.sats - a.sats || b.ts - a.ts);
+    const person = (pk, extra) => h('button', {
+      class: 'note-who-person',
+      onClick: (e) => { e.stopPropagation(); openProfile(pk); },
+    }, avatar(pk, 'chat-avatar mini', false), h('span', { class: 'note-who-name' }, displayName(pk)), extra || null);
+    const people = (pks) => {
+      for (const pk of pks) profileOf(pk); // names and faces, one batch
+      return h('div', { class: 'row wrap note-who-people' },
+        ...pks.slice(0, 24).map((pk) => person(pk)),
+        pks.length > 24 ? h('span', { class: 'small faint' }, '+' + (pks.length - 24)) : null);
+    };
+    const line = (lead, body) => h('div', { class: 'row note-who-line' }, h('span', { class: 'note-who-lead' }, lead), body);
+    const lines = [];
+    // biggest zaps first, each with its own line (the amount is the point)
+    if (zs.length) {
+      for (const z of zs) profileOf(z.pk);
+      lines.push(line(h('span', { style: 'display:flex', html: I_ZAP }),
+        h('div', { class: 'col', style: 'gap:4px;min-width:0' }, ...zs.slice(0, 24).map((z) =>
+          person(z.pk, h('span', { class: 'note-who-sats' }, fmtAmount(z.sats) + ' ' + unitLabel()
+            + (z.text ? ' · ' + z.text : '')))))));
+    }
+    for (const [emoji, set] of [...rm.entries()].sort((a, b) => b[1].size - a[1].size)) {
+      lines.push(line(h('span', { class: 'note-act-emoji' }, emoji), people([...set])));
+    }
+    if (bs.size) lines.push(line(h('span', { style: 'display:flex', html: I_BOOST }), people([...bs])));
+    if (!lines.length) return null;
+    return h('div', { class: 'col note-who', onClick: (e) => e.stopPropagation() }, ...lines);
   }
 
   // The emoji row, same set the chat sheet offers.
@@ -3529,7 +3595,8 @@ export function messagesFeature(ctx) {
             onClick: (e) => { e.stopPropagation(); ui.noteSheet = ev; render(); },
           }, '\u22ef')),
         h('div', { class: 'note-text', style: 'white-space:pre-wrap;overflow-wrap:anywhere' }, ...noteBody(ev.content)),
-        pending ? null : noteActions(pk, ev, { canZap })));
+        pending ? null : noteActions(pk, ev, { canZap }),
+        !pending && whoOpen(ev.id) ? whoPanel(ev) : null));
   }
 
   // ---- thread view: a note in its conversation ----------------------------
@@ -4629,7 +4696,22 @@ export function messagesFeature(ctx) {
         h('div', { class: 'muted small' },
           followsNow().set.size === 1 ? t('feedFollowing1')
             : followsNow().set.size ? t('feedFollowingN', { n: followsNow().set.size })
-            : t('feedNoFollowsShort'))))));
+            : t('feedNoFollowsShort')))),
+      // ...and what happened to what you posted
+      (() => {
+        const n = myPubkeys().length ? notifUnread() : 0;
+        if (myPubkeys().length) refreshNotifs(); // throttled inside; keeps the count honest
+        return h('div', {
+          class: 'item chat-thread-row' + (n ? ' unread' : ''),
+          onClick: openNotifs,
+        },
+          h('div', { class: 'chat-avatar fallback' }, '\ud83d\udd14'),
+          h('div', { class: 'col grow', style: 'min-width:0;gap:1px' },
+            h('div', { class: 'row between', style: 'align-items:center' },
+              h('span', { class: 'chat-name' }, t('alertsTitle')),
+              n ? h('i', { class: 'thread-dot' }) : null),
+            h('div', { class: 'muted small' }, n ? t('alertsNew', { n }) : t('alertsSub'))));
+      })()));
 
     // ---- DMs
     kids.push(h('div', { class: 'row between', style: 'align-items:baseline' },
@@ -5106,10 +5188,169 @@ export function messagesFeature(ctx) {
       ui.msgSheet ? dmSheet(peer) : null);
   }
 
+  // ---- notifications: what happened to your posts --------------------------
+  // Everything that names you: a like, a boost or a zap on something you
+  // wrote, a reply, a mention. One filter (#p = you) on the relays we read,
+  // kept as a short list of what-happened rows rather than the raw events —
+  // a zap receipt drags its whole request along, and the list rides in the
+  // feature state. Painted from the last visit while the relays are asked.
+  const NOTIF_KINDS = [1, 6, 7, ...ZAP_KINDS];
+  const NOTIF_KEEP = 150;
+  let notif = null;      // { status, items }
+  let notifAt = 0, notifUnsub = null;
+  const notifSeen = () => st().notifSeen || 0;
+  function notifNow() {
+    if (!notif) {
+      const stored = st().notifs || [];
+      notif = { status: stored.length ? 'ready' : 'loading', items: stored };
+      refreshNotifs();
+    }
+    return notif;
+  }
+  // What an event says happened, or null if it isn't about you after all.
+  function notifItem(ev) {
+    const my = myPubkeys();
+    if (!ev || !ev.id) return null;
+    const lastE = (ev.tags || []).filter((x) => x[0] === 'e' && x[1]).map((x) => x[1]).at(-1) || null;
+    if (ZAP_KINDS.includes(ev.kind)) {
+      const actor = zapperOf(ev), sats = receiptSats(ev);
+      if (!actor || my.includes(actor) || !sats) return null;
+      return { id: ev.id, what: 'zap', actor, target: lastE, sats, text: zapText(ev), ts: ev.created_at };
+    }
+    if (my.includes(ev.pubkey)) return null;
+    if (ev.kind === 7) {
+      if (!lastE) return null;
+      const emoji = !ev.content || ev.content === '+' ? '\u2764\ufe0f' : ev.content.slice(0, 12);
+      return { id: ev.id, what: 'react', actor: ev.pubkey, target: lastE, emoji, ts: ev.created_at };
+    }
+    if (ev.kind === 6) return lastE ? { id: ev.id, what: 'boost', actor: ev.pubkey, target: lastE, ts: ev.created_at } : null;
+    if (ev.kind === 1) {
+      const es = (ev.tags || []).filter((x) => x[0] === 'e' && x[1]);
+      const replyTo = (es.find((x) => x[3] === 'reply') || es.find((x) => x[3] === 'root') || es.at(-1) || [])[1] || null;
+      return { id: ev.id, what: replyTo ? 'reply' : 'mention', actor: ev.pubkey, target: replyTo, text: String(ev.content || '').slice(0, 300), ts: ev.created_at, pubkey: ev.pubkey };
+    }
+    return null;
+  }
+  function mergeNotifs(evs) {
+    const c = notifNow();
+    const known = new Set(c.items.map((x) => x.id));
+    const add = (evs || []).map(notifItem).filter((x) => x && !known.has(x.id) && known.add(x.id));
+    if (!add.length) return false;
+    c.items = [...c.items, ...add].sort((a, b) => b.ts - a.ts).slice(0, NOTIF_KEEP);
+    // the rows already say who; a reply row also wants its reader-facing text,
+    // which it carries — the events themselves are not kept
+    const s2 = st(); s2.notifs = c.items; save(s2);
+    // a reply is a note we can open straight away; keep it in hand
+    for (const ev of evs) if (ev.kind === 1) notifNotes.set(ev.id, ev);
+    return true;
+  }
+  const notifNotes = new Map(); // reply id -> event, for opening the thread
+  async function refreshNotifs(force) {
+    const my = myPubkeys();
+    if (!my.length) { if (notif) notif.status = 'ready'; return; }
+    if (!force && Date.now() - notifAt < 30_000) return;
+    notifAt = Date.now();
+    try {
+      const evs = await queryOn(zapRelays(), { kinds: NOTIF_KINDS, '#p': my, limit: 120 }, 5000);
+      if (mergeNotifs(evs)) scheduleRepaint();
+    } catch {} finally {
+      if (notif) notif.status = 'ready';
+      scheduleRepaint();
+    }
+    watchNotifs();
+  }
+  function watchNotifs() {
+    stopNotifWatch();
+    const my = myPubkeys();
+    if (!my.length || !ui.chatOpen || ui.msgView !== 'notifs') return;
+    notifUnsub = subscribeOn(zapRelays(), { kinds: NOTIF_KINDS, '#p': my, since: Math.floor(Date.now() / 1000) - 60 },
+      (ev) => { if (mergeNotifs([ev])) scheduleRepaint(); });
+  }
+  function stopNotifWatch() { if (notifUnsub) { try { notifUnsub(); } catch {} notifUnsub = null; } }
+  const notifUnread = () => notifNow().items.filter((x) => x.ts > notifSeen()).length;
+  function markNotifsSeen() {
+    const newest = Math.max(0, ...notifNow().items.map((x) => x.ts));
+    if (newest > notifSeen()) { const s2 = st(); s2.notifSeen = newest; save(s2); }
+  }
+  // The post an item is about, if we have it — ours from the feed or a
+  // thread, or fetched once by id (quotedNote remembers and repaints).
+  function notifTarget(id) {
+    if (!id) return null;
+    for (const pk of myPubkeys()) { const hit = notesInHand(pk).find((e) => e.id === id); if (hit) return hit; }
+    if (notifNotes.has(id)) return notifNotes.get(id);
+    const q = quotedNote({ id, relays: [] });
+    return q.ev || null;
+  }
+  function notifLabel(x) {
+    if (x.what === 'zap') return t('alertZap', { sats: fmtAmount(x.sats) + ' ' + unitLabel() });
+    if (x.what === 'react') return t('alertReact', { emoji: x.emoji });
+    if (x.what === 'boost') return t('alertBoost');
+    if (x.what === 'reply') return t('alertReply');
+    return t('alertMention');
+  }
+  function notifRow(x) {
+    profileOf(x.actor);
+    const target = x.what === 'reply' || x.what === 'mention' ? null : notifTarget(x.target);
+    const excerpt = x.what === 'reply' || x.what === 'mention'
+      ? x.text
+      : target ? String(target.content || '').slice(0, 140) : null;
+    const open = () => {
+      if (x.what === 'reply' || x.what === 'mention') {
+        const ev = notifNotes.get(x.id);
+        if (ev) openNoteThread(ev); else openNoteRef({ id: x.id }).catch(() => {});
+      } else if (target) openNoteThread(target);
+      else if (x.target) openNoteRef({ id: x.target }).catch(() => {});
+    };
+    return h('div', {
+      class: 'row alert-row' + (x.ts > notifSeenAtOpen ? ' fresh' : ''),
+      style: 'gap:10px;align-items:flex-start;padding:10px 0;cursor:pointer',
+      onClick: (e) => { if (e.target && e.target.closest && e.target.closest('button')) return; open(); },
+    },
+      avatar(x.actor, 'chat-avatar note-avatar'),
+      h('div', { class: 'col grow', style: 'min-width:0;gap:3px' },
+        h('div', { class: 'row', style: 'gap:7px;align-items:baseline;min-width:0' },
+          h('span', { style: 'font-weight:600;font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer',
+            onClick: (e) => { e.stopPropagation(); openProfile(x.actor); } }, displayName(x.actor)),
+          h('span', { class: 'small', style: 'min-width:0' }, notifLabel(x)),
+          h('span', { class: 'small faint', style: 'white-space:nowrap;margin-left:auto' }, timeLabel(x.ts * 1000))),
+        x.what === 'zap' && x.text ? h('div', { class: 'small' }, x.text) : null,
+        excerpt != null
+          ? h('div', { class: 'small muted alert-excerpt' }, excerpt)
+          : x.target ? h('div', { class: 'small faint' }, t('noteRefLoading')) : null));
+  }
+  let notifSeenAtOpen = 0; // what counted as new when the list was opened
+  function openNotifs() {
+    notifSeenAtOpen = notifSeen();
+    ui.msgView = 'notifs';
+    notifNow();
+    refreshNotifs(true).catch(() => {});
+    watchNotifs();
+    markNotifsSeen();
+    render();
+  }
+  function notifView() {
+    const c = notifNow();
+    markNotifsSeen(); // anything that lands while you look is seen too
+    const items = c.items;
+    const rows = items.flatMap((x, i) => [i ? noteSep() : null, notifRow(x)]);
+    return h('div', { class: 'card col chat-page', style: 'gap:10px' },
+      h('div', { class: 'row gap6', style: 'align-items:center' },
+        backBtn(() => { ui.msgView = 'home'; stopNotifWatch(); render(); }),
+        h('h3', { style: 'margin:0' }, t('alertsTitle'))),
+      c.status === 'loading' && !items.length
+        ? h('div', { class: 'row gap6', style: 'justify-content:center;padding:12px 0' }, h('span', { class: 'spinner sm' }))
+        : !items.length
+          ? h('div', { class: 'small faint', style: 'text-align:center;padding:12px 0' }, t('alertsEmpty'))
+          : h('div', { class: 'card col notes-feed', style: 'gap:0' }, ...rows),
+      noteSheet(),
+      reactPicker());
+  }
+
   // ---- feature ------------------------------------------------------------
 
   function messagesTab() {
     if (ui.msgView === 'feed') return feedView();
+    if (ui.msgView === 'notifs') return notifView();
     if (ui.msgView === 'room') return roomView();
     if (ui.msgView === 'dm') return dmView();
     return homeView();
@@ -5125,10 +5366,11 @@ export function messagesFeature(ctx) {
     // subscriptions are rebuilt, since the ones we had are talking to
     // sockets that no longer exist.
     resumed(awayMs) {
-      if (!ui.chatOpen || ui.msgView !== 'feed') return;
+      if (!ui.chatOpen || !['feed', 'notifs'].includes(ui.msgView)) return;
       // a blink between apps didn't kill anything
       if (awayMs && awayMs < 5_000) return;
-      refreshFeed({ force: true }).catch(() => {});
+      if (ui.msgView === 'notifs') refreshNotifs(true).catch(() => {});
+      else refreshFeed({ force: true }).catch(() => {});
       return true;
     },
     // A zap flow reporting how its payment went, so the chip that appeared

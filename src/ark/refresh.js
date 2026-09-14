@@ -311,7 +311,12 @@ export function participationAttestation(inputVtxoIdRaw, outputs, vtxoPrivkey) {
 // mailboxId: when given, the server posts a recovery breadcrumb (the unlock
 // hash) to that mailbox once the round runs — any device of this wallet can
 // then claim the output even if the action that submitted it is lost.
-export async function submitRoundParticipation(ark, { inputs, outputs, mailboxId }) {
+// scheduledHeight: when given, the server holds the participation out of
+// every round until that block height and then runs it with nobody online
+// (and prices the refresh fee at that height, not today's). Omitted, the
+// participation joins the next round, which is what an interactive refresh
+// wants.
+export async function submitRoundParticipation(ark, { inputs, outputs, mailboxId, scheduledHeight }) {
   const w = pbWriter();
   for (const { vtxo, keys } of inputs) {
     const iv = pbWriter();
@@ -326,6 +331,7 @@ export async function submitRoundParticipation(ark, { inputs, outputs, mailboxId
     w.bytesField(3, vr.finish());
   }
   if (mailboxId) w.bytesField(4, mailboxId);
+  if (scheduledHeight) w.varintField(5, scheduledHeight);
   const resp = await grpcCall(ark, 'bark_server.ArkService/SubmitRoundParticipation', w.finish());
   for (const { field, value } of pbFields(resp)) if (field === 1) return value; // unlock_hash
   throw new Error('no unlock hash in response');

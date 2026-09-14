@@ -410,6 +410,7 @@ export async function getArkInfo(ark) {
     if (field === 6) info.vtxoExpiryDelta = Number(value);
     if (field === 7) info.htlcSendExpiryDelta = Number(value);
     if (field === 8) info.htlcExpiryDelta = Number(value);
+    if (field === 9) info.maxVtxoAmountSat = Number(value);
     if (field === 10) info.requiredBoardConfirmations = Number(value);
     if (field === 11) info.maxUserInvoiceCltvDelta = Number(value);
     if (field === 13) info.minBoardAmountSat = Number(value);

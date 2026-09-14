@@ -60,6 +60,7 @@ const EMPTY_STATE = () => ({
   vtxos: [],       // { id, bytes, keyIndex, amountSat, expiryHeight, state }
   actions: [],     // { id, type, step, ... }
   movements: [],   // { id, type, amountSat, ts, status, detail }
+  scheduled: [],   // standing-order refreshes: { unlockHash, inputIds, scheduledHeight, ... }
 });
 
 // Local state must not grow forever. Two things did: a spent coin kept its
@@ -135,6 +136,8 @@ export class ArkManager {
     this.state = null;
     this.info = null;
     this._lnDriving = new Set(); // re-entrancy guard: sync poll vs UI fast-poll vs mailbox push
+    this._refreshDriving = new Set(); // same, for round claims: sync loop vs mailbox breadcrumb
+    this._schedPollAt = new Map(); // last status poll per standing-order unlock hash
     // A derived key for an index never changes for this wallet, but computing
     // it costs a BIP32 derive + a secp256k1 getPublicKey (a full point mul).
     // reconcile() alone calls _keyForVtxo for every spendable coin, and decode/
@@ -417,6 +420,9 @@ export class ArkManager {
     }
     if (changed) this._save();
     await this.resumePending();
+    // Standing-order refreshes live beside the actions, not among them.
+    await this._driveScheduled().catch((e) =>
+      console.warn('ark: scheduled refresh check failed —', e.message));
     // The display is only as honest as the last reconcile: state restored
     // from a snapshot (or mirrored by the NWC worker) can show coins the
     // server already saw spent — a balance you can look at but not spend.
@@ -483,7 +489,14 @@ export class ArkManager {
       // on the server until someone acts on it (cooney's 28,833 sats did,
       // for 8 days). Adopt it; rescueParticipation no-ops on inputs we don't
       // hold and the server side is idempotent.
-      if (m.unlockHash
+      // A standing order's round announces itself the same way, and this is
+      // the earliest word of it — claim on the breadcrumb instead of waiting
+      // for the next scheduled-height check.
+      const standing = (this.state.scheduled || []).find((s) => s.unlockHash === m.unlockHash);
+      if (standing) {
+        this._promoteScheduled(standing).catch((e) =>
+          console.warn('ark: scheduled refresh not claimed —', e.message));
+      } else if (m.unlockHash
           && !this.state.actions.some((a) => a.unlockHash === m.unlockHash && a.step !== 'failed')) {
         this.rescueParticipation(m.unlockHash).catch((e) =>
           console.warn('ark: stranded participation not adopted —', e.message));
@@ -1791,7 +1804,18 @@ export class ArkManager {
     this._save();
   }
 
+  // A refresh claim can be reached from two directions at once — the sync
+  // loop resuming the action, and a mailbox breadcrumb claiming the moment
+  // the round is announced. Both are safe server-side (cosign and forfeit are
+  // idempotent), but two winners would write two "Renewed" rows.
   async _driveRefresh(action) {
+    if (this._refreshDriving.has(action.id)) return;
+    this._refreshDriving.add(action.id);
+    try { await this._driveRefreshSteps(action); }
+    finally { this._refreshDriving.delete(action.id); }
+  }
+
+  async _driveRefreshSteps(action) {
     const outputs = this._refreshOutputs(action);
     const inputRecs = action.inputIds.map((id) => this._vtxo(id));
 
@@ -1872,6 +1896,149 @@ export class ArkManager {
     }
   }
 
+  // ---- scheduled refresh: the renewal that happens without us ----
+  //
+  // A participation registered now but held by the server until a future
+  // block height, then run in a round with nobody online (the round tree
+  // branch is signed by the server — that is what makes a delegated refresh
+  // delegated). The output waits 'unclaimed' until this wallet returns and
+  // forfeits the inputs, which nothing about expiry blocks: by then the money
+  // already sits in a fresh tree, anchored on-chain, with a new lifetime.
+  //
+  // This is the backstop under maybeAutoRefresh, whose whole premise is that
+  // someone opens the app inside the last few hours of a coin's life. Many
+  // people don't.
+  //
+  // Deliberately NOT an action: the coins stay spendable, nothing treats the
+  // wallet as busy, and no history row appears until there is something to
+  // say. Spend a coin and its standing order simply dies — the server drops a
+  // participation whose input is gone, and so do we.
+  async scheduleRefresh(vtxoIds, scheduledHeight) {
+    const inputs = vtxoIds.map((id) => this._vtxo(id));
+    if (!inputs.length || inputs.some((v) => !v || v.state !== 'spendable')) {
+      throw new Error('no spendable vtxos to schedule');
+    }
+    if (inputs.some((v) => !v.expiryHeight || v.expiryHeight <= scheduledHeight)) {
+      throw new Error('scheduled height is not before every input expiry');
+    }
+    // Priced at the height it will RUN at — which is what the server checks,
+    // and cheaper than today: the refresh brackets fall as a coin's remaining
+    // lifetime does, and the last one is free.
+    const totalSat = inputs.reduce((n, v) => n + v.amountSat, 0);
+    const feeSat = this.refreshFee(inputs, scheduledHeight);
+    if (totalSat - feeSat < 330) {
+      throw new Error(`balance too small to refresh: ${totalSat} sat minus ${feeSat} sat fee is under the 330 sat minimum`);
+    }
+    const entry = {
+      unlockHash: null,
+      inputIds: inputs.map((v) => v.id),
+      outKeyIndex: this.state.nextKeyIndex++,
+      outAmountSat: totalSat - feeSat, feeSat, scheduledHeight, ts: Date.now(),
+    };
+    this._save(); // burn the key index before it can be used, as every flow does
+    await registerVtxoTransactions(this.arkUrl, inputs.map((v) => vtxoBytesFromStr(v.bytes)));
+    const unlockHash = await submitRoundParticipation(this.arkUrl, {
+      inputs: inputs.map((v) => ({ vtxo: this._decoded(v), keys: this._keyForVtxo(v) })),
+      outputs: this._refreshOutputs(entry),
+      mailboxId: this._mailboxKey().pubkey,
+      scheduledHeight,
+    });
+    entry.unlockHash = hex.encode(unlockHash);
+    (this.state.scheduled ||= []).push(entry);
+    this._save();
+    return entry;
+  }
+
+  scheduledRefreshes() { return (this.state.scheduled || []).slice(); }
+
+  // Keep every coin covered by a standing order, `marginBlocks` before its
+  // expiry. Coins arrive, get spent, get renewed — each new one needs its own
+  // backstop while it still has the lifetime to register one. Caller owns the
+  // policy (how much margin, how often to ask); this owns the bookkeeping.
+  async ensureScheduledRefreshes(marginBlocks, maxCoins = 8) {
+    const tip = await this._tipMemo();
+    if (!tip) return 0;
+    const covered = new Set((this.state.scheduled || []).flatMap((s) => s.inputIds));
+    // A round output over the server's cap is refused when the round runs —
+    // long after registration, with nobody there to hear it. Don't register
+    // an order that is going to die that quietly.
+    const cap = this.info.maxVtxoAmountSat || Infinity;
+    const coins = this.state.vtxos
+      .filter((v) => v.state === 'spendable' && v.expiryHeight && !covered.has(v.id)
+        && !this._expired(v, tip) && v.expiryHeight - marginBlocks > tip && v.amountSat <= cap)
+      .sort((a, b) => b.amountSat - a.amountSat)
+      .slice(0, maxCoins);
+    let n = 0;
+    for (const v of coins) {
+      // One participation per coin. A shared one dies whole the moment any
+      // single input is spent, taking the untouched coins' cover with it.
+      try { await this.scheduleRefresh([v.id], v.expiryHeight - marginBlocks); n++; }
+      catch (e) { console.warn('ark: no backstop refresh for', v.id, '—', e.message); }
+    }
+    return n;
+  }
+
+  _dropScheduled(entry) {
+    this.state.scheduled = (this.state.scheduled || []).filter((s) => s !== entry);
+    this._save();
+  }
+
+  // The round ran. From here it is an ordinary refresh claim — leaf cosign,
+  // forfeit, adopt the output — and the inputs stop being spendable, because
+  // the server has already issued their replacement.
+  async _promoteScheduled(entry) {
+    this.state.scheduled = (this.state.scheduled || []).filter((s) => s !== entry);
+    const action = {
+      id: `refresh-${Date.now()}`, type: 'refresh', step: 'submitted',
+      inputIds: [...entry.inputIds], outKeyIndex: entry.outKeyIndex,
+      outAmountSat: entry.outAmountSat, feeSat: entry.feeSat,
+      unlockHash: entry.unlockHash, scheduledHeight: entry.scheduledHeight,
+    };
+    for (const id of entry.inputIds) {
+      const v = this._vtxo(id);
+      if (v && v.state === 'spendable') v.state = 'pending';
+    }
+    this.state.actions.push(action);
+    this._save();
+    await this._driveRefresh(action);
+    return action;
+  }
+
+  // Advance the standing orders: drop the dead ones, claim the ones whose
+  // round has run. Costs an RPC only once a scheduled height is behind us.
+  async _driveScheduled() {
+    for (const entry of [...(this.state.scheduled || [])]) {
+      const inputs = entry.inputIds.map((id) => this._vtxo(id));
+      // A spent input ends the order — the server drops its copy for the same
+      // reason. 'pending' is not that: an action holding the coin may yet
+      // fail and hand it back, and re-registering costs a round-trip.
+      if (inputs.some((v) => !v || v.state === 'spent')) { this._dropScheduled(entry); continue; }
+      if (inputs.some((v) => v.state !== 'spendable')) continue;
+      const tip = this._tipH || 0;
+      if (tip && tip < entry.scheduledHeight) continue;
+      // Past the scheduled height the round can be hours out (it runs when
+      // the server runs one), and sync comes round every few seconds. The
+      // mailbox breadcrumb is what actually wakes the claim; this poll is the
+      // fallback for a wallet that missed it, so it can be slow.
+      const now = Date.now();
+      if (now - (this._schedPollAt.get(entry.unlockHash) || 0) < 120_000) continue;
+      this._schedPollAt.set(entry.unlockHash, now);
+      let status;
+      try {
+        status = await roundParticipationStatus(this.arkUrl, hex.decode(entry.unlockHash));
+      } catch (e) {
+        // The server deletes a participation it can't run (an input spent
+        // between rounds, a collision with another process holding the coin),
+        // so an unknown unlock hash ends this standing order rather than
+        // being retried forever. Anything else is transient.
+        if (/unknown|not found|no such|doesn't exist/i.test(e.message || '')) this._dropScheduled(entry);
+        continue;
+      }
+      if (status.status === 0 || !status.fundingTx) continue; // round hasn't run yet
+      await this._promoteScheduled(entry);
+    }
+  }
+
   // Rebuild a refresh claim from its unlock hash — for a participation whose
   // action was lost (snapshot rollback, device wipe, crash mid-claim) after
   // its round ran, leaving the output stranded 'unclaimed' on the server.
@@ -1884,6 +2051,10 @@ export class ArkManager {
     if (this.state.actions.some((a) => a.unlockHash === unlockHashHex && a.step !== 'failed')) {
       throw new Error('an action for this participation already exists — sync drives it');
     }
+    // One of ours, waiting on a scheduled height: it has its inputs and key
+    // index already, so promote rather than rediscover them.
+    const standing = (this.state.scheduled || []).find((s) => s.unlockHash === unlockHashHex);
+    if (standing) return this._promoteScheduled(standing);
     const status = await roundParticipationStatus(this.arkUrl, hex.decode(unlockHashHex));
     if (status.status === 0 || !status.fundingTx) throw new Error('the round for this participation has not run');
     if (!inputVtxoIds?.length) inputVtxoIds = status.inputVtxoIds;

@@ -15,7 +15,7 @@ import { HDKey } from '@scure/bip32';
 import { hex } from '@scure/base';
 
 import { ArkManager } from '../../src/ark/manager.js';
-import { decodeVtxo } from '../../src/ark/proto.js';
+import { decodeVtxo, vtxoBytesFromStr } from '../../src/ark/proto.js';
 import { validateVtxo } from '../../src/ark/validate.js';
 
 const ARK = process.env.ARK_URL || 'http://127.0.0.1:3535';
@@ -59,7 +59,7 @@ check('movement logged', mgr.movements().some((m) => m.type === 'receive' && m.s
 
 // tampered vtxo must fail validation
 const rec = mgr.vtxos()[0];
-const tampered = hex.decode(rec.bytes);
+const tampered = vtxoBytesFromStr(rec.bytes); // stored base64 since the IndexedDB move
 tampered[tampered.length - 100] ^= 0xff; // corrupt inside the genesis data
 let rejected = false;
 try {

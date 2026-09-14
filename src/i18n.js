@@ -268,6 +268,7 @@ const STR = {
     arkDepthNotice: 'Uncooperative exit costs about {fee} sats.',
     arkDepthFree: 'free',
     arkDepthBtn: 'Manage',
+    arkExpiredNotice: '{amount} has passed its expiry. The server can still renew it — until then it can\u2019t be spent or exited.',
     arkDepthRenewed: 'Renewal requested',
     arkDepthRenewBtn: 'Renew now',
     arkCoinsTitle: 'Spending coins',

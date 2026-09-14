@@ -2631,7 +2631,16 @@ export function arkFeature(ctx) {
   // rescuing) a coin even past its expiry, so aiming inside the free window
   // risks nothing. ~16 hours of margin on mainnet.
   const renewWindow = () => (getNetwork() === 'regtest' ? 24 : 96);
+  // How close to expiry the SERVER's own backstop renewal is aimed. The
+  // window above only helps a wallet someone opens inside it; this one is a
+  // participation registered far in advance that the ASP runs on its own,
+  // whether or not anybody is looking. It sits well inside renewWindow so an
+  // app that IS open still renews first (and the untouched backstop is
+  // dropped), and far enough from expiry — 36 blocks, six hourly rounds — for
+  // the round to actually run in time. Both are in the free fee bracket.
+  const backstopWindow = () => (getNetwork() === 'regtest' ? 6 : 36);
   let arkAutoRefreshAt = 0;
+  let arkBackstopAt = 0;
   // Set when the balance is too small to renew itself (total minus round fee
   // under the server's 330-sat output minimum) AND a vtxo is inside the
   // renewal window: { deadlineMs, sat }. The wallet-screen notice reads this.
@@ -2663,8 +2672,22 @@ export function arkFeature(ctx) {
   async function maybeAutoRefresh(mgr) {
     if (wallet.watchOnly || !mgr || !mgr.state) return;
     if (Date.now() - arkAutoRefreshAt < 30 * 60_000) return;
-    const spendables = (mgr.state.vtxos || []).filter((v) => v.state === 'spendable' && !v.expiryRejected);
+    // NOT filtered by expiryRejected. A coin the server refused as expired
+    // can still be REFRESHED — that is the one thing an expired vtxo can
+    // still do — and excluding it here meant a wallet holding nothing else
+    // did nothing at all: no renewal attempt, and no warning either.
+    const spendables = (mgr.state.vtxos || []).filter((v) => v.state === 'spendable');
     if (!spendables.length) { arkRenewWarn = null; return; }
+    // Register the server-side backstop for anything not covered yet. Ahead
+    // of the in-flight guard below on purpose: a standing order takes no coin
+    // and starts no round, so a send in progress is no reason to skip the one
+    // renewal that survives the app never being opened again. Stamped on its
+    // own clock — the guard below can return before the refresh throttle is
+    // stamped, and this must not then run on every five-second sync.
+    if (Date.now() - arkBackstopAt > 30 * 60_000) {
+      arkBackstopAt = Date.now();
+      await mgr.ensureScheduledRefreshes(backstopWindow()).catch(() => {});
+    }
     // never start a round while any other action is still in flight
     if ((mgr.state.actions || []).some((a) => !['done', 'failed'].includes(a.step))) return;
     arkAutoRefreshAt = Date.now();
@@ -3404,6 +3427,26 @@ export function arkFeature(ctx) {
           amount: fmtAmount(arkRenewWarn.sat) + ' ' + unitLabel(),
           date: new Date(arkRenewWarn.deadlineMs).toLocaleDateString(),
         })));
+      // Coins past their expiry. The balance already leaves these out, and
+      // until now it did so in silence — money apparently gone, with the one
+      // page that could bring it back reachable only through an advisory
+      // that most wallets never see (it wants four hops of depth) or a
+      // renewal forecast that only appears when the renewal COSTS something,
+      // which is no longer the normal case.
+      //
+      // An expired vtxo can still be renewed — that is the whole of the fix,
+      // and it is one tap away on the Manage page. What it cannot do is be
+      // spent over Ark or exited unilaterally, so saying nothing is the one
+      // option that isn't honest.
+      if (!wallet.watchOnly && ark && ark.balance) {
+        let expiredSat = 0;
+        try { expiredSat = ark.balance().expiredSat || 0; } catch {}
+        if (expiredSat > 0) out.push(h('div', { class: 'notice err', style: 'margin:12px 0 0' },
+          t('arkExpiredNotice', { amount: fmtAmount(expiredSat) + ' ' + unitLabel() }),
+          ' ',
+          h('button', { class: 'linklike small', onClick: () => { ui.arkCoinsPage = true; render(); } },
+            t('arkDepthBtn'))));
+      }
       const depthNotice = exitDepthNotice();
       if (depthNotice) out.push(depthNotice);
       // An upcoming renewal that will COST something — stated before it

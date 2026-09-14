@@ -5236,7 +5236,17 @@ export function messagesFeature(ctx) {
     const known = new Set(c.items.map((x) => x.id));
     const add = (evs || []).map(notifItem).filter((x) => x && !known.has(x.id) && known.add(x.id));
     if (!add.length) return false;
-    c.items = [...c.items, ...add].sort((a, b) => b.ts - a.ts).slice(0, NOTIF_KEEP);
+    // One zap, two receipts: a coinos zap publishes its own (9737) beside the
+    // LNURL server's (9735). The same person, post and amount within a few
+    // minutes is one row.
+    const all = [...c.items, ...add].sort((a, b) => b.ts - a.ts);
+    const kept = [];
+    for (const x of all) {
+      if (x.what === 'zap' && kept.some((y) => y.what === 'zap' && y.actor === x.actor && y.target === x.target
+        && y.sats === x.sats && Math.abs(y.ts - x.ts) < 300)) continue;
+      kept.push(x);
+    }
+    c.items = kept.slice(0, NOTIF_KEEP);
     // the rows already say who; a reply row also wants its reader-facing text,
     // which it carries — the events themselves are not kept
     const s2 = st(); s2.notifs = c.items; save(s2);
@@ -5281,6 +5291,24 @@ export function messagesFeature(ctx) {
     const q = quotedNote({ id, relays: [] });
     return q.ev || null;
   }
+  // A zap can land on a chat message or a DM rather than a post — the
+  // receipt e-tags the rumor's id, which no relay has ever seen as an event,
+  // so fetching it by id would spin forever. Look in the rooms and threads
+  // we hold first; that is where the text is, and where a tap should go.
+  function messageInHand(id) {
+    for (const [cid, room] of rooms) {
+      for (const [chId, msgs] of room.byChannel) {
+        const m = msgs.get(id);
+        if (m) return { cid, chId, text: String(m.rumor.content || '') };
+      }
+    }
+    for (const [peer, msgs] of threads) {
+      const m = msgs.get(id);
+      if (m) return { peer, text: String(m.rumor.content || '') };
+    }
+    return null;
+  }
+  const targetGone = (id) => { const q = quoted.get(id); return !!q && q.status === 'missing'; };
   // A one-line excerpt: mentions read as names, not as nostr:nprofile1… keys.
   function plainExcerpt(text) {
     return String(text || '').replace(/nostr:(npub|nprofile)1[a-z0-9]+/gi, (m) => {
@@ -5297,16 +5325,21 @@ export function messagesFeature(ctx) {
   }
   function notifRow(x) {
     profileOf(x.actor);
-    const target = x.what === 'reply' || x.what === 'mention' ? null : notifTarget(x.target);
-    const excerpt = x.what === 'reply' || x.what === 'mention'
+    const aboutNote = !(x.what === 'reply' || x.what === 'mention');
+    const msg = aboutNote ? messageInHand(x.target) : null;
+    const target = aboutNote && !msg ? notifTarget(x.target) : null;
+    const excerpt = !aboutNote
       ? plainExcerpt(x.text)
-      : target ? plainExcerpt(String(target.content || '').slice(0, 140)) : null;
+      : msg ? plainExcerpt(msg.text.slice(0, 140))
+        : target ? plainExcerpt(String(target.content || '').slice(0, 140)) : null;
     const open = () => {
-      if (x.what === 'reply' || x.what === 'mention') {
+      if (!aboutNote) {
         const ev = notifNotes.get(x.id);
         if (ev) openNoteThread(ev); else openNoteRef({ id: x.id }).catch(() => {});
-      } else if (target) openNoteThread(target);
-      else if (x.target) openNoteRef({ id: x.target }).catch(() => {});
+      } else if (msg && msg.peer) { ui.msgView = 'dm'; ui.msgPeer = msg.peer; ui.msgStick = true; stopNotifWatch(); render(); }
+      else if (msg) { ui.msgView = 'room'; ui.msgCommunity = msg.cid; ui.msgChannel = msg.chId; ui.msgStick = true; stopNotifWatch(); render(); }
+      else if (target) openNoteThread(target);
+      else if (x.target && !targetGone(x.target)) openNoteRef({ id: x.target }).catch(() => {});
     };
     return h('div', {
       class: 'row alert-row' + (x.ts > notifSeenAtOpen ? ' fresh' : ''),
@@ -5323,7 +5356,7 @@ export function messagesFeature(ctx) {
         x.what === 'zap' && x.text ? h('div', { class: 'small' }, x.text) : null,
         excerpt != null
           ? h('div', { class: 'small muted alert-excerpt' }, excerpt)
-          : x.target ? h('div', { class: 'small faint' }, t('noteRefLoading')) : null));
+          : x.target ? h('div', { class: 'small faint' }, targetGone(x.target) ? t('alertNoteGone') : t('noteRefLoading')) : null));
   }
   let notifSeenAtOpen = 0; // what counted as new when the list was opened
   function openNotifs() {

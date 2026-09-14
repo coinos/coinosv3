@@ -211,6 +211,7 @@ const STR = {
     alertBoost: 'boosted your post',
     alertReply: 'replied to you',
     alertMention: 'mentioned you',
+    alertNoteGone: 'The post is no longer on your relays',
     postWho: 'Who reacted',
     feedFollow: 'Follow',
     feedFollowing: 'Following',

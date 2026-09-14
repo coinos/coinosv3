@@ -174,9 +174,23 @@ try {
   });
   const t0 = await page.evaluate(() => performance.now());
   await page.evaluate((ev) => window.__inject(ev), signed('PICTURE POST http://localhost:5296/slow.png?' + Date.now(), 0));
-  await sleep(3000);
+  await page.waitForFunction(() => !!window.__firstSight, { timeout: 4000 }).catch(() => {});
+  await sleep(120); // a hair in: the animation has been started and not finished
   const sight = await page.evaluate(() => window.__firstSight);
   check('the post is in the feed', !!sight && sight.img, JSON.stringify(sight));
+  // ...and it opened rather than appeared: caught mid-animation, shorter
+  // than it will be, and full height once the animation is done
+  const mid = await page.evaluate(() => {
+    const row = [...document.querySelectorAll('.notes-feed > .row')].find((n) => /PICTURE POST/.test(n.innerText || ''));
+    return row ? { anims: row.getAnimations().length, h: row.getBoundingClientRect().height } : null;
+  });
+  await sleep(600);
+  const settled = await page.evaluate(() => {
+    const row = [...document.querySelectorAll('.notes-feed > .row')].find((n) => /PICTURE POST/.test(n.innerText || ''));
+    return row ? { anims: row.getAnimations().length, h: row.getBoundingClientRect().height, overflow: row.style.overflow } : null;
+  });
+  check('...and it opened rather than appeared', !!mid && !!settled && mid.anims > 0 && mid.h < settled.h
+    && settled.anims === 0 && settled.h > 0 && !settled.overflow, JSON.stringify({ mid, settled }));
   check('...and its picture was already decoded the first time the row existed', !!sight && sight.ready);
   check('...having waited for the slow host', !!sight && sight.at - t0 >= 700, sight ? Math.round(sight.at - t0) + 'ms' : '');
 

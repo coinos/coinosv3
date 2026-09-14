@@ -229,6 +229,7 @@ function morph(a, b) {
   // children, by position; snapshot first (appending b's children moves them)
   const ac = [...a.childNodes];
   const bc = [...b.childNodes];
+  if (allKeyed(bc)) return morphKeyed(a, ac, bc);
   for (let i = 0; i < bc.length; i++) {
     if (!ac[i]) a.append(bc[i]);
     else if (ac[i] !== bc[i]) morph(ac[i], bc[i]);
@@ -238,11 +239,41 @@ function morph(a, b) {
 
 function morphChildren(parent, next) {
   const cur = [...parent.childNodes];
+  if (allKeyed(next)) return morphKeyed(parent, cur, next);
   for (let i = 0; i < next.length; i++) {
     if (!cur[i]) parent.append(next[i]);
     else if (cur[i] !== next[i]) morph(cur[i], next[i]);
   }
   for (let i = next.length; i < cur.length; i++) cur[i].remove();
+}
+
+// A list whose every child carries a data-key is reconciled BY KEY, not by
+// position: a post let in at the top of the feed used to be patched onto
+// the old first row's node, and every row below it onto its neighbour's —
+// so the node the new post was built as never reached the page (nothing
+// that animates its own arrival could run), and each row's live state slid
+// one post down. Keyed, the new row is inserted as itself and the old rows
+// keep their nodes, moved down. Partially keyed lists keep the positional
+// rule above, where a keyed node still refuses to patch into another key.
+const allKeyed = (nodes) => nodes.length > 0
+  && nodes.every((n) => n.nodeType === 1 && n.hasAttribute('data-key'));
+function morphKeyed(parent, cur, next) {
+  const byKey = new Map();
+  for (const n of cur) if (n.nodeType === 1 && n.hasAttribute('data-key')) byKey.set(n.getAttribute('data-key'), n);
+  const kept = new Set();
+  for (let i = 0; i < next.length; i++) {
+    const b = next[i];
+    const have = byKey.get(b.getAttribute('data-key'));
+    let node = b;
+    if (have && !kept.has(have)) {
+      morph(have, b); // may itself swap the node out (data-fresh, tag change)
+      node = have.parentNode === parent ? have : b;
+    }
+    kept.add(node);
+    const at = parent.childNodes[i] || null;
+    if (at !== node) parent.insertBefore(node, at);
+  }
+  for (const n of cur) if (!kept.has(n) && n.parentNode === parent) n.remove();
 }
 
 const root = document.getElementById('app');

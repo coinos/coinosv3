@@ -2849,6 +2849,45 @@ export function messagesFeature(ctx) {
   }
   const notesReady = (evs) => { const deadline = Date.now() + READY_MS; return Promise.all(evs.map((e) => noteReady(e, deadline))); };
 
+  // ---- new posts open up rather than appear ------------------------------
+  // A post let in at the top of an open feed used to simply be there on the
+  // next paint — one frame nothing, the next frame a whole row, and the rest
+  // of the page shoved down by exactly that much. Now it opens: height from
+  // nothing to its own, fading in as it goes, over a third of a second. The
+  // feed is rebuilt on every render, so the moment a post was let in is
+  // remembered per id and a repaint mid-way resumes the animation where it
+  // was instead of starting it again.
+  const keyed = (node, key) => { node.setAttribute('data-key', key); return node; };
+  const ENTER_MS = 380;
+  const feedEntered = new Map(); // note id -> ms its row first painted (0: not yet)
+  function noteEntering(evs) {
+    if (!(ui.chatOpen && ui.msgView === 'feed')) return; // nobody is watching
+    for (const e of evs) feedEntered.set(e.id, 0);
+  }
+  function enterRow(node, id) {
+    if (!feedEntered.has(id)) return node;
+    // the clock starts at the first paint, not at admission: a repaint can
+    // trail the merge by longer than the animation itself
+    const at = feedEntered.get(id) || (feedEntered.set(id, Date.now()), Date.now());
+    const elapsed = Date.now() - at;
+    if (elapsed >= ENTER_MS || typeof node.animate !== 'function') { feedEntered.delete(id); return node; }
+    // measured once it is in the page; the row keeps its own padding, which
+    // opens with it so the words don't sit on the hairline for a beat
+    setTimeout(() => {
+      if (!node.isConnected) return;
+      const box = node.getBoundingClientRect().height;
+      const pad = 10; // the row's vertical padding, see noteRow
+      node.style.overflow = 'hidden';
+      const anim = node.animate([
+        { height: '0px', paddingTop: '0px', paddingBottom: '0px', opacity: 0 },
+        { height: Math.max(0, box - 2 * pad) + 'px', paddingTop: pad + 'px', paddingBottom: pad + 'px', opacity: 1 },
+      ], { duration: ENTER_MS, easing: 'cubic-bezier(.2,.7,.2,1)', fill: 'backwards' });
+      anim.currentTime = Math.min(ENTER_MS, Date.now() - at);
+      anim.onfinish = anim.oncancel = () => { node.style.overflow = ''; feedEntered.delete(id); };
+    }, 0);
+    return node;
+  }
+
   // Posts at the door: filtered in synchronously, so the same note from a
   // second relay is dropped while the first copy is still warming.
   const feedStaged = new Set();
@@ -2868,6 +2907,7 @@ export function messagesFeature(ctx) {
       return true;
     }
     c.notes = [...c.notes, ...add].sort((a, b) => b.created_at - a.created_at).slice(0, FEED_KEEP);
+    if (opts.live) noteEntering(add);
     // posts arriving at the TOP shouldn't cost you the ones you'd scrolled to
     const fresh = add.filter((e) => e.created_at >= (c.notes[0] || {}).created_at).length;
     if (fresh) c.shown = Math.min((c.shown || FEED_PAGE) + fresh, c.notes.length);
@@ -2882,6 +2922,7 @@ export function messagesFeature(ctx) {
     if (!c || !(c.pending || []).length) return;
     const add = c.pending;
     c.pending = [];
+    noteEntering(add);
     const seen = new Set(c.notes.map((e) => e.id));
     c.notes = [...c.notes, ...add.filter((e) => !seen.has(e.id))]
       .sort((a, b) => b.created_at - a.created_at).slice(0, FEED_KEEP);
@@ -4243,9 +4284,12 @@ export function messagesFeature(ctx) {
     const c = feedNow();
     const authors = feedAuthors();
     const visible = c.notes.filter((ev) => !isMuted(ev.pubkey));
+    // Every child keyed by its post, hairlines included, so the morph
+    // reconciles the list by post: a new one at the top is inserted as its
+    // own node (and can open itself up), the rest keep theirs.
     const rows = visible.slice(0, c.shown || FEED_PAGE).flatMap((ev, i) => [
-      i ? h('div', { style: 'height:1px;background:var(--border,rgba(128,128,128,.18));margin:0 -14px' }) : null,
-      noteRow(ev.pubkey, ev, displayName(ev.pubkey)),
+      i ? h('div', { 'data-key': 'hr:' + ev.id, style: 'height:1px;background:var(--border,rgba(128,128,128,.18));margin:0 -14px' }) : null,
+      enterRow(keyed(noteRow(ev.pubkey, ev, displayName(ev.pubkey)), ev.id), ev.id),
     ]);
     // Posts that arrived while you were reading, waiting to be let in. A
     // floating pill rather than an insertion: it says how many, and the tap

@@ -1962,12 +1962,6 @@ export function arkFeature(ctx) {
   // Most users never need to think about this — the card only appears once
   // coins run deep enough for the difference to matter.
   const EXIT_DEPTH_ADVISORY = 4;
-  const depthNoticeEl = (exitFee) =>
-    h('div', { class: 'small muted', style: 'margin:10px 0 0;text-align:center' },
-      t('arkDepthNotice', { fee: fmtSats(exitFee) }),
-      ' ',
-      h('button', { class: 'linklike small', onClick: () => { ui.arkCoinsPage = true; render(); } },
-        t('arkDepthBtn')));
   // Pricing the advisory is EC-heavy: it decodes every spendable coin (for its
   // genesis depth) and builds the exit transactions (estimateExitFeeSat). Doing
   // that synchronously in the render path was the cold cost behind a carousel
@@ -2009,7 +2003,7 @@ export function arkFeature(ctx) {
     // set changed. The heavy EC never runs in the render/interaction path.
     if (ark && ark.state) computeDepthAdvisory();
     const cached = wallet.loadFeatureState('arkDepth', null);
-    return cached && cached.show ? depthNoticeEl(cached.exitFee) : null;
+    return cached && cached.show ? t('arkDepthNotice', { fee: fmtSats(cached.exitFee) }) : null;
   }
 
   // The screen behind that notice's Manage link: every spendable coin with
@@ -3433,18 +3427,23 @@ export function arkFeature(ctx) {
       return [{ label: t('movingLabel') + prog, sat: b.boardingSat }];
     },
     walletNotices() {
-      const out = [];
+      // Everything the balance needs to say, said once. These used to be a
+      // stack of separate boxes — two red cards and a grey line, three
+      // Manage links between them, all pointing at the same page. One card
+      // now: red if anything in it is a warning, plain otherwise, and one
+      // Manage at the bottom.
+      const lines = []; // { text, err, manage }
       // A pending move that keeps erroring would otherwise wait in silence.
       for (const a of ((arkStateNow() || {}).actions || [])) {
         if (a.type === 'board' && a.lastError && !['done', 'failed'].includes(a.step))
-          out.push(h('div', { class: 'notice err', style: 'margin:12px 0 0' },
-            t('arkBoardStuck', { error: a.lastError })));
+          lines.push({ text: t('arkBoardStuck', { error: a.lastError }), err: true });
       }
-      if (arkRenewWarn && !wallet.watchOnly) out.push(h('div', { class: 'notice err', style: 'margin:12px 0 0' },
-        t('arkRenewWarn', {
+      if (arkRenewWarn && !wallet.watchOnly) lines.push({
+        text: t('arkRenewWarn', {
           amount: fmtAmount(arkRenewWarn.sat) + ' ' + unitLabel(),
           date: new Date(arkRenewWarn.deadlineMs).toLocaleDateString(),
-        })));
+        }), err: true,
+      });
       // Coins past their expiry. The balance already leaves these out, and
       // until now it did so in silence — money apparently gone, with the one
       // page that could bring it back reachable only through an advisory
@@ -3459,14 +3458,12 @@ export function arkFeature(ctx) {
       if (!wallet.watchOnly && ark && ark.balance) {
         let expiredSat = 0;
         try { expiredSat = ark.balance().expiredSat || 0; } catch {}
-        if (expiredSat > 0) out.push(h('div', { class: 'notice err', style: 'margin:12px 0 0' },
-          t('arkExpiredNotice', { amount: fmtAmount(expiredSat) + ' ' + unitLabel() }),
-          ' ',
-          h('button', { class: 'linklike small', onClick: () => { ui.arkCoinsPage = true; render(); } },
-            t('arkDepthBtn'))));
+        if (expiredSat > 0) lines.push({
+          text: t('arkExpiredNotice', { amount: fmtAmount(expiredSat) + ' ' + unitLabel() }), err: true, manage: true,
+        });
       }
       const depthNotice = exitDepthNotice();
-      if (depthNotice) out.push(depthNotice);
+      if (depthNotice) lines.push({ text: depthNotice, manage: true });
       // An upcoming renewal that will COST something — stated before it
       // happens. Ark is new to nearly everyone, and a fee nobody announced
       // reads as money gone missing (it did, once). Free renewals — the
@@ -3487,17 +3484,27 @@ export function arkFeature(ctx) {
           let feeSat = 0;
           try { feeSat = ark.refreshFee(batch, simTip); } catch {}
           const days = Math.max(1, Math.round(blocksUntil / 144));
-          if (feeSat > 0) out.push(h('div', { class: 'small faint', style: 'margin:10px 0 0;text-align:center' },
-            t(blocksUntil <= 0 ? 'arkRenewForecastNow' : 'arkRenewForecast', {
+          if (feeSat > 0) lines.push({
+            text: t(blocksUntil <= 0 ? 'arkRenewForecastNow' : 'arkRenewForecast', {
               when: days === 1 ? t('arkCoinsSpanDay') : t('arkCoinsSpanDays', { n: days }),
               fee: fmtAmount(feeSat) + ' ' + unitLabel(),
-            }),
-            ' ',
-            h('button', { class: 'linklike small', onClick: () => { ui.arkCoinsPage = true; render(); } },
-              t('arkDepthBtn'))));
+            }), manage: true,
+          });
         }
       }
-      return out;
+      if (!lines.length) return [];
+      const err = lines.some((l) => l.err);
+      const manage = lines.some((l) => l.manage)
+        ? h('button', { class: 'linklike small', style: 'align-self:flex-end', onClick: () => { ui.arkCoinsPage = true; render(); } }, t('arkDepthBtn'))
+        : null;
+      // one plain advisory keeps its quiet centred line; anything more, or
+      // anything urgent, is a card
+      if (!err && lines.length === 1) {
+        return [h('div', { class: 'small muted', style: 'margin:10px 0 0;text-align:center' }, lines[0].text, manage ? ' ' : null, manage)];
+      }
+      return [h('div', { class: 'notice' + (err ? ' err' : ' info') + ' col', style: 'margin:12px 0 0;gap:8px' },
+        ...lines.map((l) => h('div', { style: l.err || !err ? '' : 'opacity:.8' }, l.text)),
+        manage)];
     },
     decorateTxRow(tx) {
       const s = arkStateNow();

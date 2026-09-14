@@ -3049,6 +3049,13 @@ export function messagesFeature(ctx) {
           const box = e.currentTarget.parentElement;
           if (!box || box.dataset.playing) return;
           box.dataset.playing = '1';
+          // The page repaints in the background all the time (a zap count,
+          // a profile landing, the thirty-second sync), and every repaint
+          // rebuilds this box as poster + play button and patches the live
+          // one into that shape — which threw the playing iframe out a few
+          // seconds into every video. Once playing, the box is the viewer's
+          // and the morph leaves it exactly as it stands.
+          box._skipMorph = true;
           box.textContent = '';
           const f = document.createElement('iframe');
           f.src = src;

@@ -554,6 +554,7 @@ hr.divider { margin: 16px 0; }
 .note-act.on[aria-label="Boost"] { color: var(--green); }
 .note-act-emoji { font-size: 17px; line-height: 1; }
 .note-act-n { font-size: 12px; font-weight: 600; color: var(--muted); }
+.note-who-toggle.on { color: var(--muted); }
 .note-who-chev { display: flex; transition: transform .2s; }
 .note-who-chev.open { transform: rotate(180deg); }
 /* who reacted, boosted and zapped: opened by the chevron on the bar */

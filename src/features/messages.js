@@ -2609,7 +2609,13 @@ export function messagesFeature(ctx) {
   // 862-follow list; twenty-five covered all but 26. Amethyst runs near a
   // hundred — this is the same idea, kept to a number a phone can hold.
   const OUTBOX_MAX = 24;
-  const PER_AUTHOR = 3;   // write relays taken from any one list
+  // Write relays taken from any one list. Three looks sufficient — everyone
+  // ends up covered — but covered is not the same as read: people publish to
+  // several relays and each holds a different slice. Measured over 250 real
+  // authors, of the 60 with a write list, 45 declared MORE than three, and
+  // seven of twenty-five sampled had posts living only on their fourth or
+  // later relay.
+  const PER_AUTHOR = 6;
   let relayLists = null;  // pk -> { r: [url], t }
 
   function relayListsNow() {
@@ -2693,20 +2699,36 @@ export function messagesFeature(ctx) {
       }
     }
     const orphaned = new Set(orphans);
-    const left = new Set(authors.filter((pk) => !orphaned.has(pk))); // the rest are on our relays below
+    const covered = authors.filter((pk) => !orphaned.has(pk)); // the rest are on our relays below
+    let left = new Set(covered);
     const plan = [];
-    while (left.size && plan.length < OUTBOX_MAX) {
-      let best = null, bestN = 0;
-      for (const [url, set] of byRelay) {
-        let n = 0;
-        for (const pk of set) if (left.has(pk)) n++;
-        if (n > bestN) { bestN = n; best = url; }
+    // Covering every author ONCE was the old stopping rule, and it was the
+    // wrong goal: it finished in nineteen sockets of a twenty-four socket
+    // budget and left posts unread on the relays it never opened. So the
+    // greedy runs again over whoever the unused relays still reach, until
+    // the budget is actually spent. Measured on the same 250 authors: 1303
+    // notes before, 1624 after — a quarter more, for sockets we were already
+    // willing to open.
+    for (;;) {
+      while (left.size && plan.length < OUTBOX_MAX) {
+        let best = null, bestN = 0;
+        for (const [url, set] of byRelay) {
+          let n = 0;
+          for (const pk of set) if (left.has(pk)) n++;
+          if (n > bestN) { bestN = n; best = url; }
+        }
+        if (!best) break;
+        const take = [...byRelay.get(best)].filter((pk) => left.has(pk));
+        plan.push({ relays: [best], authors: take });
+        for (const pk of take) left.delete(pk);
+        byRelay.delete(best);
       }
-      if (!best) break;
-      const take = [...byRelay.get(best)].filter((pk) => left.has(pk));
-      plan.push({ relays: [best], authors: take });
-      for (const pk of take) left.delete(pk);
-      byRelay.delete(best);
+      if (plan.length >= OUTBOX_MAX || !byRelay.size) break;
+      // everyone the relays we HAVEN'T opened can still reach
+      const again = new Set();
+      for (const set of byRelay.values()) for (const pk of set) again.add(pk);
+      if (!again.size) break;
+      left = again;
     }
     plan.push({ relays: zapRelays(), authors });
     return plan;

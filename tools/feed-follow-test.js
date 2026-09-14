@@ -100,6 +100,29 @@ try {
   check('...and our own relays are still asked as well',
     dialled.some((u) => u.includes('relay.coinos.io')), dialled.length + ' sockets');
 
+  // Covering every author once is not the same as reading them. People
+  // publish to several relays and each holds a different slice — measured
+  // over 250 real authors, seven of twenty-five sampled had posts living
+  // only on their fourth or later write relay, and spending the whole socket
+  // budget instead of stopping at first coverage found a quarter more posts.
+  // So a lone author with six relays must be read on all six, not three.
+  await page.evaluate(([k, a]) => {
+    localStorage.setItem(k + ':follows', JSON.stringify({ tags: [['p', a]], c: '', at: Math.floor(Date.now() / 1000) }));
+    localStorage.setItem(k + ':relayLists', JSON.stringify({
+      [a]: { r: [1, 2, 3, 4, 5, 6].map((n) => 'wss://r' + n + '.example.invalid'), t: Date.now() },
+    }));
+  }, [base, FOLLOWED]);
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await waitText('receive', 20000);
+  await page.evaluate(() => { const b = [...document.querySelectorAll('button')].find((e) => /message/i.test(e.getAttribute('aria-label') || '')); if (b) b.click(); });
+  await sleep(1000);
+  await clickItem('feed');
+  await sleep(6000);
+  const wide = await page.evaluate(() => window.__dialled || []);
+  const hit = [1, 2, 3, 4, 5, 6].filter((n) => wide.some((u) => u.includes('r' + n + '.example.invalid')));
+  check('an author who publishes to six relays is read on all six',
+    hit.length === 6, 'reached ' + (hit.join(',') || 'none'));
+
   // The feed opens at twenty posts and grows as you reach the bottom, however
   // many it is holding.
   await page.evaluate((k) => {

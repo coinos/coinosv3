@@ -2404,7 +2404,9 @@ function settingsTab() {
   const page = (kids) => h('div', { class: 'col', style: 'gap:16px' }, ...kids,
     h('button', { class: 'btn-ghost btn-block', onClick: () => { ui.settingsPage = null; render(); } }, t('back')));
   switch (ui.settingsPage) {
-    case 'wallet': return page(a ? [walletNameCard(a), pubkeyCard(a), recoveryCard(a)] : []);
+    // the recovery phrase first: it is the one thing on this page that
+    // matters if the phone is lost tonight
+    case 'wallet': return page(a ? [recoveryCard(a), walletNameCard(a), pubkeyCard(a)] : []);
     case 'payments': return page(featureAll('settingsCards').reverse());
     case 'network': return page([networkCard(), explorerCard()]);
     case 'nostr': return nostrSettingsView();
@@ -2937,7 +2939,9 @@ function recoveryCard(a) {
             if (!a.seedSeen) { a.seedSeen = true; persistAccounts(); if (a.persisted) writeVault(); }
             render();
           } }, t('revealWords')),
-          h('button', { class: 'btn-sm', onClick: () => { ui.revealShown = false; render(); } }, t('hide')))
+          // the same size as its neighbour: two halves of one row, not a
+          // big button with a small one tucked beside it
+          h('button', { class: 'btn-ghost grow', onClick: () => { ui.revealShown = false; render(); } }, t('hide')))
   );
 }
 
@@ -2993,9 +2997,9 @@ function accountSettingsScreen() {
     'div',
     { class: 'col', style: 'gap:16px' },
     brandHeader(false),
+    recoveryCard(a),
     walletNameCard(a),
     pubkeyCard(a),
-    recoveryCard(a),
     autolockCard(a),
     h('button', { class: 'btn-ghost btn-block', onClick: () => { ui.editLabel = null; ui.revealShown = false; ui.pubkeyShown = false; ui.loadSeed = null; goBack(() => { ui.screen = 'accounts'; }); } }, t('back'))
   );

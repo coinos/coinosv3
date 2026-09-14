@@ -2880,7 +2880,18 @@ export function messagesFeature(ctx) {
   // Note content, safely: text stays text nodes — relay content must never
   // reach innerHTML. URLs become links (image URLs inline), npub mentions a
   // clickable @name, other nostr: refs a dim stub.
-  const NOTE_SPLIT = /(https?:\/\/[^\s]+|nostr:(?:npub|nprofile|note|nevent|naddr)1[a-z0-9]+)/gi;
+  // Markdown, narrowly. A kind 1 is specified as plain text — NIP-10 says
+  // markup SHOULD NOT be used — but bridges and cross-posters emit it anyway,
+  // and what we did with it was the worst of the three options: the URL
+  // inside ![cover](…) rendered as a picture while the ![cover]( was left
+  // sitting above it as litter. So the whole construct is one token now.
+  //
+  // Images and links ONLY. Not headings, not bold, not italics: # opens a
+  // hashtag and * turns up in ordinary prose, so honouring those would
+  // mangle normal posts to pretty up the rare bridged one.
+  const MD_LINK = '!?\\[[^\\]\\n]{0,300}\\]\\(\\s*<?https?:\\/\\/[^\\s>)]+>?[^)\\n]{0,300}\\)';
+  const NOTE_SPLIT = new RegExp('(' + MD_LINK + '|https?:\\/\\/[^\\s]+|nostr:(?:npub|nprofile|note|nevent|naddr)1[a-z0-9]+)', 'gi');
+  const MD_PARTS = new RegExp('^(!?)\\[([^\\]\\n]{0,300})\\]\\(\\s*<?(https?:\\/\\/[^\\s>)]+)>?[^)\\n]{0,300}\\)$', 'i');
 
   // A YouTube link is a video, so show the video. All three shapes it comes
   // in: the long one, the short one, and a Shorts link.
@@ -2978,31 +2989,44 @@ export function messagesFeature(ctx) {
         ...noteBody(ev.content, depth + 1)));
   }
 
+  // One URL, rendered as whatever it points at. `isImage` is markdown saying
+  // so outright — plenty of perfectly good picture URLs carry no extension
+  // (a CDN path, a /media/ route), and ![…] is the author telling us what it
+  // is, which beats guessing from the filename.
+  function urlNode(url, { label = null, isImage = false } = {}) {
+    if (/\.(mp4|webm|mov|m4v)(\?[^\s]*)?$/i.test(url)) {
+      // metadata-only preload: the poster frame paints, nothing streams
+      // until the viewer presses play
+      return h('video', { src: url, class: 'note-video', controls: true,
+        preload: 'metadata', playsinline: true,
+        onError: (e) => { e.target.style.display = 'none'; } });
+    }
+    if (isImage || /\.(png|jpe?g|gif|webp|avif)(\?[^\s]*)?$/i.test(url)) {
+      // tap it to see it properly — a 320px-tall crop of someone's
+      // photograph is a thumbnail, not the picture they posted
+      return h('img', {
+        src: url, class: 'note-img clickable', loading: 'lazy', alt: label || '',
+        onClick: (e) => { e.stopPropagation(); ctx.openImage && ctx.openImage(url); },
+        // a picture we were TOLD was a picture and which won't load leaves
+        // nothing behind — the alt text is already in the sentence above it
+        onError: (e) => { e.target.style.display = 'none'; },
+      });
+    }
+    if (youtubeId(url)) return youtubeEmbed(url, youtubeId(url));
+    const shown = label || (url.length > 64 ? url.slice(0, 61) + '…' : url);
+    return h('a', { href: url, target: '_blank', rel: 'noopener noreferrer' }, shown);
+  }
+
   function noteBody(text, depth = 0) {
     const out = [];
     for (const part of String(text || '').split(NOTE_SPLIT)) {
       if (!part) continue;
-      if (/^https?:\/\//i.test(part)) {
-        if (/\.(png|jpe?g|gif|webp|avif)(\?[^\s]*)?$/i.test(part)) {
-          // tap it to see it properly — a 320px-tall crop of someone's
-          // photograph is a thumbnail, not the picture they posted
-          out.push(h('img', {
-            src: part, class: 'note-img clickable', loading: 'lazy',
-            onClick: (e) => { e.stopPropagation(); ctx.openImage && ctx.openImage(part); },
-            onError: (e) => { e.target.style.display = 'none'; },
-          }));
-        } else if (/\.(mp4|webm|mov|m4v)(\?[^\s]*)?$/i.test(part)) {
-          // metadata-only preload: the poster frame paints, nothing streams
-          // until the viewer presses play
-          out.push(h('video', { src: part, class: 'note-video', controls: true,
-            preload: 'metadata', playsinline: true,
-            onError: (e) => { e.target.style.display = 'none'; } }));
-        } else if (youtubeId(part)) {
-          out.push(youtubeEmbed(part, youtubeId(part)));
-        } else {
-          out.push(h('a', { href: part, target: '_blank', rel: 'noopener noreferrer' },
-            part.length > 64 ? part.slice(0, 61) + '…' : part));
-        }
+      const md = MD_PARTS.exec(part);
+      if (md) {
+        const [, bang, label, url] = md;
+        out.push(urlNode(url, { label: label || null, isImage: !!bang }));
+      } else if (/^https?:\/\//i.test(part)) {
+        out.push(urlNode(part));
       } else if (/^nostr:(npub|nprofile)1/i.test(part)) {
         const ref = parseNostrRef(part.slice(6));
         if (ref && ref.type === 'pubkey') out.push(h('a', { href: '#', onClick: (e) => { e.preventDefault(); openProfile(ref.pk); } }, '@' + displayName(ref.pk)));

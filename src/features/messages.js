@@ -3519,7 +3519,7 @@ export function messagesFeature(ctx) {
       for (const z of zs) profileOf(z.pk);
       lines.push(line(h('span', { style: 'display:flex', html: I_ZAP }),
         h('div', { class: 'col', style: 'gap:4px;min-width:0' }, ...zs.slice(0, 24).map((z) =>
-          person(z.pk, h('span', { class: 'note-who-sats' }, fmtAmount(z.sats) + ' ' + unitLabel()
+          person(z.pk, h('span', { class: 'note-who-sats' }, fmtSats(z.sats) + ' sats'
             + (z.text ? ' · ' + z.text : '')))))));
     }
     for (const [emoji, set] of [...rm.entries()].sort((a, b) => b[1].size - a[1].size)) {
@@ -5282,7 +5282,7 @@ export function messagesFeature(ctx) {
     return q.ev || null;
   }
   function notifLabel(x) {
-    if (x.what === 'zap') return t('alertZap', { sats: fmtAmount(x.sats) + ' ' + unitLabel() });
+    if (x.what === 'zap') return t('alertZap', { sats: fmtSats(x.sats) + ' sats' });
     if (x.what === 'react') return t('alertReact', { emoji: x.emoji });
     if (x.what === 'boost') return t('alertBoost');
     if (x.what === 'reply') return t('alertReply');

@@ -3359,7 +3359,13 @@ export function messagesFeature(ctx) {
   // hashtag and * turns up in ordinary prose, so honouring those would
   // mangle normal posts to pretty up the rare bridged one.
   const MD_LINK = '!?\\[[^\\]\\n]{0,300}\\]\\(\\s*<?https?:\\/\\/[^\\s>)]+>?[^)\\n]{0,300}\\)';
-  const NOTE_SPLIT = new RegExp('(' + MD_LINK + '|https?:\\/\\/[^\\s]+|nostr:(?:npub|nprofile|note|nevent|naddr)1[a-z0-9]+)', 'gi');
+  // A bare @handle ("Founder of @MusiKnow") names a person without a key.
+  // Nothing can resolve it for certain, so it becomes a tap that opens the
+  // people search with that name filled in. Not the @ inside an email or a
+  // nip05 (a word character sits before those), and never inside a URL
+  // (the URL token starts earlier and swallows it).
+  const MENTION = '(?<![\\w.@/])@[A-Za-z0-9_]{2,32}(?![\\w@])';
+  const NOTE_SPLIT = new RegExp('(' + MD_LINK + '|https?:\\/\\/[^\\s]+|nostr:(?:npub|nprofile|note|nevent|naddr)1[a-z0-9]+|' + MENTION + ')', 'gi');
   const MD_PARTS = new RegExp('^(!?)\\[([^\\]\\n]{0,300})\\]\\(\\s*<?(https?:\\/\\/[^\\s>)]+)>?[^)\\n]{0,300}\\)$', 'i');
 
   // A YouTube link is a video, so show the video. All three shapes it comes
@@ -3738,9 +3744,23 @@ export function messagesFeature(ctx) {
         } else out.push(h('span', { class: 'faint' }, part.slice(6, 18) + '…'));
       } else if (/^nostr:/i.test(part)) {
         out.push(h('span', { class: 'faint' }, part.slice(6, 18) + '…'));
+      } else if (/^@[A-Za-z0-9_]{2,32}$/.test(part)) {
+        out.push(h('a', {
+          href: '#', title: t('searchPeopleFor', { q: part.slice(1) }),
+          onClick: (e) => { e.preventDefault(); e.stopPropagation(); openPeopleSearch(part.slice(1)); },
+        }, part));
       } else out.push(part);
     }
     return out;
+  }
+
+  // The header magnifier's search, opened with a name already typed.
+  function openPeopleSearch(q) {
+    ui.chatOpen = false; ui.profilePk = null; ui.noteThread = null;
+    ui.userSearch = { q, rows: null };
+    warmSearch();
+    userSearcher.update(q);
+    render();
   }
 
   // Zap a specific note. With a default amount configured this is ONE TAP:

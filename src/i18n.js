@@ -198,6 +198,7 @@ const STR = {
     msgAttachTooBig: 'That file is too big (20 MB max)',
     msgUploadFailed: 'Upload failed — try again',
     msgPhoto: 'Photo',
+    searchPeopleFor: 'Search people for {q}',
     msgEmojiSearch: 'Search emoji…',
     msgEmojiMore: 'More reactions',
     msgEmojiNone: 'No match',

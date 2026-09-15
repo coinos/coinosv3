@@ -106,6 +106,14 @@ export async function extensionSigner() {
   };
 }
 
+// The relay pool a remote signer talks through. nostr-tools' own default
+// never reconnects: a phone freezing the tab for a minute cut the socket,
+// every request after that hung to its deadline, and the app declared the
+// signer gone — "my signer keeps disconnecting", reconnect tapped over and
+// over. Pinged and reconnecting, the socket comes back on its own and the
+// subscription is re-fired, so the next request simply gets its answer.
+const bunkerPool = () => new SimplePool({ enablePing: true, enableReconnect: true });
+
 export async function bunkerSigner(uri, { onAuth } = {}) {
   const { BunkerSigner, parseBunkerInput } = await loadNip46();
   const bp = await parseBunkerInput(String(uri || '').trim());
@@ -115,6 +123,7 @@ export async function bunkerSigner(uri, { onAuth } = {}) {
   // NB the pointer goes through fromBunker — the constructor takes params
   // only, and passing the pointer there leaves the signer without one.
   const signer = BunkerSigner.fromBunker(local, bp, {
+    pool: bunkerPool(),
     onauth: (url) => { if (onAuth) onAuth(url); else if (typeof window !== 'undefined') window.open(url, '_blank'); },
   });
   await signer.connect();
@@ -131,6 +140,7 @@ export async function resumeBunker(session, { onAuth, timeoutMs = 15000 } = {}) 
   const { BunkerSigner } = await loadNip46();
   const local = hex.decode(session.local);
   const signer = BunkerSigner.fromBunker(local, session.bp, {
+    pool: bunkerPool(),
     onauth: (url) => { if (onAuth) onAuth(url); },
   });
   const give = new Promise((_, rej) => setTimeout(() => rej(new Error('signer did not answer')), timeoutMs));
@@ -163,6 +173,10 @@ function bunkerAdapter(signer, pubkey, local) {
     decryptSelf: (ct) => answered(signer.nip44Decrypt(pubkey, ct)),
     encryptTo: (peer, txt) => answered(signer.nip44Encrypt(peer, txt)),
     decryptFrom: (peer, ct) => answered(signer.nip44Decrypt(peer, ct)),
+    // Is anyone there? A quick round trip after the app comes back from the
+    // background, so a dead session is replaced before the user's next
+    // action runs into a twenty-second silence.
+    ping: () => answered(signer.getPublicKey(), 7_000),
     close: () => { try { signer.close(); } catch {} },
   };
 }
@@ -217,7 +231,7 @@ export async function nostrConnect({ relays = ['wss://relay.coinos.io', 'wss://n
     Math.max(5_000, timeoutMs - (Date.now() - startedAt)));
 
   // Path 1: the library's live wait — instant while the tab stays awake.
-  const live = (async () => BunkerSigner.fromURI(local, uri, {}, controller.signal))();
+  const live = (async () => BunkerSigner.fromURI(local, uri, { pool: bunkerPool() }, controller.signal))();
   live.catch(() => {});
 
   // Path 2: the replay poller — finds an approval published while we slept.
@@ -252,7 +266,7 @@ export async function nostrConnect({ relays = ['wss://relay.coinos.io', 'wss://n
             const resp = JSON.parse(nip44.decrypt(ev.content, key));
             // some signers echo the secret, others answer a bare "ack"
             if (resp.result === secret || resp.result === 'ack') {
-              return BunkerSigner.fromBunker(local, { pubkey: ev.pubkey, relays, secret });
+              return BunkerSigner.fromBunker(local, { pubkey: ev.pubkey, relays, secret }, { pool: bunkerPool() });
             }
           } catch {}
         }

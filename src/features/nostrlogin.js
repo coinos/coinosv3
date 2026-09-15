@@ -67,7 +67,13 @@ export function nostrLoginFeature(ctx) {
     if (!signer || signer.kind !== 'bunker') return signer;
     const guard = (fn) => async (...args) => {
       try { return await fn(...args); } catch (e) {
-        if (live === wrapped && SIGNER_DEAD.test(e?.message || '')) live = null;
+        if (live === wrapped && SIGNER_DEAD.test(e?.message || '')) {
+          // drop it AND dial again, silently: the notice (and its Reconnect
+          // button) is for a resume that failed, not for every hiccup
+          live = null;
+          try { signer.close && signer.close(); } catch {}
+          resumeQuietly();
+        }
         throw e;
       }
     };
@@ -701,6 +707,21 @@ export function nostrLoginFeature(ctx) {
     // null for signers we cannot silently reattach (pasted keys, bunkers
     // without a stored session).
     nostrLoginResume() { return resumeLogin(); },
+    // Back from the background: a remote signer's socket may be gone even if
+    // the pool will bring it back — ask it something small now, and if the
+    // answer never comes, resume a fresh session before anyone notices.
+    resumed(awayMs) {
+      const s = liveSigner();
+      if (!s || s.kind !== 'bunker' || !s.ping) return;
+      if (awayMs && awayMs < 5_000) return;
+      s.ping().catch(() => {
+        if (live !== s) return;
+        live = null;
+        try { s.close && s.close(); } catch {}
+        resumeQuietly();
+      });
+      return true;
+    },
     unlockExtra() { return unlockExtra(); },
     // The welcome screen's sign-in block: Google and passkey act right there;
     // the Nostr button steps into the wizard's signer list.

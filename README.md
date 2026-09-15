@@ -172,3 +172,7 @@ On load and on a timer the wallet reconciles against its data source; a manual
 - Whichever data source you query sees your addresses and IP — point it at
   your own node for full privacy. The localStorage cache and the Nostr event
   hold public chain data; the Nostr copy is encrypted end-to-end.
+
+## License
+
+MIT — see [LICENSE](LICENSE).

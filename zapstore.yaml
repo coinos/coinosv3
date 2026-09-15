@@ -4,6 +4,7 @@
 # this a SEPARATE zapstore app from the legacy coinos listing. Rebuild the
 # APK (see android/) and bump versionCode before re-publishing.
 repository: https://github.com/coinos/coinosv3
+license: MIT
 release_source: ./static/coinos.apk
 
 name: coinos v3

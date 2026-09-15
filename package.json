@@ -2,6 +2,7 @@
   "name": "coinosv3",
   "private": true,
   "version": "0.1.0",
+  "license": "MIT",
   "type": "module",
   "description": "coinos v3 — offline-capable, single-file self-custody Bitcoin wallet for the browser",
   "scripts": {

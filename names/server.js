@@ -1202,7 +1202,8 @@ Bun.serve({
       }
       if (!/^[0-9a-f]{64}$/.test(pk)) return json({ error: 'bad pubkey' }, 400);
       const hat = String(b.hat || '');
-      if (!(hat in HAT_PRICES) && hat !== 'construction') return json({ error: 'no such hat' }, 400);
+      // giftable but never sold: the beta hard hat, and the knight's helm
+      if (!(hat in HAT_PRICES) && !['construction', 'knight'].includes(hat)) return json({ error: 'no such hat' }, 400);
       const net = hatNetOf(b.net);
       grantHat(pk, hat, net, { equip: false });
       persist();

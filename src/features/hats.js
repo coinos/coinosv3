@@ -91,6 +91,26 @@ const HATS = [
       <rect x="9" y="29" width="40" height="6.5" rx="3" fill="#cf640c" stroke="rgba(0,0,0,.1)" stroke-width="0.8"/>`),
   },
   {
+    // Not for sale either: a knight's great helm, gifted. Unlike every
+    // other hat it covers the whole face — its own square drawing sits
+    // over the avatar rather than perching on top of it.
+    id: 'knight', nameKey: 'hatKnight', sat: null, w: 114, b: -7, r: 0, dx: 8,
+    art: `<svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
+      <path d="M31 6.5 Q22 -0.5 12 2.5 Q20.5 3.5 27 9.5 Z" fill="#d6323e"/>
+      <path d="M31 6.5 Q26 3 18 2.6" stroke="#f26a72" stroke-width="1.1" fill="none" stroke-linecap="round"/>
+      <path d="M3 30 Q3 4 32 4 Q61 4 61 30 L61 56 Q61 62 55 62 L9 62 Q3 62 3 56 Z" fill="#b3bbc6" stroke="#5c6470" stroke-width="1.3"/>
+      <path d="M8 32 Q8 11 25 7.5" stroke="rgba(255,255,255,.6)" stroke-width="2.2" fill="none" stroke-linecap="round"/>
+      <path d="M53 10 Q59 19 59 30 L59 56" stroke="rgba(0,0,0,.16)" stroke-width="3" fill="none" stroke-linecap="round"/>
+      <circle cx="32" cy="5.2" r="2.6" fill="#e2b53b" stroke="#a87f1f" stroke-width=".8"/>
+      <path d="M3 27.5 H61" stroke="#7c848f" stroke-width="1"/>
+      <g fill="#6b7380"><circle cx="9" cy="24.5" r="1.05"/><circle cx="15.5" cy="24.5" r="1.05"/><circle cx="22" cy="24.5" r="1.05"/><circle cx="42" cy="24.5" r="1.05"/><circle cx="48.5" cy="24.5" r="1.05"/><circle cx="55" cy="24.5" r="1.05"/></g>
+      <rect x="7" y="32.5" width="50" height="5.6" rx="2.8" fill="#14171c"/>
+      <rect x="30.3" y="27" width="3.4" height="19" rx="1.2" fill="#d2d8e0" stroke="#5c6470" stroke-width=".8"/>
+      <g fill="#3a3f47"><circle cx="18" cy="47.5" r="1.25"/><circle cx="22.5" cy="50.5" r="1.25"/><circle cx="18" cy="53.5" r="1.25"/><circle cx="46" cy="47.5" r="1.25"/><circle cx="41.5" cy="50.5" r="1.25"/><circle cx="46" cy="53.5" r="1.25"/></g>
+      <path d="M3 56.5 Q32 59.5 61 56.5 L61 57 Q61 62 55 62 L9 62 Q3 62 3 57 Z" fill="#8d95a1"/>
+      </svg>`,
+  },
+  {
     id: 'crown', nameKey: 'hatCrown', sat: null, w: 86, b: 83, r: -7,
     art: svg(`<path d="M10 38 L7 13 L20 25 L32 6 L44 25 L57 13 L54 38 Z" fill="#f2b32a"/>
       <circle cx="7" cy="12" r="3" fill="#ffd97a"/><circle cx="32" cy="6" r="3" fill="#ffd97a"/><circle cx="57" cy="12" r="3" fill="#ffd97a"/>

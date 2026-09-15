@@ -29,6 +29,7 @@ import { getNetwork } from '../api.js';
 import { decodeBolt11 } from '../ark/lightning.js';
 import { hexToBytes, bytesToHex } from '@noble/hashes/utils';
 import { t } from '../i18n.js';
+import { SIGNER_SILENT } from '../dm.js';
 
 // The coinos community's join material lives in ../community.js — shared
 // with the public read-only chat page so the two can never drift.
@@ -294,6 +295,7 @@ export function messagesFeature(ctx) {
   }
   let dmStarted = false;
   let allUnsubs = [];
+  let dmUnsubs = []; // the DM wrap subscriptions alone, so they can be rebuilt
 
   let repaintTimer = null;
   const scheduleRepaint = () => {
@@ -741,7 +743,9 @@ export function messagesFeature(ctx) {
     if (room.subscribed) return;
     room.subscribed = true;
     const scheduleFold = room.scheduleFold;
-    allUnsubs.push(
+    room.unsubs = room.unsubs || [];
+    const keep = (...us) => { for (const u of us) { allUnsubs.push(u); room.unsubs.push(u); } };
+    keep(
       subscribeOn(room.relays, { kinds: [1059], authors: [room.control.pk], limit: 500 }, (wrap) => {
         if (seenWraps.has(wrap.id)) return;
         seenWraps.add(wrap.id);
@@ -770,14 +774,37 @@ export function messagesFeature(ctx) {
     // derive the stream key once per channel, not once per wrap — groupKey
     // does an hkdf + ECDH each call, real curve work on a 200-wrap backfill
     const stream = room.chStream(id);
-    allUnsubs.push(subscribeOn(room.relays, { kinds: [1059, 21059], authors: [stream.pk], limit: 200 }, (wrap) => {
+    const u = subscribeOn(room.relays, { kinds: [1059, 21059], authors: [stream.pk], limit: 200 }, (wrap) => {
       if (seenWraps.has(wrap.id)) return;
       seenWraps.add(wrap.id);
       openWrapBg(wrap, stream, (opened) => {
         if (!opened) return;
         onChat(room, id, opened);
       });
-    }));
+    });
+    allUnsubs.push(u); (room.unsubs = room.unsubs || []).push(u);
+  }
+
+  // The relay pool reconnects a dropped socket, but one that ERRORED is
+  // given up on — and a phone freezing the tab does exactly that to every
+  // subscription we hold. Messages sent while the app was away then never
+  // arrived, and nothing after them did either, until a reload. So coming
+  // back (and coming online) rebuilds every live wrap subscription: DMs and
+  // rooms. The windows they ask for overlap what we already hold, and
+  // seenWraps drops the repeats before any decryption, so this costs a few
+  // round trips and nothing else.
+  function resubscribeStreams() {
+    if (dmStarted) {
+      for (const u of dmUnsubs) { try { u(); } catch {} }
+      dmUnsubs = []; dmStarted = false;
+      startDMs();
+    }
+    for (const room of rooms.values()) {
+      if (!room.subscribed) continue;
+      for (const u of room.unsubs || []) { try { u(); } catch {} }
+      room.unsubs = []; room.subscribed = false; room.subbed.clear();
+      subscribeRoom(room);
+    }
   }
 
   function onChat(room, channelId, { rumor, author }) {
@@ -1717,12 +1744,15 @@ export function messagesFeature(ctx) {
         if (r) return r[0]; // null here means "not ours", not "worker failed"
       }
     }
-    return unwrapDM(wrap, d).catch(() => null);
+    return unwrapDM(wrap, d).catch((e) => { if (SIGNER_SILENT.test(e?.message || '')) throw e; return null; });
   }
 
+  // true: opened. false: not ours. 'later': a remote signer never answered,
+  // so nothing is known yet — the wrap must be tried again, uncounted.
   async function openInboxWrap(wrap) {
     for (const d of dmDecryptors()) {
-      const got = await unwrapDMAny(wrap, d);
+      let got;
+      try { got = await unwrapDMAny(wrap, d); } catch { return 'later'; }
       if (!got) continue;
       if (got.rumor.kind === 14) {
         // unwrapDM judges "mine" against the key that DECRYPTED, but this
@@ -1757,9 +1787,10 @@ export function messagesFeature(ctx) {
   async function handleInboxWrap(wrap) {
     if (seenWraps.has(wrap.id) || seenWraps.has(wrapKey(wrap.id))) return;
     seenWraps.add(wrap.id);
-    if (await openInboxWrap(wrap)) { rememberWrap(wrap.id); return; }
+    const r = await openInboxWrap(wrap);
+    if (r === true) { rememberWrap(wrap.id); return; }
     if (pendingWraps.size >= PENDING_MAX) pendingWraps.delete(pendingWraps.keys().next().value);
-    pendingWraps.set(wrap.id, { wrap, tries: decryptorsComplete() ? 1 : 0 });
+    pendingWraps.set(wrap.id, { wrap, tries: r !== 'later' && decryptorsComplete() ? 1 : 0 });
     scheduleDrain(8000);
   }
 
@@ -1792,7 +1823,9 @@ export function messagesFeature(ctx) {
         // full-strength failures would evict messages that were never really
         // tried. Stop here — the slow retry picks the rest up.
         if (complete && !decryptorsComplete()) break;
-        if (await openInboxWrap(p.wrap)) { pendingWraps.delete(id); rememberWrap(id); }
+        const r = await openInboxWrap(p.wrap);
+        if (r === true) { pendingWraps.delete(id); rememberWrap(id); }
+        else if (r === 'later') break; // the signer went quiet — nothing learned, try the rest later
         else if (complete && ++p.tries >= PENDING_TRIES) { pendingWraps.delete(id); rememberWrap(id); }
         if (performance.now() - chunkStart > 8) {
           await new Promise((r) => setTimeout(r));
@@ -1838,9 +1871,13 @@ export function messagesFeature(ctx) {
     }
     bumpMsgRev();
     if (swept) save(s);
-    allUnsubs.push(subscribeOn(DM_RELAYS, { kinds: [1059], '#p': pks, limit: 400 }, (wrap) => {
-      handleInboxWrap(wrap).catch(() => {});
-    }));
+    const dmSub = (relays) => {
+      const u = subscribeOn(relays, { kinds: [1059], '#p': pks, limit: 400 }, (wrap) => {
+        handleInboxWrap(wrap).catch(() => {});
+      });
+      allUnsubs.push(u); dmUnsubs.push(u);
+    };
+    dmSub(DM_RELAYS);
     // Senders deliver to the relays our kind-10050 advertises — a list other
     // clients may have published with relays beyond our defaults. Read those
     // too, or a compliant sender's DM lands somewhere we never look (a reply
@@ -1851,10 +1888,7 @@ export function messagesFeature(ctx) {
         const extras = [...new Set(lists.flat().map((r) => String(r || '').trim().replace(/\/$/, '')))]
           .filter((r) => /^wss:\/\//i.test(r) && !DM_RELAYS.includes(r))
           .slice(0, 3);
-        if (extras.length && dmStarted)
-          allUnsubs.push(subscribeOn(extras, { kinds: [1059], '#p': pks, limit: 400 }, (wrap) => {
-            handleInboxWrap(wrap).catch(() => {});
-          }));
+        if (extras.length && dmStarted) dmSub(extras);
       } catch {}
     })();
     ensureDmRelayList().catch(() => {});
@@ -5420,9 +5454,10 @@ export function messagesFeature(ctx) {
     // subscriptions are rebuilt, since the ones we had are talking to
     // sockets that no longer exist.
     resumed(awayMs) {
-      if (!ui.chatOpen || !['feed', 'notifs'].includes(ui.msgView)) return;
       // a blink between apps didn't kill anything
       if (awayMs && awayMs < 5_000) return;
+      resubscribeStreams(); // DMs and rooms, whether or not chat is on screen
+      if (!ui.chatOpen || !['feed', 'notifs'].includes(ui.msgView)) return true;
       if (ui.msgView === 'notifs') refreshNotifs(true).catch(() => {});
       else refreshFeed({ force: true }).catch(() => {});
       return true;
@@ -5589,6 +5624,8 @@ export function messagesFeature(ctx) {
       // A tapped "new reply" notification lands here: as ?open=notifs when
       // it had to open a window, or as a worker message when one was open.
       if (OPEN_VIEW === 'notifs') setTimeout(openNotifs, 0);
+      // a connection that came back is a connection whose subs may have died
+      window.addEventListener('online', () => setTimeout(resubscribeStreams, 1500));
       try {
         navigator.serviceWorker?.addEventListener('message', (ev) => {
           if (ev.data && ev.data.type === 'open' && ev.data.view === 'notifs') openNotifs();

@@ -112,7 +112,12 @@ export async function unwrapDM(wrap, skOrSigner) {
     const to = rumor.tags?.find((t) => t[0] === 'p')?.[1];
     const mine = rumor.pubkey === signer.pubkey;
     return { rumor, author: seal.pubkey, peer: mine ? to : rumor.pubkey };
-  } catch {
+  } catch (e) {
+    // A remote signer that never answered is not "not ours": the caller must
+    // try again later, not give the wrap up. Every other failure means the
+    // wrap was sealed to someone else.
+    if (SIGNER_SILENT.test(e?.message || '')) throw e;
     return null;
   }
 }
+export const SIGNER_SILENT = /did not answer|timed? ?out|connect|closed|socket|relay|network/i;

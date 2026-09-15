@@ -494,15 +494,16 @@ setTimeout(() => { if (_bootDeciding) { _bootDeciding = false; render(); } }, 40
 // anywhere (or Escape, or Back) to close — no chrome, nothing to aim at.
 function imageViewer() {
   if (!ui.lightbox) return null;
-  const close = () => { ui.lightbox = null; render(); };
+  const close = () => goBack(() => { ui.lightbox = null; });
   return h('div', {
     class: 'lightbox', onClick: close,
     role: 'dialog', 'aria-modal': 'true',
   }, h('img', { src: ui.lightbox, alt: '', onClick: (e) => e.stopPropagation() }),
-     h('button', { class: 'lightbox-x', 'aria-label': t('close'), onClick: close }, '\u00d7'));
+     // stop the bubble: the backdrop closes too, and two pops walk out of the room
+     h('button', { class: 'lightbox-x', 'aria-label': t('close'), onClick: (e) => { e.stopPropagation(); close(); } }, '\u00d7'));
 }
 if (typeof window !== 'undefined') {
-  window.addEventListener('keydown', (e) => { if (e.key === 'Escape' && ui.lightbox) { ui.lightbox = null; render(); } });
+  window.addEventListener('keydown', (e) => { if (e.key === 'Escape' && ui.lightbox) goBack(() => { ui.lightbox = null; }); });
 }
 
 function render() {
@@ -666,7 +667,10 @@ wallet.subscribe(scheduleRender);
 // views — most Spending payments open one of these, and leaving them out
 // meant the phone's native Back skipped past the history list entirely
 // (it landed on whatever tab minted the previous entry).
-const NAV_FIELDS = ['screen', 'tab', 'txDetail', 'arkMoveDetail', 'arkReconDetail', 'arkExitDetail', 'giftDetail', 'bump', 'giftMode', 'claimStep', 'chatOpen', 'msgView', 'msgCommunity', 'msgPeer', 'profilePk', 'profEdit', 'profEditFilled', 'profOverThread', 'settingsPage', 'nameEditOpen', 'noteThread', 'userSearch', 'zapSetup', 'hatShop'];
+// lightbox: a full-screen photo is a place too — the phone's Back must close
+// it, not pop the screen under it (which once walked a viewer straight back
+// to the start page, so the photo's × then looked like a logout).
+const NAV_FIELDS = ['screen', 'tab', 'txDetail', 'arkMoveDetail', 'arkReconDetail', 'arkExitDetail', 'giftDetail', 'bump', 'giftMode', 'claimStep', 'chatOpen', 'msgView', 'msgCommunity', 'msgPeer', 'profilePk', 'profEdit', 'profEditFilled', 'profOverThread', 'settingsPage', 'nameEditOpen', 'noteThread', 'userSearch', 'zapSetup', 'hatShop', 'lightbox'];
 function navSnapshot() {
   const s = {};
   for (const f of NAV_FIELDS) s[f] = ui[f] ?? null;
@@ -726,6 +730,7 @@ function restoreNavFromHistory() {
     const nav = BOOT_NAV;
     if (!nav || ui.screen !== 'wallet') return;
     for (const f of NAV_FIELDS) if (f in nav) ui[f] = f === 'profEdit' && nav[f] ? structuredClone(nav[f]) : nav[f];
+    ui.lightbox = null; nav.lightbox = null; // an object URL doesn't survive a reload
     navStack = [nav];
     navIndex = 0;
     history.replaceState({ nav, i: 0 }, ''); // undo any boot-render clobber
@@ -735,7 +740,16 @@ function restoreNavFromHistory() {
 
 window.addEventListener('popstate', (e) => {
   const st = e.state;
-  const snap = (st && st.nav) || navSnapshot();
+  let snap = (st && st.nav) || navSnapshot();
+  // The entries minted before sign-in (welcome, sign-in, the seed) are still
+  // in the browser's history. Walking Back into one with a wallet open showed
+  // the start page over a perfectly open session — which reads as "I got
+  // logged out". With a wallet open, those entries become the wallet home.
+  if (snap.screen && snap.screen !== 'wallet' && activeAccount() && ui.screen === 'wallet') {
+    snap = Object.fromEntries(NAV_FIELDS.map((f) => [f, null]));
+    snap.screen = 'wallet'; snap.tab = ui.tab ?? null;
+    try { history.replaceState({ nav: snap, i: st && typeof st.i === 'number' ? st.i : navIndex }, ''); } catch {}
+  }
   restoringHistory = true;
   try {
     for (const f of NAV_FIELDS) ui[f] = f === 'profEdit' && snap[f] ? structuredClone(snap[f]) : f in snap ? snap[f] : null;

@@ -4045,19 +4045,30 @@ export function messagesFeature(ctx) {
               onClick: () => { ui.logoutConfirm = null; ctx.logoutForget(); },
             }, t('clearAll')),
             h('button', { class: 'btn-ghost btn-block', onClick: () => { ui.logoutConfirm = true; render(); } }, t('back')))
-        : h('div', { class: 'card col confirm-pop', style: 'gap:10px' },
-            h('h3', { style: 'margin:0' }, t('logout') + '?'),
-            h('p', { class: 'small muted', style: 'margin:0' }, t('logoutPopBlurb')),
-            h('button', { class: 'btn-primary btn-block', onClick: () => {
+        : (() => {
+            // With other identities signed in, logging out means THIS one
+            // leaves and the rest stay put; logging out of everything is
+            // the second, explicit choice. Alone on the device, it's the
+            // plain log-out it always was.
+            const others = ctx.identities ? ctx.identities().filter((x) => !x.active) : [];
+            const one = others.length > 0 && !!ctx.signOutIdentity;
+            const leave = (fn) => () => {
               ui.logoutConfirm = null;
               ui.profilePk = null; ui.profEdit = null; ui.profEditFilled = false;
-              ctx.logout && ctx.logout();
-            } }, t('logout')),
+              fn && fn();
+            };
+            return h('div', { class: 'card col confirm-pop', style: 'gap:10px' },
+            h('h3', { style: 'margin:0' }, (one ? t('logoutOne', { name: displayName(pk) }) : t('logout')) + '?'),
+            h('p', { class: 'small muted', style: 'margin:0' },
+              one ? t(ctx.identityRecoverable && ctx.identityRecoverable() ? 'logoutOneBlurbLogin' : 'logoutOneBlurbSeed') : t('logoutPopBlurb')),
+            h('button', { class: 'btn-primary btn-block', onClick: leave(one ? ctx.signOutIdentity : ctx.logout) }, t('logout')),
+            one ? h('button', { class: 'btn-block', onClick: leave(ctx.logout) }, t('logoutAll')) : null,
             ctx.logoutForget ? h('button', {
               class: 'btn-block', style: 'color:var(--red,#c0392b)',
               onClick: () => { ui.logoutConfirm = 'forget'; render(); },
             }, t('logoutForget')) : null,
-            h('button', { class: 'btn-ghost btn-block', onClick: () => { ui.logoutConfirm = null; render(); } }, t('back'))));
+            h('button', { class: 'btn-ghost btn-block', onClick: () => { ui.logoutConfirm = null; render(); } }, t('back')));
+          })());
     // The identity switcher: every account signed in on this device as an
     // avatar + name row (tap = switch, nothing logged out), and the door to
     // add a new one.

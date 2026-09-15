@@ -1495,14 +1495,17 @@ function identityPkOf(a) {
 // Both are read from the account itself; the key remembered on the record
 // (saveDirectory) and in the durable directory by xpub is only the fallback,
 // for a watch-only entry whose seed isn't here to ask.
+// One key per person: a seed's Spending and Savings accounts share it.
+const seedKeyOf = (a) => a.type === 'watch' ? 'w:' + a.xpub
+  : a.mnemonic ? 'm:' + a.mnemonic + '\n' + (a.passphrase || '') + '\n' + (a.deriveIndex || 0)
+    : 'x:' + (a.xprv || a.xpub || a.id);
+
 function identities() {
   const pkOf = identityPkOf;
   const bySeed = new Map();
   for (const a of accounts) {
     if (a.provisional) continue;
-    const key = a.type === 'watch' ? 'w:' + a.xpub
-      : a.mnemonic ? 'm:' + a.mnemonic + '\n' + (a.passphrase || '') + '\n' + (a.deriveIndex || 0)
-        : 'x:' + (a.xprv || a.xpub || a.id);
+    const key = seedKeyOf(a);
     const active = a.id === activeId;
     const pk = pkOf(a);
     const cur = bySeed.get(key);
@@ -1526,6 +1529,30 @@ function clearFeatureNav() {
   ui.profilePk = null; ui.profEdit = null; ui.profEditFilled = false;
   ui.chatOpen = false; ui.userSearch = null; ui.noteThread = null; ui.zapSetup = null;
 }
+
+// Sign out of the CURRENT identity only. "Log out" locks every account on
+// the device, which is the wrong size when two people (or two of your own
+// keys) are signed in and just one should leave. This removes that
+// identity's accounts — session, directory, cache, vault — and leaves the
+// others exactly as they were, landing on the next one. A nostr login can
+// sign straight back in (its seed lives on the relays, encrypted to its
+// key); a bare seed wallet needs its recovery phrase, and the confirmation
+// says which.
+function signOutIdentity() {
+  const me = activeAccount();
+  if (!me) return;
+  const key = seedKeyOf(me);
+  const mine = accounts.filter((a) => seedKeyOf(a) === key).map((a) => a.id);
+  clearFeatureNav();
+  // the active one last: wiping it is what hands off to the next identity
+  for (const id of mine.filter((id) => id !== me.id)) wipeAccount(id);
+  wipeAccount(me.id);
+  if (!activeAccount()) { ui.screen = 'unlock'; ui.unlockTab = 'create'; ui.onb = { step: 'welcome' }; }
+  render();
+}
+// Whether the current identity can come back without a recovery phrase:
+// a nostr login (extension, bunker, passkey, Google) re-derives its wallet.
+const identityRecoverable = () => !!loginPkOf(activeAccount() || {});
 
 // Switch to another identity already signed in on this device: the wallet
 // it opens lands on its own history, out of any profile or chat the previous
@@ -5282,7 +5309,7 @@ const ctx = {
   // this runs — wipe now and land on the front door.
   // identity switching lives on the profile page (the Accounts screen is
   // about Spending/Savings faces, not who you are)
-  signInAnother, identities, switchIdentity,
+  signInAnother, identities, switchIdentity, signOutIdentity, identityRecoverable,
   logoutForget: () => {
     ui.profilePk = null; ui.profEdit = null; ui.profEditFilled = false; ui.chatOpen = false;
     ui.pubProf = null;

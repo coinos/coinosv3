@@ -728,6 +728,11 @@ export function messagesFeature(ctx) {
       foldTimer = setTimeout(() => {
         refold();
         refoldGuestbook();
+        // An invite may grant no channels at all (a Vector link carries only
+        // the private ones): the public channels are learned from the
+        // Control fold, so a room open on the relays follows them as they
+        // fold in — otherwise the room stays "No messages yet" forever.
+        if (room.subscribed) for (const c of roomChannels(room)) subChannel(room, c.id);
         // remember the settled count — next session's list paints it
         // immediately instead of "encrypted" flipping to a number
         const s = st();
@@ -785,6 +790,13 @@ export function messagesFeature(ctx) {
   function subChannel(room, id) {
     if (room.subbed.has(id)) return;
     room.subbed.add(id);
+    // a fold-discovered channel warms from its cache here, the way the
+    // invite's own channels do when the room is built
+    if (!room.byChannel.has(id)) {
+      const msgs = new Map();
+      for (const m of st().cache[id] || []) msgs.set(m.rumor.id, m);
+      if (msgs.size) { room.byChannel.set(id, msgs); bumpMsgRev(); }
+    }
     // derive the stream key once per channel, not once per wrap — groupKey
     // does an hkdf + ECDH each call, real curve work on a 200-wrap backfill
     const stream = room.chStream(id);

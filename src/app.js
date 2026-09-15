@@ -930,8 +930,8 @@ function unlockCard() {
     h(
       'div',
       { class: 'tabs' },
-      tabBtn(t('createNew'), ui.unlockTab === 'create', () => { ui.unlockTab = 'create'; ui.unlockError = ''; render(); }),
-      tabBtn(t('importExisting'), ui.unlockTab === 'import', () => { ui.unlockTab = 'import'; ui.unlockError = ''; render(); })
+      tabBtn(t('createNew'), ui.unlockTab === 'create', () => { clearSeedDrafts(); ui.unlockTab = 'create'; ui.unlockError = ''; render(); }),
+      tabBtn(t('importExisting'), ui.unlockTab === 'import', () => { clearSeedDrafts(); ui.unlockTab = 'import'; ui.unlockError = ''; render(); })
     ),
     ui.unlockTab === 'create' ? createPane() : importPane(),
     ui.unlockError && h('div', { class: 'notice err' }, ui.unlockError)
@@ -1097,7 +1097,7 @@ function createPane() {
           'button',
           {
             class: 'btn-ghost btn-sm',
-            onClick: () => { ui.entropyPage = 'create'; ui.entropyEntry = ui.ownEntropy || ''; render(); },
+            onClick: () => { ui.entropyPage = 'create'; ui.entropyEntry = ''; render(); },
           },
           t('entropyToggle')
         )
@@ -1193,7 +1193,7 @@ function entropyPage() {
     h(
       'div',
       { class: 'row gap6' },
-      h('button', { class: 'btn-ghost grow', onClick: () => { ui.entropyPage = null; render(); } }, t('back')),
+      h('button', { class: 'btn-ghost grow', onClick: () => { ui.entropyPage = null; ui.entropyEntry = ''; render(); } }, t('back')),
       h('button', { class: 'btn-primary grow', onClick: () => {
         const txt = (ui.entropyEntry || '').trim();
         if (forCreate) {
@@ -1207,10 +1207,20 @@ function entropyPage() {
           else if (ui.importText === ui._entropyFilled) ui.importText = '';
         }
         ui.entropyPage = null;
+        ui.entropyEntry = '';
         render();
       } }, t('entropySubmit'))
     )
   );
+}
+
+// A seed phrase or entropy typed into the start screens is secret material,
+// not a draft: nothing typed there survives leaving the field — switching
+// tabs, backing out of the entropy page, going home. Whatever you come back
+// to is empty. (An opened wallet clears these too, in openWallet/lock.)
+function clearSeedDrafts() {
+  ui.importText = ''; ui._entropyFilled = null;
+  ui.entropyEntry = ''; ui.ownEntropy = ''; ui.importEntropy = '';
 }
 
 function importPane() {
@@ -1237,7 +1247,7 @@ function importPane() {
       'button',
       {
         class: 'btn-ghost btn-sm', style: 'align-self:flex-start',
-        onClick: () => { ui.entropyPage = 'import'; ui.entropyEntry = ui.importEntropy || ''; render(); },
+        onClick: () => { ui.entropyPage = 'import'; ui.entropyEntry = ''; render(); },
       },
       t('entropyToggle')
     ),
@@ -1471,6 +1481,7 @@ async function activateAccount(acc, opts = {}) {
 // accounts instead of replacing them, and Back returns to the wallet. Shared
 // by the Accounts screen and the profile page.
 function signInAnother() {
+  clearSeedDrafts();
   ui.fromWallet = true; ui.unlockError = ''; ui.unlockTab = 'import'; ui.screen = 'unlock';
   ui.profilePk = null; ui.profEdit = null; ui.profEditFilled = false; ui.chatOpen = false;
   render();
@@ -2708,7 +2719,7 @@ function goHome() {
     ui.unlockTab = 'create';
     ui.createStep = 'gen';
     ui.draftMnemonic = '';
-    ui.importText = '';
+    clearSeedDrafts();
     ui.entropyPage = null;
     ui.confirm = [];
     ui.unlockError = '';

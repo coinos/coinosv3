@@ -1008,3 +1008,7 @@ body::after {
 .chat-attach-ph { display: block; width: 240px; max-width: 100%; max-height: 320px; margin-top: 6px; border-radius: 10px; background: var(--line); }
 .chat-attach { display: inline-block; margin-top: 6px; }
 .chat-clip { flex: none; align-self: flex-end; width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; }
+.msg-sheet-emojis button.more { flex: 0 0 40px; font-size: 20px; color: var(--muted); }
+.emoji-grid { display: flex; flex-wrap: wrap; gap: 2px; max-height: 260px; overflow-y: auto; }
+.emoji-grid button { width: 40px; height: 40px; font-size: 22px; line-height: 1; border: 1px solid transparent; border-radius: 8px; background: none; padding: 0; }
+.emoji-grid button.on { border-color: var(--accent); }

@@ -29,6 +29,7 @@ import { getNetwork } from '../api.js';
 import { decodeBolt11 } from '../ark/lightning.js';
 import { hexToBytes, bytesToHex } from '@noble/hashes/utils';
 import { sha256 } from '@noble/hashes/sha256';
+import { base64urlnopad } from '@scure/base';
 import { t } from '../i18n.js';
 import { SIGNER_SILENT } from '../dm.js';
 
@@ -996,6 +997,36 @@ export function messagesFeature(ctx) {
   // tapping an existing chip joins that vote. Optimistic like sendMessage:
   // the chip appears immediately, the wire catches up.
   const REACT_EMOJIS = ['👍', '❤️', '😂', '🔥', '🎉', '🙏'];
+  // The full picker behind the quick row: a searchable grid. Names are the
+  // search terms; the list is curated rather than the whole Unicode table,
+  // which is plenty for a reaction and keeps the bundle small.
+  const EMOJI_LIB = `👀 eyes seen look|👍 thumbs up like yes|👎 thumbs down no|❤️ heart love red|🧡 orange heart|💛 yellow heart|💚 green heart|💙 blue heart|💜 purple heart|🖤 black heart|🤍 white heart|💔 broken heart|❤️‍🔥 heart fire|💯 100 hundred|😂 laugh joy tears|🤣 rofl laughing|😀 grin smile|😄 smile happy|😁 beaming grin|😅 sweat smile|😊 blush smile|🙂 slight smile|😉 wink|😍 heart eyes love|🥰 smiling hearts love|😘 kiss blow|😗 kiss|🤩 star struck wow|🥳 party celebrate|😎 cool sunglasses|🤓 nerd glasses|🧐 monocle thinking|🤔 thinking hmm|🤨 raised eyebrow skeptical|😐 neutral meh|😑 expressionless|😶 no mouth silent|🙄 eye roll|😏 smirk|😒 unamused|😞 disappointed sad|😔 pensive sad|😟 worried|😕 confused|🙁 frown sad|☹️ frowning sad|😢 cry tear sad|😭 sob crying|😤 huff steam angry|😠 angry|😡 rage furious|🤬 swearing cursing|🤯 mind blown exploding|😳 flushed embarrassed|🥺 pleading puppy eyes|😱 scream fear|😨 fearful|😰 anxious sweat|😥 sad relieved|😓 downcast sweat|🤗 hug|🤭 hand over mouth giggle|🤫 shush quiet|🤥 lying|😬 grimace awkward|😴 sleeping zzz|🤤 drooling|😪 sleepy|😷 mask sick|🤒 thermometer sick|🤕 bandage hurt|🤢 nauseated|🤮 vomit|🤧 sneeze|🥵 hot|🥶 cold freezing|🥴 woozy|😵 dizzy|😵‍💫 spiral dizzy|🤠 cowboy|🥸 disguise|😇 halo angel innocent|🤡 clown|👻 ghost|💀 skull dead|☠️ skull crossbones|👽 alien|🤖 robot|💩 poop|🙈 see no evil monkey|🙉 hear no evil|🙊 speak no evil|👋 wave hello bye|🤚 raised back hand|✋ raised hand stop|🖐️ hand fingers|🖖 vulcan spock|👌 ok perfect|🤌 pinched fingers italian|🤏 pinch small|✌️ peace victory|🤞 fingers crossed luck|🤟 love you gesture|🤘 rock horns|🤙 call me shaka|👈 point left|👉 point right|👆 point up|👇 point down|☝️ index up|👊 fist punch|✊ raised fist|🤛 left fist|🤜 right fist|👏 clap applause|🙌 raised hands hooray|🤲 palms up|🤝 handshake deal|🙏 pray thanks please|💪 muscle strong flex|🫡 salute|🫶 heart hands|🧠 brain smart|👑 crown king|🎩 top hat|🔥 fire lit hot|✨ sparkles|⭐ star|🌟 glowing star|💫 dizzy star|⚡ lightning zap bolt|💥 boom collision|💢 anger|💦 sweat drops|💨 dash wind|🎉 party popper tada|🎊 confetti|🎈 balloon|🎁 gift present|🏆 trophy win|🥇 gold medal first|🎯 bullseye target|🚀 rocket launch moon|🛸 ufo|🌙 moon|☀️ sun|🌈 rainbow|☕ coffee|🍺 beer|🍻 cheers beers|🥂 clink champagne|🍾 champagne bottle|🍕 pizza|🍔 burger|🍿 popcorn|🎂 cake birthday|🍰 cake slice|🍩 donut|🍪 cookie|🍎 apple|🥑 avocado|🌶️ hot pepper spicy|🧂 salt|🐐 goat|🐶 dog|🐱 cat|🐸 frog pepe|🐵 monkey|🦄 unicorn|🐝 bee|🦋 butterfly|🐢 turtle slow|🐍 snake|🦀 crab|🐋 whale|🦈 shark|🦅 eagle|🐔 chicken|🐷 pig|🐮 cow|🐻 bear|🐼 panda|🐨 koala|🦁 lion|🐯 tiger|🦊 fox|🐺 wolf|🐉 dragon|🌹 rose|🌻 sunflower|🌱 seedling grow|🌲 tree|🍀 clover luck|🍄 mushroom|💎 gem diamond|💰 money bag|💸 money wings|💵 dollar cash|🪙 coin|₿ bitcoin btc|🏦 bank|📈 chart up stonks|📉 chart down|🔑 key|🔒 lock|🔓 unlock|🛡️ shield|⚔️ swords|🗡️ dagger|🔨 hammer|🔧 wrench|⚙️ gear settings|🧲 magnet|💡 idea bulb|🔦 flashlight|🔋 battery|📱 phone|💻 laptop|🖥️ desktop|⌨️ keyboard|🖨️ printer|📷 camera|📸 flash camera|🎥 movie camera|🎬 clapper|🎵 music note|🎶 notes music|🎤 microphone|🎧 headphones|🎸 guitar|🎮 game controller|🎲 dice|🧩 puzzle|♟️ chess|🏀 basketball|⚽ soccer football|🏈 football|⚾ baseball|🎾 tennis|🏐 volleyball|🏓 ping pong|🥊 boxing|🏄 surf|🚴 bike|🏃 run|🧘 yoga meditate|🛌 bed sleep|🚗 car|🚕 taxi|🚌 bus|🚂 train|✈️ plane travel|⛵ sailboat|🚢 ship|🏠 house home|🏢 office|🏗️ construction crane|🗽 statue liberty|🗼 tower|🏔️ mountain|🏖️ beach|🌍 earth globe world|🗺️ map|🧭 compass|⏰ alarm clock|⏳ hourglass|⌛ hourglass done|📅 calendar|📌 pin|📎 paperclip|✂️ scissors|📝 memo note|📚 books|📖 book|📰 newspaper|✉️ envelope mail|📬 mailbox|📦 package box|🏷️ label tag|🔔 bell notification|🔕 bell off mute|📣 megaphone|📢 loudspeaker|💬 speech bubble|💭 thought bubble|🗯️ anger bubble|✅ check yes done|❌ cross no wrong|❓ question|❗ exclamation|‼️ double exclamation|⁉️ interrobang|⚠️ warning|🚫 prohibited|♻️ recycle|✔️ check mark|➕ plus|➖ minus|➗ divide|✖️ multiply|🔁 repeat|🔀 shuffle|▶️ play|⏸️ pause|⏹️ stop|⏩ fast forward|⏪ rewind|🔝 top|🆕 new|🆒 cool|🆓 free|🆗 ok|🔞 18 adult|🅰️ a|🅱️ b|🆎 ab|🅾️ o|🔴 red circle|🟠 orange circle|🟡 yellow circle|🟢 green circle|🔵 blue circle|🟣 purple circle|⚫ black circle|⚪ white circle|🟥 red square|🟧 orange square|🟨 yellow square|🟩 green square|🟦 blue square|🟪 purple square|⬛ black square|⬜ white square|🏁 checkered flag finish|🚩 red flag|🏳️ white flag|🏴‍☠️ pirate flag|🇨🇦 canada|🇺🇸 usa america|🇬🇧 uk britain|🇪🇺 eu europe|🇯🇵 japan|🇧🇷 brazil|🇩🇪 germany|🇫🇷 france|🇮🇹 italy|🇪🇸 spain|🇲🇽 mexico|🇦🇺 australia|🇸🇻 el salvador|🇦🇷 argentina|🇳🇬 nigeria|🇮🇳 india|🇨🇳 china|🇰🇷 korea|🇷🇺 russia|🇺🇦 ukraine|🇵🇹 portugal|🇳🇱 netherlands|🇸🇪 sweden|🇨🇭 switzerland`
+    .split('|').map((x) => { const i = x.indexOf(' '); return { e: x.slice(0, i), k: x.slice(i + 1) }; });
+  const RECENT_KEY = 'btc-wallet-recent-emoji';
+  const recentEmojis = () => { try { return JSON.parse(localStorage.getItem(RECENT_KEY) || '[]'); } catch { return []; } };
+  const noteRecent = (e) => { try { localStorage.setItem(RECENT_KEY, JSON.stringify([e, ...recentEmojis().filter((x) => x !== e)].slice(0, 24))); } catch {} };
+  // The reaction row for a sheet: recents lead the quick row, and the last
+  // button opens the full picker in place — a search box and the grid.
+  function reactRow(myReact, onPick) {
+    const pick = (e) => { ui.emojiPick = null; noteRecent(e); onPick(e); };
+    if (ui.emojiPick) {
+      const q = (ui.emojiPick.q || '').trim().toLowerCase();
+      const hits = q ? EMOJI_LIB.filter((x) => x.k.includes(q) || x.e === q) : [...new Set([...recentEmojis(), ...EMOJI_LIB.map((x) => x.e)])].map((e) => ({ e }));
+      return h('div', { class: 'col', style: 'gap:8px' },
+        h('input', {
+          type: 'text', placeholder: t('msgEmojiSearch'), value: ui.emojiPick.q || '', autofocus: true,
+          onInput: (e) => { ui.emojiPick.q = e.target.value; render(); },
+          onKeydown: (e) => { if (e.key === 'Enter' && hits.length) pick(hits[0].e); if (e.key === 'Escape') { ui.emojiPick = null; render(); } },
+        }),
+        h('div', { class: 'emoji-grid' },
+          hits.slice(0, 160).map((x) => h('button', { class: x.e === myReact ? 'on' : '', title: x.k || '', onClick: () => pick(x.e) }, x.e)),
+          !hits.length ? h('div', { class: 'small muted', style: 'padding:8px' }, t('msgEmojiNone')) : null));
+    }
+    const quick = [...new Set([...recentEmojis(), ...REACT_EMOJIS])].slice(0, 6);
+    return h('div', { class: 'msg-sheet-emojis' },
+      quick.map((e2) => h('button', { class: e2 === myReact ? 'on' : '', onClick: () => pick(e2) }, e2)),
+      h('button', { class: 'more', title: t('msgEmojiMore'), onClick: () => { ui.emojiPick = { q: '' }; render(); } }, '＋'));
+  }
   async function sendReaction(room, chId, m, emoji) {
     const id = await identity();
     if (!id) { noIdToast(); return; }
@@ -1052,7 +1083,7 @@ export function messagesFeature(ctx) {
     const mine = my.includes(m.author);
     const reacts = room.reactions.get(m.rumor.id);
     const myReact = reacts && my.map((pk) => reacts.get(pk)).find(Boolean);
-    const close = () => { ui.msgSheet = null; render(); };
+    const close = () => { ui.msgSheet = null; ui.emojiPick = null; render(); };
     const item = (icon, label, onClick) => h('button', { class: 'msg-sheet-item', onClick },
       h('span', { class: 'msg-sheet-ico' }, icon), label);
     return h('div', {
@@ -1060,22 +1091,18 @@ export function messagesFeature(ctx) {
       onClick: (e) => { if (e.target === e.currentTarget) close(); },
     },
       h('div', { class: 'card col msg-sheet' },
-        h('div', { class: 'msg-sheet-emojis' },
-          REACT_EMOJIS.map((e2) => h('button', {
-            class: e2 === myReact ? 'on' : '',
-            onClick: () => { close(); sendReaction(room, chId, m, e2); },
-          }, e2))),
-        item('↩', t('msgReply'), () => {
+        reactRow(myReact, (e2) => { close(); sendReaction(room, chId, m, e2); }),
+        ui.emojiPick ? null : item('↩', t('msgReply'), () => {
           ui.msgReplyTo = m.rumor.id;
           close();
           setTimeout(() => document.getElementById('msg-draft')?.focus(), 50);
         }),
-        !mine && canZapPk(m.author) ? item('⚡', t('msgZap'), () => { close(); zapMessage(m.author, m.rumor.id); }) : null,
-        item('⧉', t('copy'), async () => {
+        !ui.emojiPick && !mine && canZapPk(m.author) ? item('⚡', t('msgZap'), () => { close(); zapMessage(m.author, m.rumor.id); }) : null,
+        ui.emojiPick ? null : item('⧉', t('copy'), async () => {
           try { await navigator.clipboard.writeText(msgSnippet(room, m, 100000)); toast(t('copied')); } catch {}
           close();
         }),
-        mine ? item('✕', t('msgDelete'), () => { close(); deleteMessage(room, chId, m); }) : null));
+        !ui.emojiPick && mine ? item('✕', t('msgDelete'), () => { close(); deleteMessage(room, chId, m); }) : null));
   }
 
   // The composer's "replying to" context bar, with its way out.
@@ -1177,13 +1204,30 @@ export function messagesFeature(ctx) {
       community_id: room.jm.community_id, owner: room.jm.owner, owner_salt: room.jm.owner_salt,
       community_root: room.jm.community_root, root_epoch: room.jm.root_epoch || 0,
       ...(room.jm.control_pk ? { control_pk: room.jm.control_pk } : {}),
-      channels: roomChannels(room).map((c) => {
-        const held = (room.jm.channels || []).find((h) => h.id === c.id);
-        return held && channelIsPrivate(room.jm, held) ? { id: c.id, name: c.name, key: held.key, epoch: held.epoch || 0 } : { id: c.id, name: c.name };
-      }),
+      channels: channelList({ ...room.jm, channels: roomChannels(room).map((c) => (room.jm.channels || []).find((h) => h.id === c.id) || c) }),
       relays: room.relays, name: (room.folded?.metadata?.name) || room.jm.name,
       creator_npub: creatorPk,
     };
+  }
+
+  // Bundles minted before channel entries carried key + epoch never opened in
+  // Vector. The link itself is fine (signer + token), so re-sign the bundle at
+  // the same coordinate with the current shape; the relay replaces it. Once
+  // per invite per device, and again whenever the shape changes.
+  const BUNDLE_REV = 2;
+  async function healInviteBundles() {
+    const s = st();
+    for (const [cid, inv] of Object.entries(s.invites || {})) {
+      if (inv.rev === BUNDLE_REV || !inv.sk || !inv.token) continue;
+      const jm = communityById(cid);
+      if (!jm) continue;
+      try {
+        const room = ensureRoom(jm, { subscribe: false });
+        const creator = inv.creator || (await identity())?.pubkey;
+        const evt = makeInviteBundleEvent(hexToBytes(inv.sk), bundleFor(room, creator), hexToBytes(inv.token));
+        if (await publishOn(room.relays, evt)) { inv.rev = BUNDLE_REV; save(s); }
+      } catch {}
+    }
   }
 
   async function mintInviteLink(room) {
@@ -1191,14 +1235,14 @@ export function messagesFeature(ctx) {
     if (!id) { noIdToast(); return null; }
     const s = st();
     const existing = s.invites[room.jm.community_id];
-    if (existing) return existing.url;
+    if (existing) { if (existing.rev !== BUNDLE_REV) healInviteBundles().catch(() => {}); return existing.url; }
     const linkSk = generateSecretKey();
     const token = crypto.getRandomValues(new Uint8Array(16));
     const evt = makeInviteBundleEvent(linkSk, bundleFor(room, id.pubkey), token);
     const ok = await publishOn(room.relays, evt);
     if (!ok) { toast(t('msgSendFailed')); return null; }
     const url = makeInviteLink(APP_BASE, getPublicKey(linkSk), room.relays, token);
-    s.invites[room.jm.community_id] = { sk: bytesToHex(linkSk), token: bytesToHex(token), url, created_at: Math.floor(Date.now() / 1000) };
+    s.invites[room.jm.community_id] = { sk: bytesToHex(linkSk), token: bytesToHex(token), url, created_at: Math.floor(Date.now() / 1000), rev: BUNDLE_REV, creator: id.pubkey };
     save(s);
     publishLists();
     return url;
@@ -1594,8 +1638,13 @@ export function messagesFeature(ctx) {
 
   // The channel entries of join material: id + name, plus key + epoch for a
   // private channel (a public one derives from the root, so nothing to carry).
+  // Every entry carries key + epoch on the wire (CORD-05 §1 `{id, key, epoch,
+  // name}`): a public channel's key IS the community_root at the base epoch.
+  // Vector's parser has no default for either field, so an entry without them
+  // fails its whole bundle — which is why our invite links never opened there.
   const channelList = (b) => (b.channels || []).slice(0, 256).map((c) =>
-    channelIsPrivate(b, c) ? { id: c.id, name: c.name, key: c.key, epoch: c.epoch || 0 } : { id: c.id, name: c.name });
+    channelIsPrivate(b, c) ? { id: c.id, name: c.name, key: c.key, epoch: c.epoch || 0 }
+      : { id: c.id, name: c.name, key: b.community_root, epoch: b.root_epoch || 0 });
 
   // Join material subset (never the icon, never link fields). We don't
   // Refound ourselves, so seed and current coincide.
@@ -1680,6 +1729,7 @@ export function messagesFeature(ctx) {
   async function publishLists() {
     const ids = await selfCryptors();
     const s = st();
+    publishFragments(ids, fragAt).catch(() => {});
     const docs = [[13302, buildCommunityList(s)], [13303, buildInviteList(s)]];
     for (const id of ids)
       for (const [kind, doc] of docs) {
@@ -1692,15 +1742,143 @@ export function messagesFeature(ctx) {
       }
   }
 
+  // ---- CORD-02 §8 fragmented Community List (kind 33302) ----
+  // The form Vector and the other Concord clients write: addressable, one
+  // event per fragment (d = index, every fragment declares the total), the
+  // content NIP-44-encrypted to self, every 32-byte value unpadded base64url,
+  // an entry's embedded join material carrying no community_id (it inherits
+  // the entry's) and no seed when it equals current. Reading it is what lets
+  // a community joined in Vector under the same key show up here; writing it
+  // is what lets Vector see one joined here. The retired single-event 13302
+  // is still read and written for older coinos devices.
+  const LIST_FRAG_KIND = 33302;
+  const STOCK_RELAYS = ['wss://jskitty.com/nostr', 'wss://asia.vectorapp.io/nostr', 'wss://relay.ditto.pub', 'wss://relay.dreamith.to'];
+  const LIST_FRAG_BYTES = 48 * 1024;
+  const b64of = (v) => (/^[0-9a-f]{64}$/i.test(v || '') ? base64urlnopad.encode(hexToBytes(v.toLowerCase())) : v);
+  const hexOf = (v) => {
+    if (typeof v !== 'string' || v.length !== 43) return v;
+    try { const b = base64urlnopad.decode(v); return b.length === 32 ? bytesToHex(b) : v; } catch { return v; }
+  };
+  // where a list can live: our relays, the stock CORD set (where Vector's
+  // lands when its own relays refuse the kind), and every held community's
+  const listRelays = () => [...new Set([...DM_RELAYS, ...STOCK_RELAYS, ...communities().flatMap((jm) => jm.relays || [])])].slice(0, 12);
+  const fragMaterial = (jm) => {
+    const m = jmSubset(jm);
+    return {
+      owner: b64of(m.owner), owner_salt: b64of(m.owner_salt), community_root: b64of(m.community_root), root_epoch: m.root_epoch || 0,
+      ...(m.control_pk ? { control_pk: b64of(m.control_pk) } : {}),
+      channels: (m.channels || []).map((c) => ({ id: b64of(c.id), key: b64of(c.key || m.community_root), epoch: c.epoch || 0, name: c.name })),
+      relays: m.relays || [], name: m.name,
+    };
+  };
+  const buildFragments = (s) => {
+    const entries = s.communities.filter((jm) => (s.tombstones[jm.community_id] || 0) <= (jm.added_at || 0))
+      .map((jm) => ({ community_id: b64of(jm.community_id), current: fragMaterial(jm), added_at: jm.added_at || 0 }));
+    const tombstones = Object.entries(s.tombstones).map(([community_id, removed_at]) => ({ community_id: b64of(community_id), removed_at }));
+    const frags = [{ frags: 1, entries: [], tombstones: [] }];
+    const size = (f) => JSON.stringify(f).length;
+    for (const e of entries) {
+      const last = frags[frags.length - 1];
+      if (!last.entries.length || size(last) + JSON.stringify(e).length < LIST_FRAG_BYTES) last.entries.push(e);
+      else frags.push({ frags: 1, entries: [e], tombstones: [] });
+    }
+    for (const t of tombstones) {
+      const last = frags[frags.length - 1];
+      if (!last.tombstones.length || size(last) + JSON.stringify(t).length < LIST_FRAG_BYTES) last.tombstones.push(t);
+      else frags.push({ frags: 1, entries: [], tombstones: [t] });
+    }
+    for (const f of frags) f.frags = frags.length;
+    return frags;
+  };
+  const unmaterial = (m, cid) => ({
+    community_id: cid, owner: hexOf(m.owner), owner_salt: hexOf(m.owner_salt), community_root: hexOf(m.community_root),
+    root_epoch: Number(m.root_epoch) || 0, ...(m.control_pk ? { control_pk: hexOf(m.control_pk) } : {}),
+    channels: (m.channels || []).map((c) => ({ id: hexOf(c.id), ...(c.key ? { key: hexOf(c.key) } : {}), epoch: Number(c.epoch) || 0, name: c.name })),
+    relays: Array.isArray(m.relays) ? m.relays : [], name: m.name || '',
+  });
+  // the fragments a reader holds, unioned into the 13302-shaped document
+  const defragment = (frags) => {
+    const doc = { entries: [], tombstones: [] };
+    for (const f of frags) {
+      for (const e of f.entries || []) {
+        if (!e || !e.current) continue;
+        const cid = hexOf(e.community_id);
+        const current = unmaterial(e.current, cid);
+        doc.entries.push({ community_id: cid, seed: e.seed ? unmaterial(e.seed, cid) : current, current, added_at: Number(e.added_at) || 0 });
+      }
+      for (const t of f.tombstones || []) doc.tombstones.push({ community_id: hexOf(t.community_id), removed_at: Number(t.removed_at) || 0 });
+    }
+    return doc;
+  };
+  // Fetch one identity's fragments: newest per index wins (an age tie falls to
+  // the lower id), the newest fragment's declared total governs, and each
+  // index's created_at is kept so a rewrite can exceed it.
+  async function readFragments(id, evs) {
+    const newest = new Map();
+    for (const e of evs) {
+      if (e.kind !== LIST_FRAG_KIND || e.pubkey !== id.pk) continue;
+      const idx = parseInt(e.tags.find((t) => t[0] === 'd')?.[1], 10);
+      if (!(idx >= 0)) continue;
+      const cur = newest.get(idx);
+      if (!cur || e.created_at > cur.created_at || (e.created_at === cur.created_at && e.id < cur.id)) newest.set(idx, e);
+    }
+    const frags = new Map(); const createdAt = {};
+    for (const [idx, e] of newest) {
+      try { const f = JSON.parse(await id.dec(e.content)); if (f && typeof f === 'object') { frags.set(idx, f); createdAt[idx] = e.created_at; } } catch {}
+    }
+    if (!frags.size) return null;
+    let top = null; for (const [idx, f] of frags) if (!top || createdAt[idx] > createdAt[top] || (createdAt[idx] === createdAt[top] && (f.frags || 1) > (frags.get(top).frags || 1))) top = idx;
+    const declared = Math.max(1, Number(frags.get(top).frags) || 1);
+    const live = [...frags.entries()].filter(([idx]) => idx < declared).map(([, f]) => f);
+    return { doc: defragment(live), createdAt, declared, complete: live.length === declared };
+  }
+  async function publishFragments(ids, prevAt = {}) {
+    const s = st();
+    const frags = buildFragments(s);
+    const now = Math.floor(Date.now() / 1000);
+    for (const id of ids)
+      for (let i = 0; i < frags.length; i++) {
+        try {
+          const created_at = Math.max(now, ((prevAt[id.pk] || {})[i] || 0) + 1);
+          const evt = await id.sign({ kind: LIST_FRAG_KIND, tags: [['d', String(i)]], content: await id.enc(JSON.stringify(frags[i])), created_at });
+          publishOn(listRelays(), evt);
+        } catch {}
+      }
+  }
+
   let listsSynced = false;
-  async function syncLists() {
-    if (listsSynced) return;
+  let listsSyncedAt = 0;
+  let listLiveSub = null;
+  const fragAt = {}; // pk -> { index: created_at } as last read
+  // Re-sync is cheap and a join made in another client should show up soon
+  // after: the home view asks again after a minute, and a live subscription
+  // on the fragment kind brings a fresh write straight in.
+  async function syncLists({ force = false } = {}) {
+    if (listsSynced && !force) return;
     const ids = await selfCryptors();
     if (!ids.length) return;
-    listsSynced = true;
-    const evs = await queryOn(DM_RELAYS, { kinds: [13302, 13303], authors: ids.map((i) => i.pk) }, 3500);
+    listsSynced = true; listsSyncedAt = Date.now();
+    const authors = ids.map((i) => i.pk);
+    const [evs, fragEvs] = await Promise.all([
+      queryOn(DM_RELAYS, { kinds: [13302, 13303], authors }, 3500),
+      queryOn(listRelays(), { kinds: [LIST_FRAG_KIND], authors }, 4500),
+    ]);
+    if (!listLiveSub) {
+      listLiveSub = subscribeOn(listRelays(), { kinds: [LIST_FRAG_KIND], authors, since: Math.floor(Date.now() / 1000) }, () => {
+        clearTimeout(listLiveSub.t); listLiveSub.t = setTimeout(() => syncLists({ force: true }).catch(() => {}), 1500);
+      });
+      allUnsubs.push(() => { try { listLiveSub(); } catch {} listLiveSub = null; });
+    }
     let changed = false;
     const remoteDocs = new Set();
+    const remoteLive = new Set(); let anyFrag = false;
+    for (const id of ids) {
+      const got = await readFragments(id, fragEvs);
+      if (!got) continue;
+      anyFrag = true; fragAt[id.pk] = got.createdAt;
+      for (const e of got.doc.entries) if (!(got.doc.tombstones.find((t) => t.community_id === e.community_id)?.removed_at > e.added_at)) remoteLive.add(e.community_id);
+      changed = mergeCommunityList(got.doc) || changed;
+    }
     for (const kind of [13302, 13303])
       for (const id of ids) {
         const newest = evs.filter((e) => e.kind === kind && e.pubkey === id.pk).sort((a, b) => b.created_at - a.created_at)[0];
@@ -1713,6 +1891,7 @@ export function messagesFeature(ctx) {
           else changed = mergeInviteList(doc) || changed;
         } catch {}
       }
+    healInviteBundles().catch(() => {});
     if (changed) {
       // cache-only here too — subscription waits for the user to open Chat
       for (const jm of communities()) ensureRoom(jm, { subscribe: ui.chatOpen });
@@ -1725,6 +1904,11 @@ export function messagesFeature(ctx) {
       || current.some(([kind, doc]) => !remoteDocs.has(kind + ':' + doc));
     if (anyMissing && (s.communities.length || Object.keys(s.invites).length || Object.keys(s.tombstones).length))
       publishLists();
+    // the fragmented form: write it when no copy exists, or ours knows a
+    // membership (or a leave) the relay copy doesn't
+    const localLive = s.communities.filter((jm) => (s.tombstones[jm.community_id] || 0) <= (jm.added_at || 0)).map((jm) => jm.community_id);
+    const fragStale = !anyFrag || localLive.some((cid) => !remoteLive.has(cid)) || [...remoteLive].some((cid) => !localLive.includes(cid) && s.tombstones[cid]);
+    if (fragStale && (localLive.length || Object.keys(s.tombstones).length)) publishFragments(ids, fragAt);
   }
 
   async function leaveCommunity(room) {
@@ -3742,7 +3926,7 @@ export function messagesFeature(ctx) {
   function noteSheet() {
     if (!ui.noteSheet) return null;
     const ev = ui.noteSheet;
-    const close = () => { ui.noteSheet = null; render(); };
+    const close = () => { ui.noteSheet = null; ui.emojiPick = null; render(); };
     const mine = isMe(ev.pubkey);
     const item = (icon, label, onClick, danger) => h('button', {
       class: 'btn-block', style: 'text-align:left' + (danger ? ';color:var(--red,#c0392b)' : ''),
@@ -3867,10 +4051,7 @@ export function messagesFeature(ctx) {
       onClick: (e) => { if (e.target === e.currentTarget) close(); },
     },
       h('div', { class: 'card col msg-sheet' },
-        h('div', { class: 'msg-sheet-emojis' },
-          REACT_EMOJIS.map((e2) => h('button', {
-            onClick: () => { close(); reactTo(ev, e2).catch(() => {}); },
-          }, e2))),
+        reactRow(null, (e2) => { close(); reactTo(ev, e2).catch(() => {}); }),
         h('button', { class: 'btn-ghost btn-block', onClick: close }, t('back'))));
   }
 
@@ -4968,6 +5149,7 @@ export function messagesFeature(ctx) {
     // Threads you've since replied to should stop being strangers to the
     // worker; throttled inside, so this is cheap on every render.
     syncInbox().catch(() => {});
+    if (Date.now() - listsSyncedAt > 60_000) syncLists({ force: true }).catch(() => {});
     for (const jm of communities()) ensureRoom(jm);
 
     for (const peer of threads.keys()) profileOf(peer); // names and faces, in one batch
@@ -5434,7 +5616,7 @@ export function messagesFeature(ctx) {
     const my = myPubkeys();
     const reacts = dmReacts.get(m.rumor.id);
     const myReact = reacts && my.map((pk) => reacts.get(pk)).find(Boolean);
-    const close = () => { ui.msgSheet = null; render(); };
+    const close = () => { ui.msgSheet = null; ui.emojiPick = null; render(); };
     const item = (icon, label, onClick) => h('button', { class: 'msg-sheet-item', onClick },
       h('span', { class: 'msg-sheet-ico' }, icon), label);
     return h('div', {
@@ -5442,18 +5624,14 @@ export function messagesFeature(ctx) {
       onClick: (e) => { if (e.target === e.currentTarget) close(); },
     },
       h('div', { class: 'card col msg-sheet' },
-        h('div', { class: 'msg-sheet-emojis' },
-          REACT_EMOJIS.map((e2) => h('button', {
-            class: e2 === myReact ? 'on' : '',
-            onClick: () => { close(); sendDmReaction(peer, m, e2); },
-          }, e2))),
-        item('↩', t('msgReply'), () => {
+        reactRow(myReact, (e2) => { close(); sendDmReaction(peer, m, e2); }),
+        ui.emojiPick ? null : item('↩', t('msgReply'), () => {
           ui.msgReplyTo = m.rumor.id;
           close();
           setTimeout(() => document.getElementById('msg-draft')?.focus(), 50);
         }),
-        !m.mine && canZapPk(m.rumor.pubkey) ? item('⚡', t('msgZap'), () => { close(); zapMessage(m.rumor.pubkey, m.rumor.id); }) : null,
-        item('⧉', t('copy'), async () => {
+        !ui.emojiPick && !m.mine && canZapPk(m.rumor.pubkey) ? item('⚡', t('msgZap'), () => { close(); zapMessage(m.rumor.pubkey, m.rumor.id); }) : null,
+        ui.emojiPick ? null : item('⧉', t('copy'), async () => {
           try { await navigator.clipboard.writeText(m.rumor.content); toast(t('copied')); } catch {}
           close();
         })));

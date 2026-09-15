@@ -942,6 +942,7 @@ const STR = {
     notifOnDevice: 'Notifications are on for this device.',
     notifPayRecv: 'Payments received',
     notifDm: 'Direct messages',
+    notifMention: 'Replies and mentions on nostr',
     notifChatHint: 'Community chat is opt-in per room — turn it on from a room’s menu.',
     notifPaySent: 'Payments sent by connected apps',
     notifPaySentHint: 'A heads-up when a connected app — a nostr client zapping, for example — spends from this wallet while it’s closed.',

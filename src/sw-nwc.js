@@ -44,13 +44,16 @@ self.addEventListener('push', (e) => {
         payment: ['Payment received', data.amountSat ? `+${Number(data.amountSat).toLocaleString()} sats — open coinos to see it.` : 'Open coinos to see it.'],
         dm: dmName ? [dmName, 'sent you a message.'] : ['New message', 'You have a new private message.'],
         chat: ['New chat activity', 'There are new messages in your communities.'],
+        mention: [data.reply ? 'New reply to your post' : 'You were mentioned', data.text || 'Open coinos to see it.'],
       };
       const [title, body] = T[data.reason] || T.chat;
+      // a reply lands you in the Notifications list, where it is
+      const target = data.reason === 'mention' ? { url: './?open=notifs', view: 'notifs' } : { url: './' };
       await self.registration.showNotification(title, {
         body,
         icon: 'icon-192.png', badge: 'badge-96.png',
-        tag: 'notify-' + (data.reason || 'chat'), renotify: data.reason === 'payment',
-        data: { url: './' },
+        tag: 'notify-' + (data.reason || 'chat'), renotify: data.reason === 'payment' || data.reason === 'mention',
+        data: target,
       });
     })());
     return;
@@ -102,10 +105,15 @@ self.addEventListener('push', (e) => {
 
 self.addEventListener('notificationclick', (e) => {
   e.notification.close();
+  const d = (e.notification && e.notification.data) || {};
   e.waitUntil((async () => {
     const all = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
     const open = all.find((c) => 'focus' in c);
-    if (open) return open.focus();
-    if (self.clients.openWindow) return self.clients.openWindow('./');
+    if (open) {
+      // an open window goes where the notification points, without reloading
+      if (d.view) { try { open.postMessage({ type: 'open', view: d.view }); } catch (_) {} }
+      return open.focus();
+    }
+    if (self.clients.openWindow) return self.clients.openWindow(d.url || './');
   })());
 });

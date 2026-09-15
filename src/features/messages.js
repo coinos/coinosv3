@@ -44,6 +44,18 @@ const CACHE_MAX = 50; // messages kept per channel / per DM thread in feature st
 // and need no billboard.
 const CLIENT_TAG = ['client', 'coinos'];
 
+// A view the URL asks to open (a notification tap): read once, then taken
+// off the address so a reload doesn't repeat it.
+const OPEN_VIEW = (() => {
+  try {
+    const v = new URLSearchParams(location.search).get('open');
+    if (!v) return null;
+    const u = new URL(location.href); u.searchParams.delete('open');
+    history.replaceState(null, '', u.pathname + (u.search || ''));
+    return v;
+  } catch { return null; }
+})();
+
 export function messagesFeature(ctx) {
   const { h, ui, render, wallet, toast, hook } = ctx;
 
@@ -1295,7 +1307,7 @@ export function messagesFeature(ctx) {
     // per-category opt-outs travel with the registration so the notifier
     // never sends what the user turned off (a suppressed-but-delivered push
     // would earn Chrome's generic "updated in background" nag instead)
-    const reasons = { payment: s.reasons?.payment !== false, dm: s.reasons?.dm !== false };
+    const reasons = { payment: s.reasons?.payment !== false, dm: s.reasons?.dm !== false, mention: s.reasons?.mention !== false };
     // Stamp the network: the same seed makes the same nostr pubkey on mainnet
     // AND staging, so without this the notifier fans a mainnet payment push
     // out to the staging PWA's subscription too — and tapping it opened
@@ -1356,6 +1368,7 @@ export function messagesFeature(ctx) {
             : h('div', { class: 'small faint' }, t('notifOnDevice')),
       rowT(t('notifPayRecv'), 'payment'),
       rowT(t('notifDm'), 'dm'),
+      rowT(t('notifMention'), 'mention'),
       h('div', { class: 'small faint' }, t('notifChatHint')));
   }
 
@@ -5361,6 +5374,7 @@ export function messagesFeature(ctx) {
   let notifSeenAtOpen = 0; // what counted as new when the list was opened
   function openNotifs() {
     notifSeenAtOpen = notifSeen();
+    ui.chatOpen = true;
     ui.msgView = 'notifs';
     notifNow();
     refreshNotifs(true).catch(() => {});
@@ -5572,6 +5586,14 @@ export function messagesFeature(ctx) {
       setTimeout(() => {
         try { const me = ctx.shownPubkey && ctx.shownPubkey(); if (me) prefetchProfilePage(me); } catch {}
       }, 2500);
+      // A tapped "new reply" notification lands here: as ?open=notifs when
+      // it had to open a window, or as a worker message when one was open.
+      if (OPEN_VIEW === 'notifs') setTimeout(openNotifs, 0);
+      try {
+        navigator.serviceWorker?.addEventListener('message', (ev) => {
+          if (ev.data && ev.data.type === 'open' && ev.data.view === 'notifs') openNotifs();
+        });
+      } catch {}
       if (urlInvite && !pendingLink) {
         loadLinkInvite(urlInvite);
         setTimeout(() => { ui.chatOpen = true; ui.msgView = 'home'; render(); }, 0);

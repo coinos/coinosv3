@@ -138,7 +138,8 @@ function resubscribeNotify() {
   if (!ptags.length && !authors.length) return;
   const filters = [];
   // DMs / direct invites / zap receipts land p-tagged at the user
-  if (ptags.length) filters.push({ kinds: [1059, 9735, 9737], '#p': ptags, since: Math.floor(Date.now() / 1000) });
+  // ...as do replies and mentions (kind 1 naming the user)
+  if (ptags.length) filters.push({ kinds: [1059, 9735, 9737, 1], '#p': ptags, since: Math.floor(Date.now() / 1000) });
   // community chat: wraps authored by a channel's derived stream key
   if (authors.length) filters.push({ kinds: [1059], authors, since: Math.floor(Date.now() / 1000) });
   // one sub per filter — the pool API takes a single filter object
@@ -151,7 +152,7 @@ function resubscribeNotify() {
 // DMs are throttled barely at all now: the device drops the ones it decides
 // are noise (a stranger, or our own sent-copy), and a server-side cooldown
 // would let a discarded push swallow the friend's message that followed it.
-const COOLDOWN = { payment: 10_000, dm: 1_000, chat: 90_000 };
+const COOLDOWN = { payment: 10_000, dm: 1_000, chat: 90_000, mention: 5_000 };
 const lastPush = new Map(); // endpointId:reason -> ts
 const seenNotifyEvents = new Map(); // event id -> ts
 function onNotifyEvent(ev) {
@@ -162,6 +163,20 @@ function onNotifyEvent(ev) {
     for (const [k, t] of seenNotifyEvents) if (t < cut) seenNotifyEvents.delete(k);
   }
   const p = ev.tags?.find((t) => t[0] === 'p')?.[1];
+  // A public reply or mention: the note is readable here, so the device
+  // gets what it needs to say who and what — an excerpt, and whether it
+  // answers a post (e tag) or just names the person.
+  if (ev.kind === 1) {
+    const ps = (ev.tags || []).filter((t) => t[0] === 'p' && t[1]).map((t) => t[1]);
+    const reply = (ev.tags || []).some((t) => t[0] === 'e' && t[1]);
+    const extra = { from: ev.pubkey, reply, text: String(ev.content || '').replace(/\s+/g, ' ').slice(0, 140) };
+    for (const [id, r] of Object.entries(notifyRegs)) {
+      const mine = r.ptags || [];
+      if (mine.includes(ev.pubkey)) continue; // their own post, not news
+      if (ps.some((x) => mine.includes(x))) pushNotify(id, r, 'mention', extra).catch(() => {});
+    }
+    return;
+  }
   const reason = ev.kind === 9735 || ev.kind === 9737 ? 'payment'
     : p && notifyPtags().includes(p) ? 'dm' : 'chat';
   // A wrapped DM hides its sender from us by design, so we can't decide here
@@ -423,7 +438,7 @@ const server = Bun.serve({
         const id = Bun.hash(sub_.endpoint).toString(36);
         // per-category opt-outs; absent means everything on (older clients)
         const reasons = {};
-        for (const k of ['payment', 'dm', 'chat']) {
+        for (const k of ['payment', 'dm', 'chat', 'mention']) {
           if (typeof body.notify.reasons?.[k] === 'boolean') reasons[k] = body.notify.reasons[k];
         }
         notifyRegs[id] = {

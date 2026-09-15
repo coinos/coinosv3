@@ -193,6 +193,7 @@ const STR = {
     msgAddPerson: 'Add person',
     msgNewChannel: 'New channel',
     msgAdmin: 'admin',
+    msgAttachFailed: 'Attachment unavailable',
     msgEdited: '(edited)',
     msgReact: 'React',
     msgZap: 'Zap',

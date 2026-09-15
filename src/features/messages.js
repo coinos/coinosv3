@@ -3267,6 +3267,90 @@ export function messagesFeature(ctx) {
     return h('a', { href: url, target: '_blank', rel: 'noopener noreferrer' }, shown);
   }
 
+  // ---- encrypted attachments (NIP-92 imeta + NIP-17 file fields) ----
+  // A picture in a Concord channel never reaches the media server in the
+  // clear: the sender encrypts it under a one-off key, uploads the blob to
+  // Blossom, and puts the pointer in an imeta tag — url, mime, aes-gcm key
+  // and nonce, the plaintext's sha256 (ox), a size and dimensions. The bubble
+  // used to show nothing for such a message (its content is empty). Now the
+  // blob is fetched, decrypted here, checked against the hash, and shown
+  // from an object URL. A blob that fails the check fails closed.
+  const ATTACH_MAX = 25 * 1024 * 1024;
+  const attachCache = new Map(); // url -> { state: 'loading'|'ready'|'error', src, blob }
+  const parseImeta = (tag) => {
+    const a = { fallback: [] };
+    for (const f of tag.slice(1)) {
+      const i = f.indexOf(' ');
+      if (i < 0) continue;
+      const k = f.slice(0, i), v = f.slice(i + 1);
+      if (k === 'fallback') a.fallback.push(v); else a[k] = v;
+    }
+    return a.url ? a : null;
+  };
+  const attachmentsOf = (rumor) => (rumor.tags || []).filter((t) => t[0] === 'imeta').map(parseImeta).filter(Boolean);
+  async function loadAttachment(a) {
+    const entry = { state: 'loading' };
+    attachCache.set(a.url, entry);
+    try {
+      if (+a.size > ATTACH_MAX) throw new Error('too big');
+      let buf = null;
+      for (const url of [a.url, ...a.fallback]) {
+        try {
+          const res = await fetch(url, { mode: 'cors', signal: AbortSignal.timeout(30_000) });
+          if (!res.ok) continue;
+          buf = await res.arrayBuffer();
+          if (buf.byteLength > ATTACH_MAX) throw new Error('too big');
+          break;
+        } catch (e) { if (String(e.message).includes('too big')) throw e; }
+      }
+      if (!buf) throw new Error('unreachable');
+      let bytes = new Uint8Array(buf);
+      const alg = (a['encryption-algorithm'] || '').toLowerCase();
+      if (alg) {
+        if (alg !== 'aes-gcm' || !a['decryption-key'] || !a['decryption-nonce']) throw new Error('unsupported');
+        const key = await crypto.subtle.importKey('raw', hexToBytes(a['decryption-key']), 'AES-GCM', false, ['decrypt']);
+        bytes = new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: hexToBytes(a['decryption-nonce']) }, key, bytes));
+      }
+      if (a.ox) {
+        const digest = bytesToHex(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)));
+        if (digest !== a.ox.toLowerCase()) throw new Error('hash mismatch');
+      }
+      const blob = new Blob([bytes], { type: a.m || 'application/octet-stream' });
+      Object.assign(entry, { state: 'ready', blob, src: URL.createObjectURL(blob) });
+    } catch (e) {
+      entry.state = 'error';
+      console.warn('attachment:', a.url, e.message);
+    }
+    scheduleRepaint();
+  }
+  // The nodes for a rumor's attachments: a picture inline (tap to view),
+  // any other file as a download by name, a grey box the picture's shape
+  // while it loads, and a quiet note when it can't be had.
+  function attachmentNodes(rumor) {
+    return attachmentsOf(rumor).map((a) => {
+      const isImg = /^image\//i.test(a.m || '') || /\.(png|jpe?g|gif|webp|avif)$/i.test(a.name || a.url.split('?')[0]);
+      const encrypted = !!a['encryption-algorithm'];
+      if (!encrypted && isImg) return urlNode(a.url, { isImage: true });
+      let entry = attachCache.get(a.url);
+      if (!entry && isImg) { loadAttachment(a); entry = attachCache.get(a.url); }
+      const [w, hgt] = String(a.dim || '').split('x').map(Number);
+      const ratio = w > 0 && hgt > 0 ? `${w}/${hgt}` : '4/3';
+      if (entry && entry.state === 'ready') {
+        if (isImg) return h('img', {
+          src: entry.src, class: 'note-img clickable', alt: a.name || '',
+          onClick: (e) => { e.stopPropagation(); ctx.openImage && ctx.openImage(entry.src); },
+        });
+        return h('a', { class: 'chat-attach', href: entry.src, download: a.name || 'file', onClick: (e) => e.stopPropagation() },
+          '📎 ' + (a.name || 'file') + (a.size ? ` · ${Math.round(+a.size / 1024)} KB` : ''));
+      }
+      if (entry && entry.state === 'error') return h('div', { class: 'small muted' }, t('msgAttachFailed'));
+      if (!isImg) return h('button', {
+        class: 'chat-attach linklike', onClick: (e) => { e.stopPropagation(); if (!attachCache.has(a.url)) loadAttachment(a); },
+      }, '📎 ' + (a.name || 'file') + (a.size ? ` · ${Math.round(+a.size / 1024)} KB` : ''));
+      return h('div', { class: 'chat-attach-ph', style: `aspect-ratio:${ratio}` });
+    });
+  }
+
   function noteBody(text, depth = 0) {
     const out = [];
     for (const part of String(text || '').split(NOTE_SPLIT)) {
@@ -5026,6 +5110,7 @@ export function messagesFeature(ctx) {
           },
             replyQuote(room, chId, m),
             ...noteBody(text),
+            ...attachmentNodes(m.rumor),
             edit ? h('span', { class: 'chat-edited' }, ' ', t('msgEdited')) : null,
             mine
               ? h('button', { class: 'chat-del', title: t('msgDelete'), onClick: () => deleteMessage(room, chId, m) }, '×')
@@ -5298,7 +5383,7 @@ export function messagesFeature(ctx) {
                     ui.msgSheet = ui.msgSheet === m.rumor.id ? null : m.rumor.id;
                     render();
                   },
-                }, dmQuote(m), ...noteBody(m.rumor.content), dmChips(m)),
+                }, dmQuote(m), ...noteBody(m.rumor.content), ...attachmentNodes(m.rumor), dmChips(m)),
                 h('div', { class: 'chat-time' }, timeLabel(m.rumor.created_at * 1000)))))
         : [h('div', { class: 'muted small', style: 'text-align:center;padding:24px 0' }, t('msgNoDmsYet'))])),
       dmReplyBar(),

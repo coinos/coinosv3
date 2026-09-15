@@ -1003,3 +1003,7 @@ body::after {
   .footer { padding-top: 14px; padding-bottom: 0; }
   .tabs { margin: 10px 0; }
 }
+
+/* an encrypted picture on its way: a box the picture's shape, then the picture */
+.chat-attach-ph { display: block; width: 240px; max-width: 100%; max-height: 320px; margin-top: 6px; border-radius: 10px; background: var(--line); }
+.chat-attach { display: inline-block; margin-top: 6px; }

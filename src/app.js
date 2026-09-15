@@ -3794,16 +3794,19 @@ function balanceCard() {
       h('div', { class: 'amt', style: firstLoad ? 'opacity:.3' : '' },
         firstLoad ? h('span', { class: 'spinner sm', style: 'margin-right:8px' }) : null,
         animatedAmount('bal:' + view, viewSpending ? spending : saving), ' ', unitTag('unit')),
-      (pending > 0 && !viewSpending) || (viewSpending && featLines.length)
-        ? h('div', { class: 'split' },
-            // Pending incoming is an on-chain fact — it belongs to the Saving
-            // face; the feature lines (ark's Moving…) belong to Spending.
-            pending > 0 && !viewSpending
-              ? h('div', {}, h('div', { class: 'k' }, t('pending')), h('div', { class: 'v pending' }, fmtAmount(pending), ' ', unitTag()))
-              : null,
-            ...(viewSpending ? featLines : []).map((l) =>
-              h('div', {}, h('div', { class: 'k' }, l.label), h('div', { class: 'v' }, fmtAmount(l.sat), ' ', unitTag()))))
-        : null);
+      // Pending incoming is an on-chain fact — it belongs to the Saving face.
+      // A feature line says which side it belongs to (ark's Moving… is
+      // Spending; a gift's Locked reservation is on-chain, so Saving) — one
+      // face used to take them all, and a gift sent from Savings showed up
+      // as locked money under Spending.
+      (() => {
+        const lines = (viewSpending ? [] : pending > 0 ? [{ label: t('pending'), sat: pending, cls: 'v pending' }] : [])
+          .concat(featLines.filter((l) => (l.side || 'spending') === (viewSpending ? 'spending' : 'savings')));
+        return lines.length
+          ? h('div', { class: 'split' },
+              ...lines.map((l) => h('div', {}, h('div', { class: 'k' }, l.label), h('div', { class: l.cls || 'v' }, fmtAmount(l.sat), ' ', unitTag()))))
+          : null;
+      })());
   };
   // Everything below the balance figure — the move button, top-up offer,
   // spend-setup offer and the inline unfold panel. In carousel mode these

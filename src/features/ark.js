@@ -3424,7 +3424,7 @@ export function arkFeature(ctx) {
       const a = ((arkStateNow() || {}).actions || []).find(
         (x) => x.type === 'board' && x.fundingTxid && !['done', 'failed'].includes(x.step) && x.needConfs);
       const prog = a ? ` · ${Math.min(a.confs || 0, a.needConfs)}/${a.needConfs}` : '';
-      return [{ label: t('movingLabel') + prog, sat: b.boardingSat }];
+      return [{ label: t('movingLabel') + prog, sat: b.boardingSat, side: 'spending' }];
     },
     walletNotices() {
       // Everything the balance needs to say, said once. These used to be a

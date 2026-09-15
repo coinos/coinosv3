@@ -961,7 +961,8 @@ export function giftsFeature(ctx) {
     },
     balanceLines() {
       const locked = wallet.giftLockedValue();
-      return locked > 0 ? [{ label: t('lockedInGifts'), sat: locked }] : [];
+      // on-chain reservations: money still in Savings, spoken for
+      return locked > 0 ? [{ label: t('lockedInGifts'), sat: locked, side: 'savings' }] : [];
     },
     historyEntries(txs, sel) {
     // These are ON-CHAIN gift reservations — Savings timeline. Ark gifts show

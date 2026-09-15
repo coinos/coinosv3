@@ -72,12 +72,13 @@ export function makeDMRumor(senderPk, peerPk, text, extraTags = []) {
 
 // A reaction to a DM: a kind 7 rumor riding the same gift-wrap envelope
 // (the shape 0xchat and friends use), e-tagging the reacted message.
-export function makeDMReaction(senderPk, peerPk, targetId, emoji) {
+// extraTags: a NIP-30 ["emoji", code, url] when the reaction is a :code:
+export function makeDMReaction(senderPk, peerPk, targetId, emoji, extraTags = []) {
   const rumor = {
     kind: 7,
     pubkey: senderPk,
     content: emoji,
-    tags: [['p', peerPk], ['e', targetId]],
+    tags: [['p', peerPk], ['e', targetId], ...extraTags],
     created_at: now(),
   };
   rumor.id = getEventHash(rumor);

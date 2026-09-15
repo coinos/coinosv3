@@ -23,6 +23,11 @@ import {
   communityId, parseInviteLink, makeInviteLink, makeInviteBundleEvent, openInviteBundle,
 } from '../concord.js';
 import { makeDMRumor, makeDMReaction, unwrapDM, wrapDM } from '../dm.js';
+import {
+  EMOJI_SET_KIND, EMOJI_LIST_KIND, EMOJI_PARTIAL_RE, PACK_LINK_RE,
+  emojiTagMap, splitEmoji, emojiOnlyCount, outboundEmojiTags, shortcodeOf,
+  packAddr, parsePackRef, parsePackAddr, parseEmojiSet,
+} from '../emoji.js';
 import { saveInbox } from '../dm-inbox.js';
 import { makeSearcher, resultRows, fallbackAvatar, warmSearch } from '../recipient-search.js';
 import { getNetwork } from '../api.js';
@@ -86,6 +91,204 @@ export function messagesFeature(ctx) {
   const save = (s) => wallet.saveFeatureState('messages', s);
 
   const communities = () => [COMMUNITY, ...st().communities];
+
+  // ---- custom emoji (NIP-30 tags, NIP-51 emoji sets) ----------------------
+  // A message that says :pika_wave: carries an ["emoji", code, url] tag for
+  // it, so RENDERING never needs anything held locally. Two sources feed
+  // what you can type and pick: packs you hold (kind 30030 sets, listed in
+  // your kind 10030 — the list Vector reads and writes too, so a pack added
+  // in either app shows in both) and shortcodes LEARNED from messages seen,
+  // so anyone can answer a :pika_wave: with one.
+  const EMOJI_STATE = 'emoji';
+  const LEARNED_MAX = 400;
+  let emojiState = null;
+  const emojiSt = () => {
+    if (!emojiState) {
+      const s = wallet.loadFeatureState(EMOJI_STATE, {}) || {};
+      s.packs ||= {};   // { [addr]: { title, image, emojis: [[code, url]], at } }
+      s.order ||= [];   // pack addrs in picker order
+      s.learned ||= {}; // { [code]: url }, insertion-ordered, oldest first
+      s.list ||= { at: 0, tags: [] }; // our kind 10030 as last seen or published
+      s.unfetched ||= []; // listed packs no relay answered for — kept on the list
+      emojiState = s;
+    }
+    return emojiState;
+  };
+  let emojiSaveTimer = 0;
+  const saveEmoji = () => {
+    clearTimeout(emojiSaveTimer);
+    emojiSaveTimer = setTimeout(() => { try { wallet.saveFeatureState(EMOJI_STATE, emojiSt()); } catch {} }, 500);
+  };
+  // code → image url: held packs first (in order), then what's been seen
+  const emojiUrl = (code) => {
+    const s = emojiSt();
+    for (const addr of s.order) {
+      const p = s.packs[addr];
+      if (!p) continue;
+      for (const [c, u] of p.emojis) if (c === code) return u;
+    }
+    return s.learned[code] || null;
+  };
+  // everything typeable: [{ code, url, pack }], packs first, newest-seen next
+  function customEmojis() {
+    const s = emojiSt();
+    const out = [];
+    const seen = new Set();
+    for (const addr of s.order) {
+      const p = s.packs[addr];
+      if (!p) continue;
+      for (const [code, url] of p.emojis) {
+        if (seen.has(code)) continue;
+        seen.add(code);
+        out.push({ code, url, pack: p.title });
+      }
+    }
+    for (const [code, url] of Object.entries(s.learned).reverse()) {
+      if (seen.has(code)) continue;
+      seen.add(code);
+      out.push({ code, url, pack: '' });
+    }
+    return out;
+  }
+  // Remember the emoji tags a message (or reaction) arrived with. Bounded:
+  // the oldest fall off, and re-seeing one moves it back to the front.
+  function noteEmoji(rumor) {
+    const m = emojiTagMap(rumor && rumor.tags);
+    if (!m.size) return;
+    const s = emojiSt();
+    let changed = false;
+    for (const [code, url] of m) {
+      if (s.learned[code] === url) continue;
+      delete s.learned[code];
+      s.learned[code] = url;
+      changed = true;
+    }
+    if (!changed) return;
+    const keys = Object.keys(s.learned);
+    for (const k of keys.slice(0, Math.max(0, keys.length - LEARNED_MAX))) delete s.learned[k];
+    saveEmoji();
+  }
+  const emojiRelays = (extra = []) => [...new Set([...extra, ...zapRelays(), ...DM_RELAYS, ...STOCK_RELAYS])];
+  async function fetchPack(ref) {
+    const evs = await queryOn(emojiRelays(ref.relays), { kinds: [EMOJI_SET_KIND], authors: [ref.pubkey], '#d': [ref.identifier] }, 6000).catch(() => []);
+    const newest = (evs || []).sort((a, b) => b.created_at - a.created_at)[0];
+    return newest ? parseEmojiSet(newest) : null;
+  }
+  function holdPack(pack) {
+    const s = emojiSt();
+    s.packs[pack.addr] = { title: pack.title, image: pack.image, emojis: pack.emojis, at: pack.at };
+    if (!s.order.includes(pack.addr)) s.order.push(pack.addr);
+    s.unfetched = s.unfetched.filter((a) => a !== pack.addr);
+    saveEmoji();
+  }
+  const hasPack = (addr) => !!emojiSt().packs[addr];
+  // A pasted naddr / Vector share link, or the Add button on a pack link in
+  // chat: fetch the set, hold it, and put it on our list.
+  async function addPack(input) {
+    const ref = parsePackRef(input);
+    if (!ref) { toast(t('msgEmojiPackBad')); return false; }
+    const addr = packAddr(ref.pubkey, ref.identifier);
+    if (hasPack(addr)) { toast(t('msgEmojiPackHave')); return true; }
+    ui.emojiBusy = true; render();
+    const pack = await fetchPack(ref);
+    ui.emojiBusy = false;
+    if (!pack) { toast(t('msgEmojiPackBad')); render(); return false; }
+    holdPack(pack);
+    toast(t('msgEmojiPackAdded', { name: pack.title }));
+    render();
+    publishEmojiList().catch(() => {});
+    return true;
+  }
+  function removePack(addr) {
+    const s = emojiSt();
+    delete s.packs[addr];
+    s.order = s.order.filter((a) => a !== addr);
+    s.unfetched = s.unfetched.filter((a) => a !== addr);
+    saveEmoji();
+    render();
+    publishEmojiList().catch(() => {});
+  }
+  // a plain (unwrapped) event signed by the chat identity
+  const signPlain = (id, evt) => (id.signer instanceof Uint8Array ? finalizeEvent(evt, id.signer) : id.signer.signEvent(evt));
+  // Our kind 10030: the packs held as `a` tags. Every other tag of the list
+  // we last saw rides along (inline emoji, whatever another client keeps
+  // there), so publishing from here never strips what Vector wrote.
+  async function publishEmojiList() {
+    const id = await identity();
+    if (!id) return;
+    const s = emojiSt();
+    const kept = (s.list.tags || []).filter((x) => x[0] !== 'a');
+    const created_at = Math.max(Math.floor(Date.now() / 1000), (s.list.at || 0) + 1);
+    const tags = [...kept, ...[...new Set([...s.order, ...s.unfetched])].map((a) => ['a', a])];
+    const evt = await signPlain(id, { kind: EMOJI_LIST_KIND, content: '', tags, created_at });
+    s.list = { at: created_at, tags };
+    saveEmoji();
+    publishOn(emojiRelays(), evt);
+  }
+  // Adopt the newest kind 10030 on the relays when it's newer than what we
+  // hold: packs it lists arrive, packs it dropped go. Ten-minute throttle.
+  let emojiSyncAt = 0;
+  async function syncEmoji({ force = false } = {}) {
+    if (!force && Date.now() - emojiSyncAt < 10 * 60_000) return;
+    emojiSyncAt = Date.now();
+    const pks = myPubkeys();
+    if (!pks.length) return;
+    try {
+      const evs = await queryOn(emojiRelays(), { kinds: [EMOJI_LIST_KIND], authors: pks }, 5000);
+      const newest = (evs || []).sort((a, b) => b.created_at - a.created_at)[0];
+      const s = emojiSt();
+      if (!newest || newest.created_at <= (s.list.at || 0)) return;
+      const want = (newest.tags || []).filter((x) => x[0] === 'a' && parsePackAddr(x[1])).map((x) => x[1]);
+      s.list = { at: newest.created_at, tags: newest.tags || [] };
+      s.order = s.order.filter((a) => want.includes(a));
+      for (const a of Object.keys(s.packs)) if (!s.order.includes(a)) delete s.packs[a];
+      s.unfetched = [];
+      saveEmoji();
+      let changed = false;
+      for (const addr of want) {
+        if (s.packs[addr]) continue;
+        const pack = await fetchPack(parsePackAddr(addr));
+        if (pack) { holdPack(pack); changed = true; } else s.unfetched.push(addr);
+      }
+      // the list's own order wins over arrival order
+      s.order = want.filter((a) => s.packs[a]);
+      saveEmoji();
+      if (changed) scheduleRepaint();
+    } catch { emojiSyncAt = 0; }
+  }
+  const emojiImg = (code, url, cls = 'cemoji') =>
+    h('img', { class: cls, src: url, alt: ':' + code + ':', title: ':' + code + ':', loading: 'lazy' });
+  // A reaction's content as shown on its chip: the picture for a :code: we
+  // know (its own tag taught it to us), the text otherwise.
+  function reactNode(emoji) {
+    const code = shortcodeOf(emoji);
+    const url = code && emojiUrl(code);
+    return url ? emojiImg(code, url) : emoji;
+  }
+  // the NIP-30 tag a :code: reaction travels with
+  const reactEmojiTags = (emoji) => {
+    const code = shortcodeOf(emoji);
+    const url = code && emojiUrl(code);
+    return url ? [['emoji', code, url]] : [];
+  };
+  // a bubble that is nothing but one to three custom emoji shows them big
+  const emojiJumbo = (text, em) => {
+    if (!em || !em.size) return false;
+    const n = emojiOnlyCount(splitEmoji(text, (c) => em.get(c)));
+    return n > 0 && n <= 3;
+  };
+  // Vector's pack share link, rendered as what it is — with an Add button.
+  function packLinkNode(url, naddr) {
+    const ref = parsePackRef(naddr);
+    const addr = ref && packAddr(ref.pubkey, ref.identifier);
+    const have = !!addr && hasPack(addr);
+    return h('span', { class: 'pack-link' },
+      h('a', { href: url, target: '_blank', rel: 'noopener noreferrer' }, '🎨 ' + t('msgEmojiPackLink')),
+      h('button', {
+        class: 'btn-sm', type: 'button', disabled: have || !!ui.emojiBusy,
+        onClick: (e) => { e.stopPropagation(); addPack(naddr); },
+      }, have ? t('msgEmojiPackHave') : t('msgEmojiPackAdd')));
+  }
 
   // ---- unread -------------------------------------------------------------
   // A conversation is unread when its newest message from someone else is
@@ -854,6 +1057,7 @@ export function messagesFeature(ctx) {
       scheduleRepaint();
       return;
     }
+    noteEmoji(rumor); // custom emoji seen here become custom emoji you can send
     if (rumor.kind === 9) {
       const msgs = room.byChannel.get(channelId) || room.byChannel.set(channelId, new Map()).get(channelId);
       msgs.set(rumor.id, { rumor, author });
@@ -946,6 +1150,7 @@ export function messagesFeature(ctx) {
   // Clear the live element too.
   function clearDraft(key) {
     setDraft(key, '');
+    ui.emojiAc = null;
     const inp = document.getElementById('msg-draft');
     if (inp) inp.value = '';
   }
@@ -964,9 +1169,12 @@ export function messagesFeature(ctx) {
     // by replyQuote on every device that has the original)
     const replyTo = ui.msgReplyTo && room.byChannel.get(chId)?.has(ui.msgReplyTo) ? ui.msgReplyTo : null;
     ui.msgReplyTo = null;
+    ui.emojiAc = null;
+    // every :code: we can resolve travels with its picture (NIP-30), so the
+    // room renders it whether or not anyone else holds the pack
     const rumor = rumorWithId({
       kind: 9, pubkey: id.pubkey, content: text,
-      tags: [['channel', chId], ['epoch', String(room.chEpoch(chId))], ...(replyTo ? [['e', replyTo]] : []), ms], created_at,
+      tags: [['channel', chId], ['epoch', String(room.chEpoch(chId))], ...(replyTo ? [['e', replyTo]] : []), ...outboundEmojiTags(text, emojiUrl), ms], created_at,
     });
     const msgs = room.byChannel.get(chId) || room.byChannel.set(chId, new Map()).get(chId);
     const entry = { rumor, author: id.pubkey, pending: true };
@@ -1007,11 +1215,30 @@ export function messagesFeature(ctx) {
   const noteRecent = (e) => { try { localStorage.setItem(RECENT_KEY, JSON.stringify([e, ...recentEmojis().filter((x) => x !== e)].slice(0, 24))); } catch {} };
   // The reaction row for a sheet: recents lead the quick row, and the last
   // button opens the full picker in place — a search box and the grid.
+  // A picker entry: `e` is what gets sent (a character, or `:code:` for a
+  // custom emoji, which then carries `url`), `k` what search matches.
+  const emojiEntry = (e) => {
+    const code = shortcodeOf(e);
+    if (!code) return { e, k: '' };
+    const url = emojiUrl(code);
+    return url ? { e, k: code.toLowerCase(), url } : null; // a recent whose pack is gone
+  };
+  const emojiFace = (x) => (x.url ? emojiImg(shortcodeOf(x.e), x.url) : x.e);
   function reactRow(myReact, onPick) {
     const pick = (e) => { ui.emojiPick = null; noteRecent(e); onPick(e); };
     if (ui.emojiPick) {
       const q = (ui.emojiPick.q || '').trim().toLowerCase();
-      const hits = q ? EMOJI_LIB.filter((x) => x.k.includes(q) || x.e === q) : [...new Set([...recentEmojis(), ...EMOJI_LIB.map((x) => x.e)])].map((e) => ({ e }));
+      // custom emoji lead — packs you hold, then ones you've seen — and the
+      // standard set follows; a search matches shortcodes and keywords alike
+      const custom = customEmojis().map((x) => ({ e: ':' + x.code + ':', k: x.code.toLowerCase(), url: x.url }));
+      const std = EMOJI_LIB;
+      let hits;
+      if (q) hits = [...custom.filter((x) => x.k.includes(q)), ...std.filter((x) => x.k.includes(q) || x.e === q)];
+      else hits = [...recentEmojis().map(emojiEntry).filter(Boolean), ...custom, ...std];
+      const seen = new Set();
+      hits = hits.filter((x) => !seen.has(x.e) && seen.add(x.e));
+      const s = emojiSt();
+      const packs = s.order.map((addr) => ({ addr, ...s.packs[addr] })).filter((p) => p.title !== undefined);
       return h('div', { class: 'col', style: 'gap:8px' },
         h('input', {
           type: 'text', placeholder: t('msgEmojiSearch'), value: ui.emojiPick.q || '', autofocus: true,
@@ -1019,12 +1246,30 @@ export function messagesFeature(ctx) {
           onKeydown: (e) => { if (e.key === 'Enter' && hits.length) pick(hits[0].e); if (e.key === 'Escape') { ui.emojiPick = null; render(); } },
         }),
         h('div', { class: 'emoji-grid' },
-          hits.slice(0, 160).map((x) => h('button', { class: x.e === myReact ? 'on' : '', title: x.k || '', onClick: () => pick(x.e) }, x.e)),
-          !hits.length ? h('div', { class: 'small muted', style: 'padding:8px' }, t('msgEmojiNone')) : null));
+          hits.slice(0, 200).map((x) => h('button', { class: x.e === myReact ? 'on' : '', title: x.url ? x.e : x.k, onClick: () => pick(x.e) }, emojiFace(x))),
+          !hits.length ? h('div', { class: 'small muted', style: 'padding:8px' }, t('msgEmojiNone')) : null),
+        // the packs behind the custom ones, and the way to add another —
+        // Vector's share link or a bare naddr, both land the same set
+        h('div', { class: 'emoji-packs' },
+          packs.map((p) => h('span', { class: 'chat-react emoji-pack', title: p.addr },
+            p.image ? h('img', { class: 'cemoji', src: p.image, alt: '' }) : null, ' ', p.title || '…',
+            h('button', { type: 'button', class: 'linklike', title: t('msgEmojiPackRemove'), onClick: () => removePack(p.addr) }, '×'))),
+          ui.emojiPick.addPack
+            ? h('form', {
+                class: 'row gap6', style: 'width:100%',
+                onSubmit: async (e) => {
+                  e.preventDefault();
+                  const inp = e.target.querySelector('input');
+                  if (await addPack(inp.value)) { ui.emojiPick.addPack = false; render(); }
+                },
+              },
+                h('input', { type: 'text', class: 'grow', placeholder: t('msgEmojiPackHint'), autofocus: true, autocapitalize: 'none', autocomplete: 'off', spellcheck: 'false' }),
+                h('button', { class: 'btn-sm', type: 'submit', disabled: !!ui.emojiBusy }, ui.emojiBusy ? h('span', { class: 'spinner sm' }) : t('msgEmojiPackAdd')))
+            : h('button', { type: 'button', class: 'linklike small', onClick: () => { ui.emojiPick.addPack = true; render(); } }, '+ ' + t('msgEmojiAddPack'))));
     }
-    const quick = [...new Set([...recentEmojis(), ...REACT_EMOJIS])].slice(0, 6);
+    const quick = [...new Set([...recentEmojis(), ...REACT_EMOJIS])].map(emojiEntry).filter(Boolean).slice(0, 6);
     return h('div', { class: 'msg-sheet-emojis' },
-      quick.map((e2) => h('button', { class: e2 === myReact ? 'on' : '', onClick: () => pick(e2) }, e2)),
+      quick.map((x) => h('button', { class: x.e === myReact ? 'on' : '', onClick: () => pick(x.e) }, emojiFace(x))),
       h('button', { class: 'more', title: t('msgEmojiMore'), onClick: () => { ui.emojiPick = { q: '' }; render(); } }, '＋'));
   }
   async function sendReaction(room, chId, m, emoji) {
@@ -1034,7 +1279,7 @@ export function messagesFeature(ctx) {
     const { created_at, ms } = msTags(Date.now());
     const rumor = rumorWithId({
       kind: 7, pubkey: id.pubkey, content: emoji,
-      tags: [['channel', chId], ['epoch', String(room.chEpoch(chId))], ['e', m.rumor.id], ['k', '9'], ms], created_at,
+      tags: [['channel', chId], ['epoch', String(room.chEpoch(chId))], ['e', m.rumor.id], ['k', '9'], ...reactEmojiTags(emoji), ms], created_at,
     });
     const r = room.reactions.get(m.rumor.id) || room.reactions.set(m.rumor.id, new Map()).get(m.rumor.id);
     const prev = r.get(id.pubkey);
@@ -2047,11 +2292,13 @@ export function messagesFeature(ctx) {
         const mine = isMe(got.author);
         const to = got.rumor.tags?.find((x) => x[0] === 'p')?.[1];
         const peer = mine ? (to || got.peer || got.author) : got.author;
+        noteEmoji(got.rumor);
         noteDM(peer, got.rumor, mine);
         persistDms();
       } else if (got.rumor.kind === 7) {
         // a DM reaction (ours echoed back, or the peer's — 0xchat's shape)
         const target = got.rumor.tags?.find((x) => x[0] === 'e')?.[1];
+        noteEmoji(got.rumor);
         if (target) {
           (dmReacts.get(target) || dmReacts.set(target, new Map()).get(target)).set(got.author, got.rumor.content);
           scheduleRepaint();
@@ -2152,7 +2399,10 @@ export function messagesFeature(ctx) {
         continue;
       }
       for (const m of list)
-        threadOf(peer).set(m.id, { rumor: { id: m.id, pubkey: m.from, content: m.text, created_at: m.t, kind: 14 }, mine: isMe(m.from) });
+        threadOf(peer).set(m.id, {
+          rumor: { id: m.id, pubkey: m.from, content: m.text, created_at: m.t, kind: 14, tags: (m.em || []).map(([c, u]) => ['emoji', c, u]) },
+          mine: isMe(m.from),
+        });
     }
     bumpMsgRev();
     if (swept) save(s);
@@ -2210,7 +2460,8 @@ export function messagesFeature(ctx) {
     // echo folds into this entry instead of duplicating it.
     const replyTo = ui.msgReplyTo && threadOf(peer).has(ui.msgReplyTo) ? ui.msgReplyTo : null;
     ui.msgReplyTo = null;
-    const rumor = makeDMRumor(id.pubkey, peer, text, replyTo ? [['e', replyTo]] : []);
+    ui.emojiAc = null;
+    const rumor = makeDMRumor(id.pubkey, peer, text, [...(replyTo ? [['e', replyTo]] : []), ...outboundEmojiTags(text, emojiUrl)]);
     const entry = { rumor, mine: true, pending: true };
     threadOf(peer).set(rumor.id, entry);
     clearDraft('dm:' + peer);
@@ -2247,7 +2498,7 @@ export function messagesFeature(ctx) {
     if (!id) { noIdToast(); return; }
     if (!(id.signer instanceof Uint8Array) && !id.signer.encryptTo) { toast(t('msgSignerNoDm')); return; }
     ui.msgSheet = null;
-    const rumor = makeDMReaction(id.pubkey, peer, m.rumor.id, emoji);
+    const rumor = makeDMReaction(id.pubkey, peer, m.rumor.id, emoji, reactEmojiTags(emoji));
     const r = dmReacts.get(m.rumor.id) || dmReacts.set(m.rumor.id, new Map()).get(m.rumor.id);
     const prev = r.get(id.pubkey);
     r.set(id.pubkey, emoji);
@@ -2279,7 +2530,13 @@ export function messagesFeature(ctx) {
     s.dms = {};
     for (const [peer, list] of byRecent)
       s.dms[peer] = list.filter((m) => !m.pending).slice(-CACHE_MAX)
-        .map((m) => ({ id: m.rumor.id, from: m.rumor.pubkey, text: m.rumor.content, t: m.rumor.created_at }));
+        .map((m) => {
+          const row = { id: m.rumor.id, from: m.rumor.pubkey, text: m.rumor.content, t: m.rumor.created_at };
+          // a message's custom emoji ride along, or they'd be text after a reload
+          const em = [...emojiTagMap(m.rumor.tags)];
+          if (em.length) row.em = em;
+          return row;
+        });
     save(s);
   }
 
@@ -3468,7 +3725,7 @@ export function messagesFeature(ctx) {
       h('div', { class: 'note-text', style: 'white-space:pre-wrap;overflow-wrap:anywhere' },
         // one level deep only: a quote of a quote of a quote is a rabbit
         // hole, and the inner one stays a link you can follow
-        ...noteBody(ev.content, depth + 1)));
+        ...noteBody(ev.content, depth + 1, emojiTagMap(ev.tags))));
   }
 
   // One URL, rendered as whatever it points at. `isImage` is markdown saying
@@ -3719,8 +3976,12 @@ export function messagesFeature(ctx) {
     ui.msgUploading = false; render();
   }
 
-  function noteBody(text, depth = 0) {
+  // `em` is the event's own ["emoji", code, url] map (NIP-30): a :code: it
+  // names becomes its picture, any other :code: stays text — a message
+  // never borrows pictures from packs the READER happens to hold.
+  function noteBody(text, depth = 0, em = null) {
     const out = [];
+    const emojiAt = em && em.size ? (c) => em.get(c) : null;
     for (const part of String(text || '').split(NOTE_SPLIT)) {
       if (!part) continue;
       const md = MD_PARTS.exec(part);
@@ -3728,7 +3989,8 @@ export function messagesFeature(ctx) {
         const [, bang, label, url] = md;
         out.push(urlNode(url, { label: label || null, isImage: !!bang }));
       } else if (/^https?:\/\//i.test(part)) {
-        out.push(urlNode(part));
+        const pack = PACK_LINK_RE.exec(part);
+        out.push(pack ? packLinkNode(part, pack[1]) : urlNode(part));
       } else if (/^nostr:(npub|nprofile)1/i.test(part)) {
         const ref = parseNostrRef(part.slice(6));
         if (ref && ref.type === 'pubkey') out.push(h('a', { href: '#', onClick: (e) => { e.preventDefault(); openProfile(ref.pk); } }, '@' + displayName(ref.pk)));
@@ -3749,6 +4011,8 @@ export function messagesFeature(ctx) {
           href: '#', title: t('searchPeopleFor', { q: part.slice(1) }),
           onClick: (e) => { e.preventDefault(); e.stopPropagation(); openPeopleSearch(part.slice(1)); },
         }, part));
+      } else if (emojiAt && part.includes(':')) {
+        for (const p of splitEmoji(part, emojiAt)) out.push(typeof p === 'string' ? p : emojiImg(p.code, p.url));
       } else out.push(part);
     }
     return out;
@@ -4164,7 +4428,7 @@ export function messagesFeature(ctx) {
             style: 'flex-shrink:0',
             onClick: (e) => { e.stopPropagation(); ui.noteSheet = ev; render(); },
           }, '\u22ef')),
-        h('div', { class: 'note-text', style: 'white-space:pre-wrap;overflow-wrap:anywhere' }, ...noteBody(ev.content)),
+        h('div', { class: 'note-text', style: 'white-space:pre-wrap;overflow-wrap:anywhere' }, ...noteBody(ev.content, 0, emojiTagMap(ev.tags))),
         pending ? null : noteActions(pk, ev, { canZap }),
         !pending && whoOpen(ev.id) ? whoPanel(ev) : null));
   }
@@ -5185,9 +5449,59 @@ export function messagesFeature(ctx) {
     el.style.height = 'auto';
     el.style.height = Math.min(el.scrollHeight, 120) + 'px';
   };
-  const composer = (placeholder, onSend, onType, draftKey, onAttach = null) =>
-    h('div', { class: 'col', style: 'gap:6px' },
+  // ---- :shortcode: autocomplete in the composer -----------------------------
+  // A colon and two letters at the caret open a strip of matches above the
+  // box: custom emoji first (packs held, then ones seen here), a few
+  // standard ones after. Tap, Tab or Enter takes the first; Escape closes.
+  function updateEmojiAc(el, key) {
+    const upto = el.value.slice(0, el.selectionEnd ?? el.value.length);
+    const m = EMOJI_PARTIAL_RE.exec(upto);
+    const next = m ? { key, q: m[1], start: upto.length - m[1].length - 1, end: upto.length } : null;
+    const was = ui.emojiAc;
+    ui.emojiAc = next;
+    if (!!was !== !!next || (was && next && (was.q !== next.q || was.key !== next.key))) render();
+  }
+  function emojiAcHits(q) {
+    const ql = q.toLowerCase();
+    const custom = customEmojis().filter((x) => x.code.toLowerCase().includes(ql))
+      .sort((a, b) => Number(b.code.toLowerCase().startsWith(ql)) - Number(a.code.toLowerCase().startsWith(ql)));
+    const std = EMOJI_LIB.filter((x) => x.k.split(' ').some((w) => w.startsWith(ql)));
+    return [...custom.slice(0, 8), ...std.slice(0, 4)].slice(0, 8);
+  }
+  function pickEmojiAc(hit) {
+    const ac = ui.emojiAc;
+    ui.emojiAc = null;
+    const el = document.getElementById('msg-draft');
+    if (!ac || !el) { render(); return; }
+    const ins = hit.url ? ':' + hit.code + ': ' : hit.e + ' ';
+    const v = el.value;
+    el.value = v.slice(0, ac.start) + ins + v.slice(ac.end);
+    el.selectionStart = el.selectionEnd = ac.start + ins.length;
+    setDraft(ac.key, el.value);
+    growComposer(el);
+    if (hit.url) noteRecent(':' + hit.code + ':');
+    render();
+    el.focus();
+  }
+  // Always a node, empty when idle: the strip appearing must not shift the
+  // composer's children, or the morph rebuilds the textarea under a
+  // typing finger and the keystroke that opened it lands nowhere.
+  function emojiAcStrip(draftKey) {
+    const ac = ui.emojiAc;
+    const hits = ac && ac.key === draftKey ? emojiAcHits(ac.q) : [];
+    return h('div', { class: 'emoji-ac' },
+      hits.map((x) => h('button', {
+        type: 'button', title: x.url ? ':' + x.code + ':' : x.k,
+        onMousedown: (e) => e.preventDefault(), // the box keeps focus and its caret
+        onClick: () => pickEmojiAc(x),
+      }, x.url ? emojiImg(x.code, x.url) : x.e, x.url ? h('span', { class: 'small' }, x.code) : null)));
+  }
+
+  const composer = (placeholder, onSend, onType, draftKey, onAttach = null) => {
+    syncEmoji().catch(() => {}); // throttled inside: your packs, from wherever you added them
+    return h('div', { class: 'col', style: 'gap:6px' },
       signerNotice(),
+      emojiAcStrip(draftKey),
     h('div', { class: 'chat-compose' },
       onAttach ? h('button', {
         class: 'iconbtn chat-clip', title: t('msgAttach'), 'aria-label': t('msgAttach'),
@@ -5201,8 +5515,16 @@ export function messagesFeature(ctx) {
       h('textarea', {
         class: 'grow', id: 'msg-draft', placeholder, rows: String(Math.min(5, draftFor(draftKey).split('\n').length)),
         value: draftFor(draftKey), maxlength: '2000',
-        onInput: (e) => { setDraft(draftKey, e.target.value); growComposer(e.target); if (onType && e.target.value) onType(); },
+        onInput: (e) => { setDraft(draftKey, e.target.value); growComposer(e.target); updateEmojiAc(e.target, draftKey); if (onType && e.target.value) onType(); },
+        onClick: (e) => updateEmojiAc(e.target, draftKey), // the caret moved
+        onBlur: () => { if (ui.emojiAc) { ui.emojiAc = null; render(); } },
         onKeydown: (e) => {
+          const ac = ui.emojiAc && ui.emojiAc.key === draftKey ? ui.emojiAc : null;
+          if (ac && (e.key === 'Tab' || e.key === 'Enter') && !e.shiftKey) {
+            const hits = emojiAcHits(ac.q);
+            if (hits.length) { e.preventDefault(); pickEmojiAc(hits[0]); return; }
+          }
+          if (ac && e.key === 'Escape') { e.preventDefault(); ui.emojiAc = null; render(); return; }
           if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onSend(); return; }
           if (e.ctrlKey && (e.key === 'j' || e.key === 'J')) {
             e.preventDefault();
@@ -5219,6 +5541,7 @@ export function messagesFeature(ctx) {
         onFocus: () => { stickToBottom(); setTimeout(stickToBottom, 350); },
       }),
       h('button', { class: 'btn-primary btn-sm', onClick: onSend }, t('msgSend'))));
+  };
 
   // ---- home ---------------------------------------------------------------
 
@@ -5500,6 +5823,8 @@ export function messagesFeature(ctx) {
       // choosing another emoji replaces it (one reaction per author, the fold
       // keeps the latest)
       const myReact = reacts && my.map((pk) => reacts.get(pk)).find(Boolean);
+      // the message's own custom emoji (an edit brings its own set)
+      const em = emojiTagMap((edit && edit.author === m.author ? edit.rumor : m.rumor).tags);
       return h(
         'div', { class: 'chat-row' + (mine ? ' mine' : '') + (grouped ? ' grouped' : '') },
         grouped ? h('div', { class: 'chat-avatar spacer' }) : avatar(m.author),
@@ -5513,13 +5838,15 @@ export function messagesFeature(ctx) {
               m.author === room.jm.owner ? h('span', { class: 'chat-badge' }, t('msgAdmin')) : null),
             h('span', { class: 'chat-time' }, timeLabel(tms))),
           h('div', {
-            class: 'chat-bubble clickable',
+            class: 'chat-bubble clickable' + (emojiJumbo(text, em) ? ' jumbo' : ''),
             // Telegram-style: a tap on the message opens its action sheet
             // (quick reactions, reply, copy, delete). Links, images and the
             // hover × keep their own clicks; a desktop text-selection drag
             // ends in a click too, and must not pop the sheet over the copy.
+            // A custom emoji is an <img> too, but tapping it should open the
+            // sheet like tapping any other word.
             onClick: (e) => {
-              if (e.target.closest && e.target.closest('a, button, img')) return;
+              if (e.target.closest && e.target.closest('a, button, img:not(.cemoji)')) return;
               const sel = window.getSelection && window.getSelection();
               if (sel && String(sel).length) return;
               ui.msgSheet = ui.msgSheet === m.rumor.id ? null : m.rumor.id;
@@ -5527,7 +5854,7 @@ export function messagesFeature(ctx) {
             },
           },
             replyQuote(room, chId, m),
-            ...noteBody(text),
+            ...noteBody(text, 0, em),
             ...attachmentNodes(m.rumor),
             edit ? h('span', { class: 'chat-edited' }, ' ', t('msgEdited')) : null,
             mine
@@ -5543,7 +5870,7 @@ export function messagesFeature(ctx) {
                       class: 'chat-react clickable' + (emoji === myReact ? ' on' : ''),
                       title: t('msgReact'),
                       onClick: (e) => { e.stopPropagation(); sendReaction(room, chId, m, emoji); },
-                    }, emoji, n > 1 ? ' ' + n : '')))
+                    }, reactNode(emoji), n > 1 ? ' ' + n : '')))
               : null)(zapChip(m.rumor.id, { cls: 'chat-react', onClick: !mine && canZapPk(m.author) ? () => zapMessage(m.author, m.rumor.id) : null }))))
       );
     });
@@ -5759,7 +6086,7 @@ export function messagesFeature(ctx) {
         [...counts.entries()].map(([emoji, n]) => h('span', {
           class: 'chat-react clickable' + (emoji === myReact ? ' on' : ''),
           onClick: (e) => { e.stopPropagation(); sendDmReaction(peer, m, emoji); },
-        }, emoji, n > 1 ? ' ' + n : '')));
+        }, reactNode(emoji), n > 1 ? ' ' + n : '')));
     };
     const dmReplyBar = () => {
       const m = ui.msgReplyTo && thread.get(ui.msgReplyTo);
@@ -5789,16 +6116,16 @@ export function messagesFeature(ctx) {
             h('div', { class: 'chat-row dm' + (m.mine ? ' mine' : '') },
               h('div', { class: 'chat-body' },
                 h('div', {
-                  class: 'chat-bubble clickable' + (m.mine ? ' me' : ''),
+                  class: 'chat-bubble clickable' + (m.mine ? ' me' : '') + (emojiJumbo(m.rumor.content, emojiTagMap(m.rumor.tags)) ? ' jumbo' : ''),
                   // same tap-for-actions as community bubbles
                   onClick: (e) => {
-                    if (e.target.closest && e.target.closest('a, button, img')) return;
+                    if (e.target.closest && e.target.closest('a, button, img:not(.cemoji)')) return;
                     const sel = window.getSelection && window.getSelection();
                     if (sel && String(sel).length) return;
                     ui.msgSheet = ui.msgSheet === m.rumor.id ? null : m.rumor.id;
                     render();
                   },
-                }, dmQuote(m), ...(m.rumor.kind === 15 ? [] : noteBody(m.rumor.content)), ...attachmentNodes(m.rumor), dmChips(m)),
+                }, dmQuote(m), ...(m.rumor.kind === 15 ? [] : noteBody(m.rumor.content, 0, emojiTagMap(m.rumor.tags))), ...attachmentNodes(m.rumor), dmChips(m)),
                 h('div', { class: 'chat-time' }, timeLabel(m.rumor.created_at * 1000)))))
         : [h('div', { class: 'muted small', style: 'text-align:center;padding:24px 0' }, t('msgNoDmsYet'))])),
       dmReplyBar(),

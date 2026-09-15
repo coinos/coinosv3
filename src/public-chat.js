@@ -18,6 +18,7 @@ import { COMMUNITY, EPOCH } from './community.js';
 import { hexToBytes } from '@noble/hashes/utils';
 import { timeAgo } from './format.js';
 import { t } from './i18n.js';
+import { emojiTagMap, splitEmoji, emojiOnlyCount, shortcodeOf } from './emoji.js';
 
 // Same shape as the app's h() for the attributes this page uses.
 function h(tag, attrs = {}, ...children) {
@@ -40,11 +41,18 @@ function h(tag, attrs = {}, ...children) {
 // richer noteBody also resolves nostr: mentions — here they stay dim stubs,
 // since this page has no profile screens to open.
 const LINK_SPLIT = /(https?:\/\/[^\s]+|nostr:(?:npub|nprofile|note|nevent|naddr)1[a-z0-9]+)/gi;
-function linkedBody(text) {
+// a custom emoji (NIP-30): the picture a message's own emoji tag names
+const emojiImg = (code, url) => h('img', { class: 'cemoji', src: url, alt: ':' + code + ':', title: ':' + code + ':', loading: 'lazy' });
+// `em` is the message's ["emoji", code, url] map; a :code: it names renders
+// as its picture, anything else stays text
+function linkedBody(text, em = null) {
   const out = [];
+  const emojiAt = em && em.size ? (c) => em.get(c) : null;
   for (const part of String(text || '').split(LINK_SPLIT)) {
     if (!part) continue;
-    if (/^https?:\/\//i.test(part)) {
+    if (emojiAt && !/^(https?:\/\/|nostr:)/i.test(part) && part.includes(':')) {
+      for (const p of splitEmoji(part, emojiAt)) out.push(typeof p === 'string' ? p : emojiImg(p.code, p.url));
+    } else if (/^https?:\/\//i.test(part)) {
       if (/\.(png|jpe?g|gif|webp|avif)(\?[^\s]*)?$/i.test(part)) {
         out.push(h('img', { src: part, class: 'note-img', loading: 'lazy',
           onError: (e) => { e.target.style.display = 'none'; } }));
@@ -69,6 +77,7 @@ export function mountPublicChat() {
   const edits = new Map(); // rumorId -> { rumor, author }
   const deletes = new Map(); // rumorId -> Set(author)
   const reactions = new Map(); // rumorId -> Map(author -> emoji)
+  const reactEmoji = new Map(); // shortcode -> url, from reactions' own emoji tags
   const controlEntries = [];
   let folded = null; // foldControl result: banned set + channel renames
   let foldT = 0; // fold-once-per-burst debounce, same as the app's rooms
@@ -143,6 +152,9 @@ export function mountPublicChat() {
     } else if (rumor.kind === 7) {
       const target2 = tag('e')?.[1];
       if (target2) (reactions.get(target2) || reactions.set(target2, new Map()).get(target2)).set(author, rumor.content);
+      // a :code: reaction names its picture in its own tag; kept by code so
+      // the chip can show it
+      for (const [code, url] of emojiTagMap(rumor.tags)) reactEmoji.set(code, url);
     } else {
       return;
     }
@@ -236,6 +248,14 @@ export function mountPublicChat() {
       prev = m;
       const edit = edits.get(m.rumor.id);
       const content = edit && edit.author === m.author ? edit.rumor.content : m.rumor.content;
+      const em = emojiTagMap((edit && edit.author === m.author ? edit.rumor : m.rumor).tags);
+      const jumboN = em.size ? emojiOnlyCount(splitEmoji(content, (c) => em.get(c))) : 0;
+      const jumbo = jumboN > 0 && jumboN <= 3;
+      const reactNode = (emoji) => {
+        const code = shortcodeOf(emoji);
+        const url = code && reactEmoji.get(code);
+        return url ? emojiImg(code, url) : emoji;
+      };
       const reacts = reactions.get(m.rumor.id);
       // a reply e-tags its quoted message — render the context when we hold it
       const replyId = (m.rumor.tags || []).find((x) => x[0] === 'e')?.[1];
@@ -252,11 +272,11 @@ export function mountPublicChat() {
             h('span', { class: 'chat-name' + (m.author === COMMUNITY.owner ? ' owner' : '') }, nameOf(m.author)),
             m.author === COMMUNITY.owner ? h('span', { class: 'chat-badge' }, t('msgAdmin')) : null,
             h('span', { class: 'chat-time' }, timeAgo(ms / 1000))),
-          h('div', { class: 'chat-bubble' }, quote, ...linkedBody(content),
+          h('div', { class: 'chat-bubble' + (jumbo ? ' jumbo' : '') }, quote, ...linkedBody(content, em),
             edit && edit.author === m.author ? h('span', { class: 'chat-edited' }, ' ' + t('msgEdited')) : null,
             reacts && reacts.size ? h('div', { class: 'chat-reacts' },
               ...[...[...reacts.values()].reduce((m2, e) => m2.set(e, (m2.get(e) || 0) + 1), new Map()).entries()]
-                .map(([emoji, n]) => h('span', { class: 'chat-react' }, emoji + (n > 1 ? ' ' + n : '')))) : null))));
+                .map(([emoji, n]) => h('span', { class: 'chat-react' }, reactNode(emoji), n > 1 ? ' ' + n : ''))) : null))));
     }
     if (stick) log.scrollTop = log.scrollHeight;
   }

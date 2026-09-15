@@ -1014,3 +1014,32 @@ body::after {
 .emoji-grid button.on { border-color: var(--accent); }
 .hub-list { max-height: 360px; overflow-y: auto; }
 .hub-icon { object-fit: cover; }
+
+/* custom emoji (NIP-30): an inline picture the height of a capital, sat on
+   the baseline like the character it stands for */
+.cemoji { display: inline-block; height: 1.4em; width: auto; max-width: 3em; vertical-align: -0.35em; object-fit: contain; }
+/* a bubble that is nothing but one to three of them shows them big */
+.chat-bubble.jumbo .cemoji { height: 2.8em; max-width: 5em; vertical-align: middle; }
+.chat-react .cemoji { height: 1.25em; vertical-align: -0.3em; }
+.emoji-grid .cemoji { height: 28px; max-width: 36px; vertical-align: middle; }
+.msg-sheet-emojis .cemoji { height: 22px; vertical-align: middle; }
+/* the :shortcode: strip above the composer */
+.emoji-ac { display: flex; flex-wrap: wrap; gap: 4px; }
+.emoji-ac:empty { display: none; }
+.emoji-ac button {
+  display: inline-flex; align-items: center; gap: 5px; padding: 3px 8px; font-size: 18px; line-height: 1;
+  border: 1px solid var(--line); border-radius: 10px; background: var(--paper);
+}
+.emoji-ac button .small { font-size: 12px; color: var(--muted); }
+.emoji-ac .cemoji { height: 22px; vertical-align: middle; }
+/* the packs behind the picker, and the add box */
+.emoji-packs { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.emoji-pack { display: inline-flex; align-items: center; gap: 2px; }
+.emoji-pack .linklike { padding: 0 2px; font-size: 14px; color: var(--muted); }
+/* Vector's pack share link: named, with its Add button */
+.pack-link { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.pack-link .btn-sm { padding: 3px 10px; }
+/* a custom emoji whose picture won't load falls back to its :code: alt text;
+   in the 40px grid cell that text must not spill into the next cell */
+.emoji-grid button { overflow: hidden; }
+.emoji-grid .cemoji { font-size: 8px; }

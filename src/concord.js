@@ -77,6 +77,15 @@ export const guestbookKey = (root, cid, epoch = 0) =>
   groupKey("concord/guestbook", root, hexToBytes(cid), epoch);
 export const channelKey = (secret, channelId, epoch = 0) =>
   groupKey("concord/channel", secret, hexToBytes(channelId), epoch);
+
+// CORD-03: a Public Channel derives from the community_root at the BASE
+// epoch (it rotates with every Refounding); a Private one carries its own
+// key and epoch in the join material. A channel entry with no key, or whose
+// key is the root itself, is public.
+export const channelIsPrivate = (jm, ch) => !!(ch && ch.key && ch.key !== jm.community_root);
+export const channelEpoch = (jm, ch) => (channelIsPrivate(jm, ch) ? ch.epoch || 0 : jm.root_epoch || 0);
+export const channelStream = (jm, ch) =>
+  channelKey(hexToBytes(channelIsPrivate(jm, ch) ? ch.key : jm.community_root), ch.id, channelEpoch(jm, ch));
 export const grantEid = (cid, memberHex) =>
   bytesToHex(hkdf32(hexToBytes(cid), "concord/grant", hexToBytes(memberHex)));
 export const banlistEid = (cid) => bytesToHex(hkdf32(hexToBytes(cid), "concord/banlist", ZERO32));
@@ -218,7 +227,7 @@ export const foldControl = (entries, { ownerHex, cid }) => {
 
 // ---- CORD-02 §5 guestbook fold ----
 // entries: [{ rumor, author }], returns Map(npub -> { state: 'join'|'leave'|'kick', t })
-export const foldGuestbook = (entries, { nowMs, banned = new Set() } = {}) => {
+export const foldGuestbook = (entries, { nowMs, banned = new Set(), ownerHex } = {}) => {
   let members = new Map();
   let consider = (npub, state, t, id) => {
     let cur = members.get(npub);
@@ -229,7 +238,16 @@ export const foldGuestbook = (entries, { nowMs, banned = new Set() } = {}) => {
     if (t === null || (nowMs && t > nowMs + 3600_000)) continue;
     if (rumor.kind === 3306 && (rumor.content === "join" || rumor.content === "leave"))
       consider(author, rumor.content, t, rumor.id);
-    // kicks (3309) and snapshots (3312): honored later with roster ranks; skipped for now
+    // A snapshot (3312) seeds the new epoch's Guestbook after a Refounding:
+    // the refounder's secondhand list of present members, dated at the
+    // snapshot, so any self-signed entry newer than it still wins. Honored
+    // from the owner only (the sole authority coinos folds today).
+    else if (rumor.kind === 3312 && ownerHex && author === ownerHex) {
+      let list; try { list = JSON.parse(rumor.content); } catch { continue; }
+      if (!Array.isArray(list)) continue;
+      for (let npub of list.slice(0, 400)) if (/^[0-9a-f]{64}$/.test(npub)) consider(npub, "join", t, rumor.id);
+    }
+    // kicks (3309): honored later with roster ranks; skipped for now
   }
   for (let b of banned) members.delete(b);
   return members;

@@ -18,7 +18,7 @@ import {
   PROFILE_RELAYS, openWrapsOffthread, unwrapDMsOffthread,
 } from '../nostr.js';
 import {
-  channelKey, controlKey, guestbookKey, openWrap, wrapRumor, rumorWithId,
+  channelKey, channelStream, channelEpoch, channelIsPrivate, controlKey, guestbookKey, openWrap, wrapRumor, rumorWithId,
   foldControl, foldGuestbook, observeAuthor, eventMs, msTags, makeEdition,
   communityId, parseInviteLink, makeInviteLink, makeInviteBundleEvent, openInviteBundle,
 } from '../concord.js';
@@ -672,11 +672,25 @@ export function messagesFeature(ctx) {
     let room = rooms.get(jm.community_id);
     if (room) { if (subscribe) subscribeRoom(room); return room; }
     const root = hexToBytes(jm.community_root);
+    // CORD-02 §5: a Community past the control_root split hands members the
+    // Control Plane's signer pubkey in the invite — the address to read at —
+    // while the wraps still decrypt under the community_root-derived key. A
+    // legacy Community (the built-in coinos one) has no control_pk: the one
+    // derivation is both address and key, and its sk still signs our writes.
+    const controlRead = controlKey(root, jm.community_id, jm.root_epoch || EPOCH);
+    const control = /^[0-9a-f]{64}$/.test(jm.control_pk || '') && jm.control_pk !== controlRead.pk
+      ? { pk: jm.control_pk, sk: null, convKey: controlRead.convKey }
+      : controlRead;
+    // A channel's stream follows its own key and epoch (CORD-03): public ones
+    // rotate with the base epoch, private ones carry theirs in the join
+    // material. A channel only known from the Control fold is public.
+    const chEntry = (id) => (jm.channels || []).find((c) => c.id === id) || { id };
     room = {
       jm,
-      control: controlKey(root, jm.community_id, jm.root_epoch || EPOCH),
+      control,
       guestbook: guestbookKey(root, jm.community_id, jm.root_epoch || EPOCH),
-      chStream: (id) => channelKey(root, id, EPOCH),
+      chStream: (id) => channelStream(jm, chEntry(id)),
+      chEpoch: (id) => channelEpoch(jm, chEntry(id)),
       folded: null,
       controlEntries: [],
       guestEntries: [],
@@ -695,7 +709,7 @@ export function messagesFeature(ctx) {
 
     const refold = () => { room.folded = foldControl(room.controlEntries, { ownerHex: jm.owner, cid: jm.community_id }); };
     const refoldGuestbook = () => {
-      room.members = foldGuestbook(room.guestEntries, { nowMs: Date.now(), banned: room.folded?.banned });
+      room.members = foldGuestbook(room.guestEntries, { nowMs: Date.now(), banned: room.folded?.banned, ownerHex: jm.owner });
       for (const [, msgs] of room.byChannel)
         for (const { rumor, author } of msgs.values()) {
           const tms = eventMs(rumor);
@@ -810,7 +824,7 @@ export function messagesFeature(ctx) {
   function onChat(room, channelId, { rumor, author }) {
     const tag = (k) => rumor.tags?.find((x) => x[0] === k);
     // CORD-03 §3: the rumor must commit to the channel/epoch that decrypted it
-    if (tag('channel')?.[1] !== channelId || tag('epoch')?.[1] !== String(EPOCH)) return;
+    if (tag('channel')?.[1] !== channelId || tag('epoch')?.[1] !== String(room.chEpoch(channelId))) return;
     if (room.folded && room.folded.banned.has(author)) return;
     if (rumor.kind === PRESENCE || rumor.kind === TYPING) {
       // Dated by the beat itself, never by arrival. Relays hand back stored
@@ -855,8 +869,13 @@ export function messagesFeature(ctx) {
   }
 
   const roomChannels = (room) => {
-    if (room.folded && room.folded.channels.size)
-      return [...room.folded.channels.entries()].map(([id, c]) => ({ id, name: c.name }));
+    if (room.folded && room.folded.channels.size) {
+      // a private channel is only ours if the invite handed us its key
+      const held = (id) => (room.jm.channels || []).some((c) => c.id === id && channelIsPrivate(room.jm, c));
+      return [...room.folded.channels.entries()]
+        .filter(([id, c]) => !c.private || held(id))
+        .map(([id, c]) => ({ id, name: c.name }));
+    }
     return room.jm.channels || [];
   };
 
@@ -933,7 +952,7 @@ export function messagesFeature(ctx) {
     ui.msgReplyTo = null;
     const rumor = rumorWithId({
       kind: 9, pubkey: id.pubkey, content: text,
-      tags: [['channel', chId], ['epoch', String(EPOCH)], ...(replyTo ? [['e', replyTo]] : []), ms], created_at,
+      tags: [['channel', chId], ['epoch', String(room.chEpoch(chId))], ...(replyTo ? [['e', replyTo]] : []), ms], created_at,
     });
     const msgs = room.byChannel.get(chId) || room.byChannel.set(chId, new Map()).get(chId);
     const entry = { rumor, author: id.pubkey, pending: true };
@@ -971,7 +990,7 @@ export function messagesFeature(ctx) {
     const { created_at, ms } = msTags(Date.now());
     const rumor = rumorWithId({
       kind: 7, pubkey: id.pubkey, content: emoji,
-      tags: [['channel', chId], ['epoch', String(EPOCH)], ['e', m.rumor.id], ['k', '9'], ms], created_at,
+      tags: [['channel', chId], ['epoch', String(room.chEpoch(chId))], ['e', m.rumor.id], ['k', '9'], ms], created_at,
     });
     const r = room.reactions.get(m.rumor.id) || room.reactions.set(m.rumor.id, new Map()).get(m.rumor.id);
     const prev = r.get(id.pubkey);
@@ -1063,7 +1082,7 @@ export function messagesFeature(ctx) {
     const { created_at, ms } = msTags(Date.now());
     const rumor = {
       kind: 5, pubkey: id.pubkey, content: '',
-      tags: [['channel', chId], ['epoch', String(EPOCH)], ['e', m.rumor.id], ['k', '9'], ms], created_at,
+      tags: [['channel', chId], ['epoch', String(room.chEpoch(chId))], ['e', m.rumor.id], ['k', '9'], ms], created_at,
     };
     const wrap = await wrapRumor(rumor, id.signer, room.chStream(chId));
     room.deletes.add(m.rumor.id);
@@ -1144,7 +1163,11 @@ export function messagesFeature(ctx) {
     return {
       community_id: room.jm.community_id, owner: room.jm.owner, owner_salt: room.jm.owner_salt,
       community_root: room.jm.community_root, root_epoch: room.jm.root_epoch || 0,
-      channels: roomChannels(room).map((c) => ({ id: c.id, name: c.name })),
+      ...(room.jm.control_pk ? { control_pk: room.jm.control_pk } : {}),
+      channels: roomChannels(room).map((c) => {
+        const held = (room.jm.channels || []).find((h) => h.id === c.id);
+        return held && channelIsPrivate(room.jm, held) ? { id: c.id, name: c.name, key: held.key, epoch: held.epoch || 0 } : { id: c.id, name: c.name };
+      }),
       relays: room.relays, name: (room.folded?.metadata?.name) || room.jm.name,
       creator_npub: creatorPk,
     };
@@ -1191,7 +1214,7 @@ export function messagesFeature(ctx) {
       const jm = {
         community_id: b.community_id, owner: b.owner, owner_salt: b.owner_salt,
         community_root: b.community_root, root_epoch: b.root_epoch || 0,
-        channels: (b.channels || []).map((c) => ({ id: c.id, name: c.name })),
+        control_pk: b.control_pk, channels: channelList(b),
         relays: (b.relays || []).slice(0, 5), name: b.name || 'community',
         invitedBy, inviteLabel, added_at: Date.now(),
       };
@@ -1213,17 +1236,17 @@ export function messagesFeature(ctx) {
   // A link invite being previewed (pasted or arrived via /invite/<naddr>#…).
   let pendingLink = null; // { parsed, state: 'loading'|'ready'|'error', bundle?, error? }
 
-  async function loadLinkInvite(parsed) {
-    pendingLink = { parsed, state: 'loading' };
+  async function loadLinkInvite(parsed, { where = 'top' } = {}) {
+    pendingLink = { parsed, state: 'loading', where };
     scheduleRepaint();
     const relays = [...new Set([...(parsed.relays || []), ...DM_RELAYS])];
     const evts = await queryOn(relays, { kinds: [33301], authors: [parsed.signerPk] }, 4000);
     const newest = evts.sort((a, b) => b.created_at - a.created_at)[0];
     const b = newest && openInviteBundle(newest, parsed.token);
-    if (!b) pendingLink = { parsed, state: 'error', error: t('msgInviteNotFound') };
-    else if (b.revoked) pendingLink = { parsed, state: 'error', error: t('msgInviteRevoked') };
-    else if (b.expired) pendingLink = { parsed, state: 'error', error: t('msgInviteExpired') };
-    else pendingLink = { parsed, state: 'ready', bundle: b };
+    if (!b) pendingLink = { parsed, state: 'error', error: t('msgInviteNotFound'), where };
+    else if (b.revoked) pendingLink = { parsed, state: 'error', error: t('msgInviteRevoked'), where };
+    else if (b.expired) pendingLink = { parsed, state: 'error', error: t('msgInviteExpired'), where };
+    else pendingLink = { parsed, state: 'ready', bundle: b, where };
     scheduleRepaint();
   }
 
@@ -1232,7 +1255,10 @@ export function messagesFeature(ctx) {
     if (!parsed) { toast(t('msgBadInvite')); return; }
     ui.msgJoinText = '';
     ui.msgHomePanel = null;
-    loadLinkInvite(parsed);
+    // the answer belongs where the question was asked: the preview replaces
+    // the paste box under Communities, not a card at the top of a page the
+    // user may have scrolled past
+    loadLinkInvite(parsed, { where: 'communities' });
   }
 
   // An invite link opened in the browser lands here before the wallet exists.
@@ -1329,7 +1355,7 @@ export function messagesFeature(ctx) {
     for (const jm of communities()) {
       if (!on[jm.community_id]) continue;
       const root = hexToBytes(jm.community_root);
-      for (const c of (jm.channels || []).slice(0, 8)) authors.push(channelKey(root, c.id, EPOCH).pk);
+      for (const c of (jm.channels || []).slice(0, 8)) authors.push(channelStream(jm, c).pk);
     }
     // per-category opt-outs travel with the registration so the notifier
     // never sends what the user turned off (a suppressed-but-delivered push
@@ -1553,12 +1579,18 @@ export function messagesFeature(ctx) {
     return out;
   }
 
-  // Join material subset (never the icon, never link fields). We only run
-  // epoch 0 today, so seed and current coincide.
+  // The channel entries of join material: id + name, plus key + epoch for a
+  // private channel (a public one derives from the root, so nothing to carry).
+  const channelList = (b) => (b.channels || []).slice(0, 256).map((c) =>
+    channelIsPrivate(b, c) ? { id: c.id, name: c.name, key: c.key, epoch: c.epoch || 0 } : { id: c.id, name: c.name });
+
+  // Join material subset (never the icon, never link fields). We don't
+  // Refound ourselves, so seed and current coincide.
   const jmSubset = (jm) => ({
     community_id: jm.community_id, owner: jm.owner, owner_salt: jm.owner_salt,
     community_root: jm.community_root, root_epoch: jm.root_epoch || 0,
-    channels: (jm.channels || []).map((c) => ({ id: c.id, name: c.name })),
+    ...(jm.control_pk ? { control_pk: jm.control_pk } : {}),
+    channels: channelList(jm),
     relays: jm.relays, name: jm.name,
   });
 
@@ -1590,9 +1622,24 @@ export function messagesFeature(ctx) {
       if (!jm || jm.community_id !== e.community_id) continue;
       if (jm.community_id === COMMUNITY.community_id) continue; // built-in
       if ((e.added_at || 0) <= (s.tombstones[e.community_id] || 0)) continue; // tombstone wins
-      if (s.communities.some((c) => c.community_id === e.community_id)) continue;
       if (communityId(jm.owner, jm.owner_salt) !== jm.community_id) continue; // self-certify before adopting keys
       if (!/^[0-9a-f]{64}$/.test(jm.community_root || '')) continue;
+      const have = s.communities.find((c) => c.community_id === e.community_id);
+      if (have) {
+        // Same community, fresher keys: a device that saw a Refounding holds
+        // a higher root epoch; one that joined via a newer invite holds the
+        // control_pk and channel keys this entry predates. Adopt, keep ours
+        // otherwise — never step an epoch backwards.
+        const newer = (jm.root_epoch || 0) > (have.root_epoch || 0);
+        const fill = !newer && jm.community_root === have.community_root
+          && ((jm.control_pk && !have.control_pk) || channelList(jm).some((c) => c.key && !(have.channels || []).some((h) => h.id === c.id && h.key)));
+        if (!newer && !fill) continue;
+        Object.assign(have, jmSubset(jm), { name: have.name || jm.name, relays: have.relays && have.relays.length ? have.relays : jm.relays });
+        const stale = rooms.get(have.community_id); // rebuilt with the new keys on next open
+        if (stale) { for (const u of stale.unsubs || []) { try { u(); } catch {} } rooms.delete(have.community_id); }
+        changed = true;
+        continue;
+      }
       s.communities.push({ ...jmSubset(jm), added_at: e.added_at || Date.now() });
       changed = true;
     }
@@ -4510,7 +4557,7 @@ export function messagesFeature(ctx) {
       const { created_at, ms } = msTags(Date.now());
       const rumor = {
         kind, pubkey: id.pubkey, content: '',
-        tags: [['channel', chId], ['epoch', String(EPOCH)], ms], created_at,
+        tags: [['channel', chId], ['epoch', String(room.chEpoch(chId))], ms], created_at,
       };
       // NIP-40: a beat is worthless once it's stale, so relays that honour
       // expiration may drop it instead of keeping it forever.
@@ -4707,7 +4754,7 @@ export function messagesFeature(ctx) {
     const lockedRow = signerNotice();
     if (lockedRow && wallet.watchOnly) kids.push(lockedRow);
 
-    if (pendingLink) kids.push(linkInviteCard());
+    if (pendingLink && pendingLink.where !== 'communities') kids.push(linkInviteCard());
     for (const [rid, inv] of pendingDirect) kids.push(directInviteCard(rid, inv));
 
     // offer push once — it covers messages AND payments
@@ -4829,6 +4876,7 @@ export function messagesFeature(ctx) {
       h('div', { class: 'row gap6' },
         h('button', { class: 'btn-sm', onClick: () => { ui.msgHomePanel = ui.msgHomePanel === 'join' ? null : 'join'; render(); } }, t('msgJoin')),
         h('button', { class: 'btn-sm', onClick: () => { ui.msgHomePanel = ui.msgHomePanel === 'create' ? null : 'create'; render(); } }, t('msgCreate')))));
+    if (pendingLink && pendingLink.where === 'communities') kids.push(linkInviteCard());
     if (ui.msgHomePanel === 'join')
       kids.push(h('div', { class: 'row gap6' },
         h('input', {

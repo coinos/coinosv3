@@ -5635,6 +5635,10 @@ export function messagesFeature(ctx) {
       follows = null; followsAt = 0; feed = null; feedAt = 0; relayLists = null;
       mutes = null; mutesAt = 0;
       reacts.clear(); boosts.clear(); seenNoteEv.clear(); myReactEv.clear(); quoted.clear();
+      // what happened to THEIR posts stays with them — the next identity
+      // starts its list empty and asks the relays under its own key
+      stopNotifWatch(); notif = null; notifAt = 0; notifNotes.clear();
+      zapWho.clear(); whoOpenIds.clear();
       clearTimeout(zapSaveT); zapSaveT = null; zapSeed = null;
       zapTotals.clear(); zapAsked.clear(); zapPending.clear(); // 'mine' is per identity — refetch under the next
     },

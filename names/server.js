@@ -1205,9 +1205,11 @@ Bun.serve({
       // giftable but never sold: the beta hard hat, and the knight's helm
       if (!(hat in HAT_PRICES) && !['construction', 'knight'].includes(hat)) return json({ error: 'no such hat' }, 400);
       const net = hatNetOf(b.net);
-      grantHat(pk, hat, net, { equip: false });
+      // the operator may say the gift goes straight on the head (a hat made
+      // for this one person); by default it only crowns a bare one
+      grantHat(pk, hat, net, { equip: b.equip === true });
       persist();
-      log(`hat gifted: ${hat} (${net}) to ${pk.slice(0, 12)}`);
+      log(`hat gifted: ${hat} (${net}) to ${pk.slice(0, 12)}${b.equip === true ? ', worn' : ''}`);
       return json(hatRec(pk, net));
     }
 

@@ -26,7 +26,7 @@ import { makeDMRumor, makeDMReaction, unwrapDM, wrapDM } from '../dm.js';
 import {
   EMOJI_SET_KIND, EMOJI_LIST_KIND, EMOJI_PARTIAL_RE, PACK_LINK_RE,
   emojiTagMap, splitEmoji, emojiOnlyCount, outboundEmojiTags, shortcodeOf,
-  packAddr, parsePackRef, parsePackAddr, parseEmojiSet,
+  packAddr, packNaddr, parsePackRef, parsePackAddr, parseEmojiSet,
 } from '../emoji.js';
 import { saveInbox } from '../dm-inbox.js';
 import { makeSearcher, resultRows, fallbackAvatar, warmSearch } from '../recipient-search.js';
@@ -114,10 +114,14 @@ export function messagesFeature(ctx) {
     }
     return emojiState;
   };
+  // Learned shortcodes arrive in bursts (a backfill), so those writes are
+  // coalesced; a pack change is one deliberate act and lands at once — a
+  // tap-then-navigate must never lose it.
   let emojiSaveTimer = 0;
-  const saveEmoji = () => {
+  const saveEmoji = (now = false) => {
     clearTimeout(emojiSaveTimer);
-    emojiSaveTimer = setTimeout(() => { try { wallet.saveFeatureState(EMOJI_STATE, emojiSt()); } catch {} }, 500);
+    const write = () => { try { wallet.saveFeatureState(EMOJI_STATE, emojiSt()); } catch {} };
+    if (now) write(); else emojiSaveTimer = setTimeout(write, 500);
   };
   // code → image url: held packs first (in order), then what's been seen
   const emojiUrl = (code) => {
@@ -179,7 +183,7 @@ export function messagesFeature(ctx) {
     s.packs[pack.addr] = { title: pack.title, image: pack.image, emojis: pack.emojis, at: pack.at };
     if (!s.order.includes(pack.addr)) s.order.push(pack.addr);
     s.unfetched = s.unfetched.filter((a) => a !== pack.addr);
-    saveEmoji();
+    saveEmoji(true);
   }
   const hasPack = (addr) => !!emojiSt().packs[addr];
   // A pasted naddr / Vector share link, or the Add button on a pack link in
@@ -204,7 +208,7 @@ export function messagesFeature(ctx) {
     delete s.packs[addr];
     s.order = s.order.filter((a) => a !== addr);
     s.unfetched = s.unfetched.filter((a) => a !== addr);
-    saveEmoji();
+    saveEmoji(true);
     render();
     publishEmojiList().catch(() => {});
   }
@@ -222,7 +226,7 @@ export function messagesFeature(ctx) {
     const tags = [...kept, ...[...new Set([...s.order, ...s.unfetched])].map((a) => ['a', a])];
     const evt = await signPlain(id, { kind: EMOJI_LIST_KIND, content: '', tags, created_at });
     s.list = { at: created_at, tags };
-    saveEmoji();
+    saveEmoji(true);
     publishOn(emojiRelays(), evt);
   }
   // Adopt the newest kind 10030 on the relays when it's newer than what we
@@ -252,7 +256,7 @@ export function messagesFeature(ctx) {
       }
       // the list's own order wins over arrival order
       s.order = want.filter((a) => s.packs[a]);
-      saveEmoji();
+      saveEmoji(true);
       if (changed) scheduleRepaint();
     } catch { emojiSyncAt = 0; }
   }
@@ -277,18 +281,21 @@ export function messagesFeature(ctx) {
     const n = emojiOnlyCount(splitEmoji(text, (c) => em.get(c)));
     return n > 0 && n <= 3;
   };
-  // Vector's pack share link, rendered as what it is — with an Add button.
+  // A pack share link (Vector's, or ours) rendered as what it is: one tap
+  // adds the pack right here. Never an outbound link — on a phone the
+  // vectorapp.io address belongs to the Vector app, and a tap on it walked
+  // out of coinos into Vector.
   function packLinkNode(url, naddr) {
     const ref = parsePackRef(naddr);
     const addr = ref && packAddr(ref.pubkey, ref.identifier);
     const have = !!addr && hasPack(addr);
-    return h('span', { class: 'pack-link' },
-      h('a', { href: url, target: '_blank', rel: 'noopener noreferrer' }, '🎨 ' + t('msgEmojiPackLink')),
-      h('button', {
-        class: 'btn-sm', type: 'button', disabled: have || !!ui.emojiBusy,
-        onClick: (e) => { e.stopPropagation(); addPack(naddr); },
-      }, have ? t('msgEmojiPackHave') : t('msgEmojiPackAdd')));
+    return h('button', {
+      class: 'pack-link', type: 'button', title: url, disabled: have || !!ui.emojiBusy,
+      onClick: (e) => { e.stopPropagation(); addPack(naddr); },
+    }, '🎨 ' + t('msgEmojiPackLink'), ' · ', h('b', {}, have ? t('msgEmojiPackHave') : t('msgEmojiPackAdd')));
   }
+  // our share link for a pack — opens in the coinos app on a phone
+  const packShareLink = (addr) => APP_BASE + '/emojis/pack/' + packNaddr(addr);
 
   // ---- unread -------------------------------------------------------------
   // A conversation is unread when its newest message from someone else is
@@ -1253,6 +1260,11 @@ export function messagesFeature(ctx) {
         h('div', { class: 'emoji-packs' },
           packs.map((p) => h('span', { class: 'chat-react emoji-pack', title: p.addr },
             p.image ? h('img', { class: 'cemoji', src: p.image, alt: '' }) : null, ' ', p.title || '…',
+            // its share link, ours: a tap on a phone opens the coinos app
+            h('button', {
+              type: 'button', class: 'linklike', title: t('msgEmojiPackShare'),
+              onClick: async () => { try { await navigator.clipboard.writeText(packShareLink(p.addr)); toast(t('copied')); } catch {} },
+            }, '⧉'),
             h('button', { type: 'button', class: 'linklike', title: t('msgEmojiPackRemove'), onClick: () => removePack(p.addr) }, '×'))),
           ui.emojiPick.addPack
             ? h('form', {
@@ -1631,6 +1643,15 @@ export function messagesFeature(ctx) {
   // An invite link opened in the browser lands here before the wallet exists.
   const urlInvite = typeof location !== 'undefined' ? parseInviteLink(location.href) : null;
   if (urlInvite) { try { history.replaceState(null, '', '/'); } catch {} }
+  // coinos's own pack share link, /emojis/pack/<naddr> — the Android app
+  // owns every v3.coinos.io path, so one tapped on a phone lands here, not
+  // in a browser; added once a wallet is open (init below).
+  const urlPack = (() => {
+    if (typeof location === 'undefined') return null;
+    const m = location.pathname.match(/^\/emojis\/pack\/(naddr1[a-z0-9]+)\/?$/i);
+    return m && parsePackRef(m[1]) ? m[1] : null;
+  })();
+  if (urlPack) { try { history.replaceState(null, '', '/'); } catch {} }
 
   // coinos.io/<username> parity: a claimed name (or a raw npub / hex key) as
   // the whole URL path deep-links to that profile. Real files never reach the
@@ -6555,6 +6576,10 @@ export function messagesFeature(ctx) {
       } catch {}
       if (urlInvite && !pendingLink) {
         loadLinkInvite(urlInvite);
+        setTimeout(() => { ui.chatOpen = true; ui.msgView = 'home'; render(); }, 0);
+      }
+      if (urlPack) {
+        addPack(urlPack).catch(() => {});
         setTimeout(() => { ui.chatOpen = true; ui.msgView = 'home'; render(); }, 0);
       }
       ui.pubProf = null; // a wallet is open now — its chrome owns the profile

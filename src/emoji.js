@@ -26,7 +26,7 @@ export const EMOJI_TOKEN_RE = new RegExp('(:[' + CODE + ']+:)', 'g');
 export const EMOJI_PARTIAL_RE = new RegExp('(?:^|[^:' + CODE + ']):([' + CODE + ']{2,})$');
 
 // Vector's share link for a pack; the naddr inside is the pack coordinate.
-export const PACK_LINK_RE = /^https?:\/\/(?:www\.)?vectorapp\.io\/emojis\/pack\/(naddr1[a-z0-9]+)\/?$/i;
+export const PACK_LINK_RE = /^https?:\/\/[^\s/]+\/emojis\/pack\/(naddr1[a-z0-9]+)\/?$/i;
 
 const okUrl = (u) => typeof u === 'string' && /^https?:\/\/\S+$/i.test(u.trim());
 

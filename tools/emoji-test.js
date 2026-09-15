@@ -56,8 +56,8 @@ try {
       gmText: gm ? gm.textContent : '',
       kirbyJumbo: !!(kirby && kirby.classList.contains('jumbo')),
       chipImgs: chips.map((c) => c.querySelector('img').alt),
-      packLink: !!document.querySelector('.pack-link button'),
-      packLinkLabel: (document.querySelector('.pack-link button') || {}).textContent,
+      packLink: !!document.querySelector('button.pack-link'),
+      packLinkLabel: (document.querySelector('button.pack-link') || {}).textContent,
       loaded: [...document.querySelectorAll('.chat-bubble img.cemoji')].filter((i) => i.complete && i.naturalWidth > 0).length,
     };
   });
@@ -65,7 +65,7 @@ try {
   check(':pika_wave: is a picture and not text', r.gmImg && !r.gmText.includes(':pika_wave:'), JSON.stringify(r.gmText));
   check('a lone :kirbyrainbowglow: is jumbo', r.kirbyJumbo);
   check('a :vector_logo: reaction chip is a picture', r.chipImgs.includes(':vector_logo:'), JSON.stringify(r.chipImgs));
-  check('the pack share link has an Add button', r.packLink, r.packLinkLabel);
+  check('the pack share link is a chip that adds', r.packLink && /Add$/.test(r.packLinkLabel), r.packLinkLabel);
 
   console.log('\n[autocomplete]');
   await page.focus('#msg-draft');
@@ -92,11 +92,11 @@ try {
   await sleep(300);
 
   console.log('\n[adding the pack from its link]');
-  await page.evaluate(() => document.querySelector('.pack-link button').click());
+  await page.evaluate(() => document.querySelector('button.pack-link').click());
   check('the pack arrives', await waitText('Emoji pack added', 20000));
   await sleep(500);
-  const have = await page.evaluate(() => (document.querySelector('.pack-link button') || {}).textContent);
-  check('the link now says Added', have === 'Added', have);
+  const have = await page.evaluate(() => (document.querySelector('button.pack-link') || {}).textContent);
+  check('the chip now says Added', /Added$/.test(have || ''), have);
   // the picker lists it
   await page.evaluate(() => { const b = [...document.querySelectorAll('.chat-bubble')].find((x) => x.textContent.includes('GM Coinos')); b.click(); });
   await sleep(500);
@@ -113,6 +113,17 @@ try {
     `packs ${JSON.stringify(picker.state.order)} learned ${Object.keys(picker.state.learned || {}).length}`);
   await page.screenshot({ path: shotPath });
   console.log('\nscreenshot:', shotPath);
+
+  console.log('\n[our own share link, /emojis/pack/<naddr>]');
+  const naddr = await page.evaluate(() => (document.querySelector('button.pack-link').title.match(/naddr1[a-z0-9]+/) || [])[0]);
+  await page.evaluate(() => document.querySelector('.emoji-pack button[title*="Remove"]').click());
+  await sleep(300);
+  check('the pack is removed first', await page.evaluate(() => !document.querySelector('.emoji-pack')));
+  await page.goto('http://localhost:5231/emojis/pack/' + naddr, { waitUntil: 'domcontentloaded' });
+  const routed = await waitText('Emoji pack added', 30000);
+  if (!routed) { await page.screenshot({ path: shotPath.replace('.png', '-route.png') }); console.log('   page says:', JSON.stringify((await page.evaluate(() => document.body.innerText)).slice(0, 400))); }
+  check('the route adds the pack on boot', routed);
+  check('and the address is cleaned up', await page.evaluate(() => location.pathname === '/'), await page.evaluate(() => location.pathname));
 } catch (e) {
   console.log('ERROR', e);
   ok = false;

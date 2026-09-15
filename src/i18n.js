@@ -207,6 +207,7 @@ const STR = {
     msgEmojiPackAdd: 'Add',
     msgEmojiPackHave: 'Added',
     msgEmojiPackRemove: 'Remove this pack',
+    msgEmojiPackShare: 'Copy a link to this pack',
     msgEmojiPackAdded: 'Emoji pack added: {name}',
     msgEmojiPackBad: "Couldn't find an emoji pack there",
     msgEmojiPackLink: 'Emoji pack',

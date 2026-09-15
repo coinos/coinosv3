@@ -1043,3 +1043,5 @@ body::after {
    in the 40px grid cell that text must not spill into the next cell */
 .emoji-grid button { overflow: hidden; }
 .emoji-grid .cemoji { font-size: 8px; }
+/* quoted replies and the composer's reply bar run small; their emoji follow */
+.chat-quote-text .cemoji { height: 1.25em; vertical-align: -0.3em; }

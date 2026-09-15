@@ -1299,12 +1299,36 @@ export function messagesFeature(ctx) {
   }
 
   // The displayed text of a message after its edit fold, trimmed to one line.
-  function msgSnippet(room, m, max = 90) {
+  const foldedRumor = (room, m) => {
     const edit = room.edits.get(m.rumor.id);
-    const text = edit && edit.author === m.author ? edit.rumor.content : m.rumor.content;
+    return edit && edit.author === m.author ? edit.rumor : m.rumor;
+  };
+  const oneLine = (text, max = 90) => {
     const one = String(text || '').replace(/\s+/g, ' ').trim();
     return one.length > max ? one.slice(0, max - 1) + '…' : one;
+  };
+  function msgSnippet(room, m, max = 90) {
+    return oneLine(foldedRumor(room, m).content, max);
   }
+  // The snippet as nodes: its custom emoji (NIP-30 tags on the rumor) show
+  // as small pictures, as they do in the bubble being quoted. The cut lands
+  // on the text first, so a shortcode is never sliced in half.
+  function snippetNodes(rumor, max = 90) {
+    const em = emojiTagMap(rumor && rumor.tags);
+    const text = oneLine(rumor && rumor.content, max + 40);
+    if (!em.size) return [oneLine(text, max)];
+    const out = [];
+    let left = max;
+    for (const p of splitEmoji(text, (c) => em.get(c))) {
+      if (left <= 0) { out.push('…'); break; }
+      if (typeof p === 'string') {
+        if (p.length > left) { out.push(p.slice(0, Math.max(0, left - 1)) + '…'); break; }
+        out.push(p); left -= p.length;
+      } else { out.push(emojiImg(p.code, p.url)); left -= 2; }
+    }
+    return out;
+  }
+  const msgSnippetNodes = (room, m, max = 90) => snippetNodes(foldedRumor(room, m), max);
 
   // A kind-9 that e-tags another message is a REPLY — render the quoted
   // context above its text, Telegram-style. Quotes of deleted (or not-yet-
@@ -1316,7 +1340,7 @@ export function messagesFeature(ctx) {
     if (!src) return null;
     return h('div', { class: 'chat-quote' },
       h('span', { class: 'chat-quote-name' }, displayName(src.author)),
-      h('span', { class: 'chat-quote-text' }, msgSnippet(room, src)));
+      h('span', { class: 'chat-quote-text' }, ...msgSnippetNodes(room, src)));
   }
 
   // Telegram-style message action sheet: quick reactions on top, then the
@@ -1357,7 +1381,7 @@ export function messagesFeature(ctx) {
     return h('div', { class: 'reply-bar' },
       h('div', { class: 'col grow', style: 'gap:1px;min-width:0' },
         h('span', { class: 'small', style: 'font-weight:650' }, '↩ ', displayName(m.author)),
-        h('span', { class: 'small muted chat-quote-text' }, msgSnippet(room, m))),
+        h('span', { class: 'small muted chat-quote-text' }, ...msgSnippetNodes(room, m))),
       h('button', { class: 'chat-del', style: 'position:static;display:flex;flex-shrink:0', onClick: () => { ui.msgReplyTo = null; render(); } }, '×'));
   }
 
@@ -6071,7 +6095,7 @@ export function messagesFeature(ctx) {
       if (!src) return null;
       return h('div', { class: 'chat-quote' },
         h('span', { class: 'chat-quote-name' }, displayName(src.rumor.pubkey)),
-        h('span', { class: 'chat-quote-text' }, String(src.rumor.content || '').replace(/\s+/g, ' ').slice(0, 90)));
+        h('span', { class: 'chat-quote-text' }, ...snippetNodes(src.rumor)));
     };
     watchZaps(msgs.slice(-150).map((m) => m.rumor.id));
     const dmChips = (m) => {
@@ -6094,7 +6118,7 @@ export function messagesFeature(ctx) {
       return h('div', { class: 'reply-bar' },
         h('div', { class: 'col grow', style: 'gap:1px;min-width:0' },
           h('span', { class: 'small', style: 'font-weight:650' }, '↩ ', displayName(m.rumor.pubkey)),
-          h('span', { class: 'small muted chat-quote-text' }, String(m.rumor.content || '').replace(/\s+/g, ' ').slice(0, 90))),
+          h('span', { class: 'small muted chat-quote-text' }, ...snippetNodes(m.rumor))),
         h('button', { class: 'chat-del', style: 'position:static;display:flex;flex-shrink:0', onClick: () => { ui.msgReplyTo = null; render(); } }, '×'));
     };
     return h('div', { class: 'card col chat-card chat-page' },

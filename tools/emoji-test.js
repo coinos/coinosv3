@@ -81,6 +81,16 @@ try {
   check('the strip closes after the pick', await page.evaluate(() => !document.querySelector('.emoji-ac button')));
   await page.evaluate(() => { const e = document.querySelector('#msg-draft'); e.value = ''; e.dispatchEvent(new Event('input', { bubbles: true })); });
 
+  console.log('\n[reply bar]');
+  await page.evaluate(() => { const b = [...document.querySelectorAll('.chat-bubble')].find((x) => x.textContent.includes('GM Coinos')); b.click(); });
+  await sleep(400);
+  await page.evaluate(() => [...document.querySelectorAll('.msg-sheet-item')].find((b) => /reply/i.test(b.textContent))?.click());
+  await sleep(400);
+  const bar = await page.evaluate(() => { const e = document.querySelector('.reply-bar .chat-quote-text'); return e ? { text: e.textContent, img: !!e.querySelector('img.cemoji[alt=":pika_wave:"]') } : null; });
+  check('the reply bar quotes the emoji as a picture', bar && bar.img && !bar.text.includes(':pika_wave:'), JSON.stringify(bar));
+  await page.evaluate(() => document.querySelector('.reply-bar .chat-del')?.click());
+  await sleep(300);
+
   console.log('\n[adding the pack from its link]');
   await page.evaluate(() => document.querySelector('.pack-link button').click());
   check('the pack arrives', await waitText('Emoji pack added', 20000));

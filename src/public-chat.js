@@ -45,6 +45,12 @@ const LINK_SPLIT = /(https?:\/\/[^\s]+|nostr:(?:npub|nprofile|note|nevent|naddr)
 const emojiImg = (code, url) => h('img', { class: 'cemoji', src: url, alt: ':' + code + ':', title: ':' + code + ':', loading: 'lazy' });
 // `em` is the message's ["emoji", code, url] map; a :code: it names renders
 // as its picture, anything else stays text
+// a reply's quoted line: one line, cut at 90, its custom emoji as pictures
+function quoteNodes(rumor) {
+  const em = emojiTagMap(rumor && rumor.tags);
+  const one = String((rumor && rumor.content) || '').replace(/\s+/g, ' ').trim().slice(0, 90);
+  return splitEmoji(one, (c) => em.get(c)).map((p) => (typeof p === 'string' ? p : emojiImg(p.code, p.url)));
+}
 function linkedBody(text, em = null) {
   const out = [];
   const emojiAt = em && em.size ? (c) => em.get(c) : null;
@@ -263,8 +269,7 @@ export function mountPublicChat() {
         ? (byChannel.get(activeChannel) || new Map()).get(replyId) : null;
       const quote = replySrc ? h('div', { class: 'chat-quote' },
         h('span', { class: 'chat-quote-name' }, nameOf(replySrc.author)),
-        h('span', { class: 'chat-quote-text' },
-          String(replySrc.rumor.content || '').replace(/\s+/g, ' ').slice(0, 90))) : null;
+        h('span', { class: 'chat-quote-text' }, ...quoteNodes(replySrc.rumor))) : null;
       log.append(h('div', { class: 'chat-row' + (grouped ? ' grouped' : '') },
         grouped ? h('div', { class: 'chat-avatar spacer' }) : avatar(m.author),
         h('div', { class: 'chat-body' },

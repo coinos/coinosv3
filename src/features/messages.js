@@ -13,7 +13,7 @@
 // listens for both identities and decrypts with whichever keys are present.
 
 import {
-  subscribeOn, publishOn, queryOn, fetchInboxRelays,
+  subscribeOn, publishOn, queryOn, fetchInboxRelays, relayAlive, liveRelayList, resetRelay,
   npubOf, neventOf, parseNostrPubkey, parseNostrRef, generateSecretKey, getPublicKey, finalizeEvent, nip44,
   PROFILE_RELAYS, openWrapsOffthread, unwrapDMsOffthread,
 } from '../nostr.js';
@@ -985,7 +985,7 @@ export function messagesFeature(ctx) {
           room.controlEntries.push(opened);
           scheduleFold();
         });
-      }),
+      }, { onclose: noteSubClosed }),
       subscribeOn(room.relays, { kinds: [1059], authors: [room.guestbook.pk], limit: 500 }, (wrap) => {
         if (seenWraps.has(wrap.id)) return;
         seenWraps.add(wrap.id);
@@ -994,7 +994,7 @@ export function messagesFeature(ctx) {
           room.guestEntries.push(opened);
           scheduleFold();
         });
-      })
+      }, { onclose: noteSubClosed })
     );
     for (const c of room.jm.channels || []) subChannel(room, c.id);
   }
@@ -1019,7 +1019,7 @@ export function messagesFeature(ctx) {
         if (!opened) return;
         onChat(room, id, opened);
       });
-    });
+    }, { onclose: noteSubClosed });
     allUnsubs.push(u); (room.unsubs = room.unsubs || []).push(u);
   }
 
@@ -1032,17 +1032,75 @@ export function messagesFeature(ctx) {
   // seenWraps drops the repeats before any decryption, so this costs a few
   // round trips and nothing else.
   function resubscribeStreams() {
-    if (dmStarted) {
-      for (const u of dmUnsubs) { try { u(); } catch {} }
-      dmUnsubs = []; dmStarted = false;
-      startDMs();
-    }
-    for (const room of rooms.values()) {
-      if (!room.subscribed) continue;
-      for (const u of room.unsubs || []) { try { u(); } catch {} }
-      room.unsubs = []; room.subscribed = false; room.subbed.clear();
-      subscribeRoom(room);
-    }
+    const wasDm = dmStarted;
+    const wanted = [...rooms.values()].filter((r) => r.subscribed);
+    tearingDown = true; // our own closes are not a relay giving up on us
+    try {
+      if (wasDm) {
+        for (const u of dmUnsubs) { try { u(); } catch {} }
+        dmUnsubs = []; dmStarted = false;
+      }
+      for (const room of wanted) {
+        for (const u of room.unsubs || []) { try { u(); } catch {} }
+        room.unsubs = []; room.subscribed = false; room.subbed.clear();
+      }
+    } finally { tearingDown = false; }
+    if (wasDm) startDMs();
+    for (const room of wanted) subscribeRoom(room);
+  }
+
+  // ---- subscription watchdog ------------------------------------------------
+  // The resume hook above rebuilds after an absence it was TOLD about. It
+  // isn't told when a socket errors while the page stays on screen (a wifi
+  // hop, a laptop lid, a phone freezing the tab without the away timer
+  // noticing, another tab clearing that timer first) — and an errored
+  // socket is dropped from the pool with every subscription it carried.
+  // The room then sits quietly stale until a reload, while another client
+  // is ringing about new messages. So whenever the app is on screen — on
+  // focus, on becoming visible, and every ten seconds in between — the pool
+  // is asked whether each relay the inbox and the rooms listen on still
+  // holds a live socket; a relay that closed a subscription on us counts
+  // too. Anything missing rebuilds the lot. A rebuild is a few round trips
+  // (seenWraps drops the replay before any decryption), but a relay that
+  // keeps refusing is retried on a growing backoff, not every tick.
+  let tearingDown = false;
+  let subsDead = false;
+  let lastRebuild = 0;
+  let rebuildBackoff = 15_000;
+  let watchdogArmed = false;
+  function noteSubClosed() {
+    if (tearingDown || !allUnsubs.length) return;
+    subsDead = true;
+    setTimeout(ensureLive, 500);
+  }
+  function ensureLive() {
+    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+    if (!allUnsubs.length) return; // nothing is meant to be live yet
+    const urls = new Set();
+    if (dmStarted) for (const u of liveRelayList(DM_RELAYS)) urls.add(u);
+    for (const room of rooms.values()) if (room.subscribed) for (const u of liveRelayList(room.relays)) urls.add(u);
+    const dead = [...urls].filter((u) => !relayAlive(u));
+    if (!dead.length && !subsDead) { rebuildBackoff = 15_000; return; }
+    const now = Date.now();
+    if (now - lastRebuild < rebuildBackoff) return;
+    lastRebuild = now;
+    rebuildBackoff = Math.min(rebuildBackoff * 2, 5 * 60_000);
+    subsDead = false;
+    console.warn('chat: relay socket gone (' + (dead.join(', ') || 'subscription closed') + ') — resubscribing');
+    // a relay the pool is stuck dialing would just hand the rebuild the same
+    // hung promise — drop it so the rebuild dials afresh
+    tearingDown = true;
+    try { for (const u of dead) resetRelay(u); } finally { tearingDown = false; }
+    resubscribeStreams();
+  }
+  function armWatchdog() {
+    if (watchdogArmed || typeof window === 'undefined') return;
+    watchdogArmed = true;
+    const soon = () => setTimeout(ensureLive, 300);
+    window.addEventListener('focus', soon);
+    window.addEventListener('pageshow', soon);
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') soon(); });
+    setInterval(ensureLive, 10_000);
   }
 
   function onChat(room, channelId, { rumor, author }) {
@@ -2454,7 +2512,7 @@ export function messagesFeature(ctx) {
     const dmSub = (relays) => {
       const u = subscribeOn(relays, { kinds: [1059], '#p': pks, limit: 400 }, (wrap) => {
         handleInboxWrap(wrap).catch(() => {});
-      });
+      }, { onclose: noteSubClosed });
       allUnsubs.push(u); dmUnsubs.push(u);
     };
     dmSub(DM_RELAYS);
@@ -6569,6 +6627,7 @@ export function messagesFeature(ctx) {
       if (OPEN_VIEW === 'notifs') setTimeout(openNotifs, 0);
       // a connection that came back is a connection whose subs may have died
       window.addEventListener('online', () => setTimeout(resubscribeStreams, 1500));
+      armWatchdog(); // and, on screen, keep checking the sockets are really there
       try {
         navigator.serviceWorker?.addEventListener('message', (ev) => {
           if (ev.data && ev.data.type === 'open' && ev.data.view === 'notifs') openNotifs();

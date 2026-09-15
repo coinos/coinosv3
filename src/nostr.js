@@ -14,6 +14,7 @@ import * as nip44 from 'nostr-tools/nip44';
 import * as nip04 from 'nostr-tools/nip04';
 import { getPublicKey, finalizeEvent, generateSecretKey, verifyEvent } from 'nostr-tools/pure';
 import { decode as nip19decode, npubEncode, nsecEncode, neventEncode } from 'nostr-tools/nip19';
+import { normalizeURL } from 'nostr-tools/utils';
 import { wrapEvent as nip17WrapEvent } from 'nostr-tools/nip17';
 import { SimplePool } from 'nostr-tools/pool';
 import { randomBytes, bytesToHex } from '@noble/hashes/utils';
@@ -134,6 +135,37 @@ function probeRelays(list) {
       .finally(() => setTimeout(() => probed.delete(url), SICK_MS));
   }
 }
+
+// Whether the pool still holds a live socket to a relay: connected, or
+// dialing / waiting out a reconnect backoff for less than DIAL_MAX. A socket
+// that ERRORED is dropped from the pool outright, its subscriptions with it,
+// and nothing dials it again on its own; a dial that never answers (the
+// network went away mid-handshake) hangs the pool's reconnect forever with
+// no error at all. Both are the silence a watchdog has to catch.
+const DIAL_MAX = 20_000;
+const dialingSince = new Map(); // normalized url -> when we first saw it not-yet-connected
+export function relayAlive(url) {
+  const n = normalizeURL(url); // the pool keys by the normalized form (trailing slash)
+  const r = pool.relays.get(n);
+  if (!r) { dialingSince.delete(n); return false; }
+  if (r.connected) { dialingSince.delete(n); return true; }
+  if (!r.connectionPromise && !r.reconnectTimeoutHandle) { dialingSince.delete(n); return false; }
+  const since = dialingSince.get(n) || (dialingSince.set(n, Date.now()), Date.now());
+  return Date.now() - since < DIAL_MAX;
+}
+// Forget a relay the pool is stuck on, so the next subscribe dials afresh:
+// its (hung or half-dead) socket is closed and the entry dropped. Its
+// subscriptions close too — the caller is about to rebuild them.
+export function resetRelay(url) {
+  const n = normalizeURL(url);
+  dialingSince.delete(n);
+  const r = pool.relays.get(n);
+  if (!r) return;
+  try { r.close(); } catch {}
+  pool.relays.delete(n);
+}
+// the relays a subscription on this list actually dials (sick ones skipped)
+export const liveRelayList = (list) => liveRelays(list);
 
 export function subscribeOn(relays, filter, onEvent, extra = {}) {
   try {

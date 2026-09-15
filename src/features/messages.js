@@ -1307,6 +1307,47 @@ export function messagesFeature(ctx) {
     scheduleRepaint();
   }
 
+  // ---- community discovery: the Vector Hub's public listing as suggestions
+  // under Join. Fetched on demand (it's a megabyte, mostly icons) and kept
+  // for the session; every listing is a CORD-05 link, which is exactly what
+  // the paste box takes, so a tap previews it like a pasted invite.
+  const HUB_URL = 'https://vectorapp.io/api/hub';
+  const hub = { state: 'idle', list: [] };
+  async function loadHub() {
+    if (hub.state === 'loading' || hub.state === 'ready') return;
+    hub.state = 'loading'; scheduleRepaint();
+    try {
+      const res = await fetch(HUB_URL, { signal: AbortSignal.timeout(20_000) });
+      if (!res.ok) throw new Error('http ' + res.status);
+      const list = await res.json();
+      hub.list = (Array.isArray(list) ? list : [])
+        .filter((c) => c && c.name && parseInviteLink(c.invite_url || ''))
+        .map((c) => ({
+          name: String(c.name).slice(0, 64), description: String(c.description || '').slice(0, 200),
+          category: String(c.category || ''), invite: c.invite_url, members: Number(c.member_count) || 0,
+          icon: /^data:image\//.test(c.icon_url || '') ? c.icon_url : null, official: !!c.official,
+        }))
+        .sort((a, b) => b.members - a.members);
+      hub.state = 'ready';
+    } catch { hub.state = 'error'; }
+    scheduleRepaint();
+  }
+  function hubRows() {
+    const q = (ui.msgJoinText || '').trim().toLowerCase();
+    const have = new Set(communities().map((jm) => (rooms.get(jm.community_id)?.folded?.metadata?.name || jm.name || '').toLowerCase()));
+    const rows = hub.list.filter((c) => !q || [c.name, c.description, c.category].some((x) => x.toLowerCase().includes(q)));
+    return rows.map((c) => h('div', {
+      class: 'item chat-thread-row clickable', onClick: () => joinFromText(c.invite),
+    },
+      c.icon ? h('img', { class: 'chat-avatar hub-icon', src: c.icon, alt: '' }) : h('div', { class: 'chat-avatar fallback' }, c.name.slice(0, 2)),
+      h('div', { class: 'col grow', style: 'min-width:0;gap:1px' },
+        h('div', { class: 'row gap6', style: 'align-items:center' },
+          h('span', { class: 'chat-name', style: 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap' }, c.name),
+          have.has(c.name.toLowerCase()) ? h('span', { class: 'tag conf' }, t('msgJoined')) : null),
+        h('div', { class: 'small muted', style: 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap' },
+          (c.members ? t('msgMembers', { n: c.members }) + ' · ' : '') + c.category + (c.description ? ' · ' + c.description : '')))));
+  }
+
   function joinFromText(text) {
     const parsed = parseInviteLink(text);
     if (!parsed) { toast(t('msgBadInvite')); return; }
@@ -5312,13 +5353,25 @@ export function messagesFeature(ctx) {
         h('button', { class: 'btn-sm', onClick: () => { ui.msgHomePanel = ui.msgHomePanel === 'join' ? null : 'join'; render(); } }, t('msgJoin')),
         h('button', { class: 'btn-sm', onClick: () => { ui.msgHomePanel = ui.msgHomePanel === 'create' ? null : 'create'; render(); } }, t('msgCreate')))));
     if (pendingLink && pendingLink.where === 'communities') kids.push(linkInviteCard());
-    if (ui.msgHomePanel === 'join')
-      kids.push(h('div', { class: 'row gap6' },
-        h('input', {
-          class: 'grow', type: 'text', placeholder: t('msgInvitePlaceholder'),
-          value: ui.msgJoinText || '', onInput: (e) => { ui.msgJoinText = e.target.value; },
-        }),
-        h('button', { class: 'btn-sm', onClick: () => joinFromText(ui.msgJoinText) }, t('msgJoin'))));
+    if (ui.msgHomePanel === 'join') {
+      loadHub().catch(() => {});
+      const isLink = !!parseInviteLink(ui.msgJoinText || '');
+      kids.push(h('div', { class: 'col', style: 'gap:8px' },
+        h('div', { class: 'row gap6' },
+          h('input', {
+            class: 'grow', type: 'text', placeholder: t('msgInvitePlaceholder'),
+            value: ui.msgJoinText || '', onInput: (e) => { ui.msgJoinText = e.target.value; render(); },
+            onKeydown: (e) => { if (e.key === 'Enter' && isLink) joinFromText(ui.msgJoinText); },
+          }),
+          isLink ? h('button', { class: 'btn-sm btn-primary', onClick: () => joinFromText(ui.msgJoinText) }, t('msgJoin')) : null),
+        isLink ? null : h('div', { class: 'row between', style: 'align-items:baseline' },
+          h('span', { class: 'small muted' }, t('msgDiscoverTitle')),
+          h('a', { class: 'small muted', href: 'https://vectorapp.io/hub/', target: '_blank', rel: 'noopener noreferrer' }, t('msgHubCredit'))),
+        isLink ? null
+          : hub.state === 'error' ? h('div', { class: 'small muted' }, t('msgHubFailed'))
+          : hub.state !== 'ready' ? h('div', { class: 'row gap6', style: 'align-items:center;padding:6px 0' }, h('span', { class: 'spinner sm' }), h('span', { class: 'small muted' }, t('msgHubLoading')))
+          : h('div', { class: 'list hub-list' }, hubRows())));
+    }
     if (ui.msgHomePanel === 'create')
       kids.push(h('div', { class: 'row gap6' },
         h('input', {

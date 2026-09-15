@@ -1012,3 +1012,5 @@ body::after {
 .emoji-grid { display: flex; flex-wrap: wrap; gap: 2px; max-height: 260px; overflow-y: auto; }
 .emoji-grid button { width: 40px; height: 40px; font-size: 22px; line-height: 1; border: 1px solid transparent; border-radius: 8px; background: none; padding: 0; }
 .emoji-grid button.on { border-color: var(--accent); }
+.hub-list { max-height: 360px; overflow-y: auto; }
+.hub-icon { object-fit: cover; }

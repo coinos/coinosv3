@@ -4133,6 +4133,7 @@ export function messagesFeature(ctx) {
     if (!pending) watchZaps([ev.id]);
     return h('div', {
       class: 'row',
+      'data-focus-note': focus ? '1' : undefined,
       style: 'gap:10px;align-items:flex-start;padding:10px 0'
         + (openable ? ';cursor:pointer' : '')
         + (pending ? ';opacity:.55' : '')
@@ -4214,7 +4215,7 @@ export function messagesFeature(ctx) {
     return c;
   }
   function openNoteThread(ev) {
-    ui.noteThread = { rootId: rootIdOf(ev), focusId: ev.id, seed: ev };
+    ui.noteThread = { rootId: rootIdOf(ev), focusId: ev.id, seed: ev, scrollPending: true };
     ui.profOverThread = false; // a freshly opened thread goes on top
     render();
   }
@@ -4385,6 +4386,22 @@ export function messagesFeature(ctx) {
     if (c.status === 'loading') kids.push(h('div', { class: 'row', style: 'justify-content:center;padding:12px' }, h('span', { class: 'spinner sm' })));
     else if (!c.replies.length) kids.push(h('div', { class: 'small faint', style: 'text-align:center;padding:10px 0' }, t('threadNoReplies')));
     if (!boxPlaced) kids.push(replyBox());
+    // A tapped reply deep in a long thread has to be ON SCREEN when the
+    // thread opens — highlighting it somewhere below the fold reads as the
+    // thread having missed it. Scroll to it after this paint; if the replies
+    // are still loading the row isn't there yet, so the request stays armed
+    // for the render that brings it. The root itself means the top.
+    if (s.scrollPending) {
+      const isRoot = !!c.root && s.focusId === c.root.id;
+      setTimeout(() => {
+        if (ui.noteThread !== s || !s.scrollPending) return;
+        if (isRoot) { s.scrollPending = false; try { window.scrollTo({ top: 0 }); } catch {} return; }
+        const el = document.querySelector('[data-focus-note]');
+        if (!el) return;
+        s.scrollPending = false;
+        try { el.scrollIntoView({ block: 'center' }); } catch {}
+      }, 60);
+    }
     return h('div', { class: 'col', style: 'gap:16px' },
       // full header: search/chat/settings stay reachable mid-thread (only
       // the public no-wallet surface drops the action row)

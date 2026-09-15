@@ -1331,6 +1331,7 @@ async function activateAccount(acc, opts = {}) {
   _featuresInited = false;
   for (const f of FEATURES) { try { f.stop && f.stop(); } catch {} }
   activeId = acc.id;
+  rememberActive(acc.id);
   // A gift link generates this wallet only to claim into. Keep it provisional
   // until the user commits (claims, or chooses to keep it / enters the wallet),
   // so bailing from an already-claimed gift doesn't leave an empty account.
@@ -1548,6 +1549,17 @@ let activeId = null;
 const genId = () => 'a' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 const credId = (a) => (a.type === 'watch' ? 'w:' + a.xpub : a.xprv ? 'x:' + a.xprv : 'f:' + a.mnemonic + '|' + (a.passphrase || '') + (a.deriveIndex ? '|#' + a.deriveIndex : ''));
 const activeAccount = () => accounts.find((a) => a.id === activeId) || null;
+// The wallet you last used, remembered durably (localStorage): a fresh window
+// or tab — a link clicked from outside, a cold start — starts with no session
+// and would otherwise always reopen the FIRST wallet in the directory, not
+// the one you switched to elsewhere. Directory ids are stable across sessions.
+const LAST_ACTIVE_KEY = 'btc-wallet-last-active';
+function rememberActive(id) { try { localStorage.setItem(LAST_ACTIVE_KEY, id); } catch {} }
+function preferredAccount() {
+  let id = null;
+  try { id = localStorage.getItem(LAST_ACTIVE_KEY); } catch {}
+  return accounts.find((a) => a.id === id) || accounts[0] || null;
+}
 
 function defaultLabel(type) {
   const n = accounts.filter((a) => a.type === type).length + 1;
@@ -1684,7 +1696,7 @@ function restoreAccountsState() {
   if (hasVault()) {
     // A blank (optional) vault password unlocks seamlessly with no prompt.
     if (attemptVaultUnlock('')) {
-      if (accounts.length) activateAccount(accounts[0], { fresh: true });
+      if (accounts.length) activateAccount(preferredAccount(), { fresh: true });
       else { ui.screen = 'unlock'; render(); }
       return true;
     }
@@ -1693,7 +1705,7 @@ function restoreAccountsState() {
   const watch = loadWatchAccounts();
   if (watch.length) {
     accounts = watch.slice();
-    activateAccount(accounts[0], { fresh: true });
+    activateAccount(preferredAccount(), { fresh: true });
     return true;
   }
   return false;
@@ -1965,7 +1977,7 @@ function unlockVault() {
     else localStorage.removeItem(UNLOCK_UNTIL_KEY);
   } catch {}
   armUnlockDeadline();
-  const cur = accounts.find((a) => a.id === activeId) || accounts[0];
+  const cur = accounts.find((a) => a.id === activeId) || preferredAccount();
   if (cur) activateAccount(cur, { fresh: true });
   else lock(); // everything got signed out by the timer
 }
@@ -1973,7 +1985,7 @@ function skipVault() {
   ui.vaultPw = '';
   ui.vaultError = '';
   const watch = loadWatchAccounts();
-  if (watch.length) { accounts = watch.slice(); activateAccount(accounts[0], { fresh: true }); }
+  if (watch.length) { accounts = watch.slice(); activateAccount(preferredAccount(), { fresh: true }); }
   else { ui.screen = 'unlock'; render(); }
 }
 
@@ -2665,7 +2677,7 @@ function goHome() {
     // A passwordless vault isn't locked, though: open it silently and land
     // home instead of demanding a password nobody set.
     if (attemptVaultUnlock('') && accounts.length) {
-      activateAccount(accounts[0], { fresh: true });
+      activateAccount(preferredAccount(), { fresh: true });
       return;
     }
     ui.screen = 'vault';

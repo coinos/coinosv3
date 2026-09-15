@@ -108,7 +108,7 @@ export async function unwrapDM(wrap, skOrSigner) {
     const rumor = JSON.parse(await signer.decryptFrom(seal.pubkey, seal.content));
     if (rumor.pubkey !== seal.pubkey) return null;
     if (rumor.id !== getEventHash({ ...rumor, id: undefined })) return null;
-    if (rumor.kind !== 14) return { rumor, author: seal.pubkey, peer: null };
+    if (rumor.kind !== 14 && rumor.kind !== 15) return { rumor, author: seal.pubkey, peer: null };
     const to = rumor.tags?.find((t) => t[0] === 'p')?.[1];
     const mine = rumor.pubkey === signer.pubkey;
     return { rumor, author: seal.pubkey, peer: mine ? to : rumor.pubkey };

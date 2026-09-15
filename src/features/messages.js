@@ -28,6 +28,7 @@ import { makeSearcher, resultRows, fallbackAvatar, warmSearch } from '../recipie
 import { getNetwork } from '../api.js';
 import { decodeBolt11 } from '../ark/lightning.js';
 import { hexToBytes, bytesToHex } from '@noble/hashes/utils';
+import { sha256 } from '@noble/hashes/sha256';
 import { t } from '../i18n.js';
 import { SIGNER_SILENT } from '../dm.js';
 
@@ -1813,7 +1814,7 @@ export function messagesFeature(ctx) {
       let got;
       try { got = await unwrapDMAny(wrap, d); } catch { return 'later'; }
       if (!got) continue;
-      if (got.rumor.kind === 14) {
+      if (got.rumor.kind === 14 || got.rumor.kind === 15) {
         // unwrapDM judges "mine" against the key that DECRYPTED, but this
         // wallet can hold several identities (wallet key + nostr login). A
         // sent-copy authored by any of them must thread under the RECIPIENT,
@@ -3287,7 +3288,20 @@ export function messagesFeature(ctx) {
     }
     return a.url ? a : null;
   };
-  const attachmentsOf = (rumor) => (rumor.tags || []).filter((t) => t[0] === 'imeta').map(parseImeta).filter(Boolean);
+  const attachmentsOf = (rumor) => {
+    const out = (rumor.tags || []).filter((t) => t[0] === 'imeta').map(parseImeta).filter(Boolean);
+    // a NIP-17 file message: the same fields as flat tags, the url as content
+    if (rumor.kind === 15 && /^https?:\/\//.test(rumor.content || '')) {
+      const a = { url: rumor.content.trim(), fallback: [] };
+      for (const [k, v] of rumor.tags || []) {
+        if (k === 'file-type') a.m = v;
+        else if (k === 'fallback') a.fallback.push(v);
+        else if (['encryption-algorithm', 'decryption-key', 'decryption-nonce', 'ox', 'x', 'size', 'dim', 'name'].includes(k)) a[k] = v;
+      }
+      out.push(a);
+    }
+    return out;
+  };
   async function loadAttachment(a) {
     const entry = { state: 'loading' };
     attachCache.set(a.url, entry);
@@ -3349,6 +3363,129 @@ export function messagesFeature(ctx) {
       }, '📎 ' + (a.name || 'file') + (a.size ? ` · ${Math.round(+a.size / 1024)} KB` : ''));
       return h('div', { class: 'chat-attach-ph', style: `aspect-ratio:${ratio}` });
     });
+  }
+
+  // ---- sending a picture: encrypt it, put the blob on Blossom, post the
+  // pointer. Vector's shape exactly, so its users see it: a fresh AES-GCM
+  // key and 16-byte nonce per file, the ciphertext uploaded as an opaque
+  // blob, the key riding inside the (already encrypted) message. The media
+  // host never sees a picture. coinos's own Blossom server stores only sync
+  // envelopes, so these go to public hosts that take anonymous blobs.
+  const MEDIA_SERVERS = ['https://blossom.ditto.pub', 'https://nostr.download'];
+  const MEDIA_MAX = 20 * 1024 * 1024;
+  async function encryptFile(file) {
+    if (file.size > MEDIA_MAX) throw new Error(t('msgAttachTooBig'));
+    const plain = new Uint8Array(await file.arrayBuffer());
+    const key = crypto.getRandomValues(new Uint8Array(32));
+    const nonce = crypto.getRandomValues(new Uint8Array(16));
+    const k = await crypto.subtle.importKey('raw', key, 'AES-GCM', false, ['encrypt']);
+    const cipher = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv: nonce }, k, plain));
+    let dim = '';
+    if (/^image\//.test(file.type)) {
+      try { const bmp = await createImageBitmap(file); dim = `${bmp.width}x${bmp.height}`; bmp.close(); } catch {}
+    }
+    return {
+      cipher, key: bytesToHex(key), nonce: bytesToHex(nonce), ox: bytesToHex(sha256(plain)), x: bytesToHex(sha256(cipher)),
+      m: file.type || 'application/octet-stream', name: file.name || 'file', size: String(cipher.length), dim,
+    };
+  }
+  // BUD-01 upload with a kind-24242 auth signed by whoever is sending.
+  async function uploadEncrypted(id, enc) {
+    const now = Math.floor(Date.now() / 1000);
+    const evt = { kind: 24242, pubkey: id.pubkey, created_at: now - 5, content: 'upload',
+      tags: [['t', 'upload'], ['x', enc.x], ['expiration', String(now + 600)]] };
+    const auth = id.signer instanceof Uint8Array ? finalizeEvent(evt, id.signer) : await id.signer.signEvent(evt);
+    const header = 'Nostr ' + btoa(JSON.stringify(auth));
+    const urls = [];
+    for (const server of MEDIA_SERVERS) {
+      try {
+        const r = await fetch(server + '/upload', {
+          method: 'PUT', body: enc.cipher, signal: AbortSignal.timeout(60_000),
+          headers: { authorization: header, 'content-type': 'application/octet-stream', 'x-sha-256': enc.x },
+        });
+        if (!r.ok) continue;
+        const j = await r.json();
+        if (j && j.url) urls.push(j.url);
+      } catch {}
+      if (urls.length && enc.cipher.length > 4 * 1024 * 1024) break; // one copy is enough for a big file
+    }
+    if (!urls.length) throw new Error(t('msgUploadFailed'));
+    return urls;
+  }
+  const imetaTag = (enc, urls) => ['imeta',
+    'url ' + urls[0], 'm ' + enc.m, 'encryption-algorithm aes-gcm', 'decryption-key ' + enc.key, 'decryption-nonce ' + enc.nonce,
+    'size ' + enc.size, 'ox ' + enc.ox, 'x ' + enc.x, 'name ' + enc.name, ...(enc.dim ? ['dim ' + enc.dim] : []),
+    ...urls.slice(1).map((u) => 'fallback ' + u)];
+  // the local copy shows at once, from the plaintext we still hold
+  const cacheLocal = (enc, urls, file) => {
+    const blob = new Blob([file], { type: enc.m });
+    for (const u of urls) attachCache.set(u, { state: 'ready', blob, src: URL.createObjectURL(blob) });
+  };
+  async function sendAttachment(room, chId, file) {
+    const id = await identity();
+    if (!id) { noIdToast(); return; }
+    ui.msgUploading = true; render();
+    try {
+      const enc = await encryptFile(file);
+      const urls = await uploadEncrypted(id, enc);
+      cacheLocal(enc, urls, file);
+      const { created_at, ms } = msTags(Date.now());
+      const replyTo = ui.msgReplyTo && room.byChannel.get(chId)?.has(ui.msgReplyTo) ? ui.msgReplyTo : null;
+      ui.msgReplyTo = null;
+      const rumor = rumorWithId({
+        kind: 9, pubkey: id.pubkey, content: '',
+        tags: [['channel', chId], ['epoch', String(room.chEpoch(chId))], imetaTag(enc, urls), ...(replyTo ? [['e', replyTo]] : []), ms], created_at,
+      });
+      const msgs = room.byChannel.get(chId) || room.byChannel.set(chId, new Map()).get(chId);
+      const entry = { rumor, author: id.pubkey, pending: true };
+      msgs.set(rumor.id, entry);
+      ui.msgStick = true; ui.msgUploading = false; render();
+      const wrap = await wrapRumor(rumor, id.signer, room.chStream(chId));
+      seenWraps.add(wrap.id);
+      const ok = await publishOn(room.relays, wrap);
+      if (!ok) { msgs.delete(rumor.id); toast(t('msgSendFailed')); render(); return; }
+      delete entry.pending;
+      ensureJoined(room, id).catch(() => {});
+      persistCache(room);
+    } catch (e) { toast(e.message || String(e)); }
+    ui.msgUploading = false; render();
+  }
+  // A DM picture is a NIP-17 kind-15 file message: url as content, the
+  // same fields as flat tags, wrapped to the peer and to ourselves.
+  async function sendDMFile(peer, file) {
+    const id = await identity();
+    if (!id) { noIdToast(); return; }
+    if (!(id.signer instanceof Uint8Array) && !id.signer.encryptTo) { toast(t('msgSignerNoDm')); return; }
+    ui.msgUploading = true; render();
+    try {
+      const enc = await encryptFile(file);
+      const urls = await uploadEncrypted(id, enc);
+      cacheLocal(enc, urls, file);
+      const replyTo = ui.msgReplyTo && threadOf(peer).has(ui.msgReplyTo) ? ui.msgReplyTo : null;
+      ui.msgReplyTo = null;
+      const rumor = rumorWithId({
+        kind: 15, pubkey: id.pubkey, content: urls[0], created_at: Math.floor(Date.now() / 1000),
+        tags: [['p', peer], ...(replyTo ? [['e', replyTo]] : []),
+          ['file-type', enc.m], ['encryption-algorithm', 'aes-gcm'], ['decryption-key', enc.key], ['decryption-nonce', enc.nonce],
+          ['x', enc.x], ['ox', enc.ox], ['size', enc.size], ['name', enc.name], ...(enc.dim ? [['dim', enc.dim]] : []),
+          ...urls.slice(1).map((u) => ['fallback', u])],
+      });
+      const entry = { rumor, mine: true, pending: true };
+      threadOf(peer).set(rumor.id, entry);
+      ui.msgStick = true; ui.msgUploading = false; render();
+      const toPeer = await wrapDM(id.signer, peer, rumor);
+      const toSelf = await wrapDM(id.signer, id.pubkey, rumor);
+      const ok = await publishOn(DM_RELAYS, toPeer);
+      publishOn(DM_RELAYS, toSelf);
+      fetchInboxRelays(peer).then((inbox) => {
+        const extra = inbox.slice(0, 4).filter((r) => !DM_RELAYS.includes(r));
+        if (extra.length) publishOn(extra, toPeer);
+      }).catch(() => {});
+      if (!ok) { threadOf(peer).delete(rumor.id); toast(t('msgSendFailed')); render(); return; }
+      delete entry.pending;
+      persistDms();
+    } catch (e) { toast(e.message || String(e)); }
+    ui.msgUploading = false; render();
   }
 
   function noteBody(text, depth = 0) {
@@ -4789,10 +4926,19 @@ export function messagesFeature(ctx) {
     el.style.height = 'auto';
     el.style.height = Math.min(el.scrollHeight, 120) + 'px';
   };
-  const composer = (placeholder, onSend, onType, draftKey) =>
+  const composer = (placeholder, onSend, onType, draftKey, onAttach = null) =>
     h('div', { class: 'col', style: 'gap:6px' },
       signerNotice(),
     h('div', { class: 'chat-compose' },
+      onAttach ? h('button', {
+        class: 'iconbtn chat-clip', title: t('msgAttach'), 'aria-label': t('msgAttach'),
+        disabled: !!ui.msgUploading,
+        onClick: () => document.getElementById('msg-file')?.click(),
+      }, ui.msgUploading ? h('span', { class: 'spinner sm' }) : h('span', { style: 'display:flex', html: CLIP })) : null,
+      onAttach ? h('input', {
+        type: 'file', id: 'msg-file', accept: 'image/*,video/*', style: 'display:none',
+        onChange: (e) => { const f = e.target.files && e.target.files[0]; e.target.value = ''; if (f) onAttach(f); },
+      }) : null,
       h('textarea', {
         class: 'grow', id: 'msg-draft', placeholder, rows: String(Math.min(5, draftFor(draftKey).split('\n').length)),
         value: draftFor(draftKey), maxlength: '2000',
@@ -4968,7 +5114,7 @@ export function messagesFeature(ctx) {
                 h('span', { class: 'chat-time thread-when' },
                   timeLabel(last.rumor.created_at * 1000),
                   unread ? h('i', { class: 'thread-dot' }) : null)),
-              h('div', { class: 'muted small chat-preview' }, (last.mine ? t('msgYouPrefix') + ' ' : '') + last.rumor.content)))))
+              h('div', { class: 'muted small chat-preview' }, (last.mine ? t('msgYouPrefix') + ' ' : '') + (last.rumor.kind === 15 ? '📎 ' + t('msgPhoto') : last.rumor.content))))))
         : h('div', { class: 'muted small' }, t('msgNoDms')));
     if (shownDms.length < dmRows.length)
       kids.push(h('button', { class: 'linklike small', onClick: () => { ui.msgAllDms = true; render(); } },
@@ -5192,7 +5338,8 @@ export function messagesFeature(ctx) {
         chans.length > 1 ? t('msgPlaceholder', { channel: ch ? ch.name : '' }) : t('msgPlaceholderPlain'),
         () => ch && sendMessage(room, ch.id),
         () => ch && ping(room, ch.id, TYPING),
-        ch ? 'ch:' + ch.id : 'ch:'),
+        ch ? 'ch:' + ch.id : 'ch:',
+        ch ? (f) => sendAttachment(room, ch.id, f) : null),
       ch && ui.msgSheet ? messageSheet(room, ch.id) : null);
   }
 
@@ -5383,11 +5530,11 @@ export function messagesFeature(ctx) {
                     ui.msgSheet = ui.msgSheet === m.rumor.id ? null : m.rumor.id;
                     render();
                   },
-                }, dmQuote(m), ...noteBody(m.rumor.content), ...attachmentNodes(m.rumor), dmChips(m)),
+                }, dmQuote(m), ...(m.rumor.kind === 15 ? [] : noteBody(m.rumor.content)), ...attachmentNodes(m.rumor), dmChips(m)),
                 h('div', { class: 'chat-time' }, timeLabel(m.rumor.created_at * 1000)))))
         : [h('div', { class: 'muted small', style: 'text-align:center;padding:24px 0' }, t('msgNoDmsYet'))])),
       dmReplyBar(),
-      composer(t('msgDmPlaceholder'), () => sendDM(peer), null, 'dm:' + peer),
+      composer(t('msgDmPlaceholder'), () => sendDM(peer), null, 'dm:' + peer, (f) => sendDMFile(peer, f)),
       ui.msgSheet ? dmSheet(peer) : null);
   }
 

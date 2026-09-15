@@ -1007,3 +1007,4 @@ body::after {
 /* an encrypted picture on its way: a box the picture's shape, then the picture */
 .chat-attach-ph { display: block; width: 240px; max-width: 100%; max-height: 320px; margin-top: 6px; border-radius: 10px; background: var(--line); }
 .chat-attach { display: inline-block; margin-top: 6px; }
+.chat-clip { flex: none; align-self: flex-end; width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; }

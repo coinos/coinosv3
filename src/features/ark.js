@@ -2104,37 +2104,36 @@ export function arkFeature(ctx) {
         // header row and no horizontal budget at all. `.coin` brings the
         // on-chain coin-control look — hairlines between rows, big accent
         // checkboxes — so the two coin pages read as siblings.
-        h('div', { class: 'col', style: 'margin-top:4px' },
-          h('label', { class: 'coin' },
-            tick(sel.size === ids.size, (e) => {
-              ui.arkCoinsSel = e.target.checked ? new Set(ids) : new Set();
-              render();
-            }, t('arkCoinsSelectAll')),
-            h('span', { class: 'small faint' }, t('arkCoinsSelectAll'))),
-          ...spend.map((v) => {
-            const f = feeNowOf(v);
-            const xf = exitFeeOf(v);
-            return h('label', { class: 'coin' },
-              tick(sel.has(v.id), (e) => {
-                e.target.checked ? sel.add(v.id) : sel.delete(v.id);
+        // One coin per row in a headed table — the labels live in the header
+        // once instead of on every row as chips. It scrolls sideways on a
+        // narrow screen (the wrapper, not the page) rather than wrapping.
+        // A tap anywhere on a row toggles it.
+        h('div', { class: 'coin-scroll' },
+          h('table', { class: 'coin-table' },
+            h('thead', {}, h('tr', {},
+              h('th', {}, tick(sel.size === ids.size, (e) => {
+                ui.arkCoinsSel = e.target.checked ? new Set(ids) : new Set();
                 render();
-              }),
-              h('div', { class: 'col grow', style: 'gap:3px;min-width:0' },
-                h('span', {}, fmtAmount(v.amountSat),
-                  h('span', { class: 'small faint' }, ' ' + unitLabel())),
-                // little labeled chips instead of a dot-separated line: each
-                // fact wears its own pill, wrapping freely on narrow screens —
-                // the renewal price rides here too, a chip like its siblings
-                h('div', { class: 'coin-chips' },
-                  h('span', {
-                    class: 'coin-chip' + (v.expiryHeight && tip && v.expiryHeight - tip <= 0 ? ' warn' : ''),
-                    title: t('arkCoinsChipExpTitle'),
-                  }, '⏳ ' + t('arkCoinsChipExp', { d: expiresOf(v) })),
-                  h('span', { class: 'coin-chip', title: t('arkCoinsChipExitTitle') },
-                    t('arkCoinsChipExit', { fee: xf == null ? '—' : fmtAmount(xf) + ' ' + unitLabel() })),
-                  h('span', { class: 'coin-chip', title: t('arkCoinsChipRenewTitle') },
-                    t('arkCoinsChipRenew', { fee: renewChip(f) })))));
-          })),
+              }, t('arkCoinsSelectAll'))),
+              h('th', { class: 'num' }, t('arkCoinsColAmount')),
+              h('th', { class: 'num', title: t('arkCoinsChipExpTitle') }, t('arkCoinsColExpiry')),
+              h('th', { class: 'num', title: t('arkCoinsChipExitTitle') }, t('arkCoinsColExit')),
+              h('th', { class: 'num', title: t('arkCoinsChipRenewTitle') }, t('arkCoinsColRenew')))),
+            h('tbody', {}, ...spend.map((v) => {
+              const f = feeNowOf(v);
+              const xf = exitFeeOf(v);
+              const due = !!(v.expiryHeight && tip && v.expiryHeight - tip <= 0);
+              const toggle = () => { sel.has(v.id) ? sel.delete(v.id) : sel.add(v.id); render(); };
+              return h('tr', {
+                class: 'clickable',
+                onClick: (e) => { if (e.target.tagName !== 'INPUT') toggle(); },
+              },
+                h('td', {}, tick(sel.has(v.id), toggle)),
+                h('td', { class: 'num' }, fmtAmount(v.amountSat), h('span', { class: 'small faint' }, ' ' + unitLabel())),
+                h('td', { class: 'num' + (due ? ' warn' : '') }, expiresOf(v)),
+                h('td', { class: 'num' }, xf == null ? '—' : fmtAmount(xf), xf == null ? null : h('span', { class: 'small faint' }, ' ' + unitLabel())),
+                h('td', { class: 'num' }, renewChip(f)));
+            })))),
         h('p', { class: 'small faint', style: 'margin:4px 0 0' }, t('arkCoinsExpiryNote'))),
       h('div', { class: 'card col', style: 'gap:8px' },
         h('h4', { style: 'margin:0' }, t('arkCoinsExitTitle')),

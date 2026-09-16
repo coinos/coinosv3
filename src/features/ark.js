@@ -2043,6 +2043,8 @@ export function arkFeature(ctx) {
     // carries (its ppm bracket) — waiting IS cheaper, and inside the final
     // bracket it's free, where the wallet renews on its own anyway.
     const table = ((mgr.info || {}).refreshFees || {}).ppmExpiryTable || [];
+    const roundMins = Math.max(1, Math.round(((mgr.info || {}).roundIntervalSecs || 120) / 60));
+    const roundEvery = roundMins === 1 ? t('arkCoinsRoundEveryOne') : t('arkCoinsRoundEvery', { n: roundMins });
     const ppmFor = (blocks) => (table.filter((e) => e.thresholdBlocks <= blocks).pop()?.ppm) ?? 0;
     // A coin's SHARE of the renewal fee, fractional: the server totals the
     // ppm across every coin in the round and rounds up once (refreshFee), so
@@ -2133,20 +2135,20 @@ export function arkFeature(ctx) {
                 h('td', { class: 'num' + (due ? ' warn' : '') }, expiresOf(v)),
                 h('td', { class: 'num' }, xf == null ? '—' : fmtAmount(xf), xf == null ? null : h('span', { class: 'small faint' }, ' ' + unitLabel())),
                 h('td', { class: 'num' }, renewChip(f)));
-            })))),
-        h('p', { class: 'small faint', style: 'margin:4px 0 0' }, t('arkCoinsExpiryNote'))),
+            }))))),
       h('div', { class: 'card col', style: 'gap:8px' },
         h('h4', { style: 'margin:0' }, t('arkCoinsExitTitle')),
         h('p', { class: 'small muted', style: 'margin:0' },
           t('arkCoinsExitDesc', { fee: fmtSats(exitFee), after: fmtSats(afterFee) }))),
       h('div', { class: 'card col', style: 'gap:8px' },
         h('h4', { style: 'margin:0' }, t('arkCoinsRenewTitle')),
-        h('p', { class: 'small muted', style: 'margin:0' }, t('arkCoinsRenewDesc')),
+        // the round cadence comes from the server (it has been an hour and
+        // is two minutes as of September 2026) — never a number baked in here
+        h('p', { class: 'small muted', style: 'margin:0' }, t('arkCoinsRenewDesc', { every: roundEvery })),
         schedule.length ? h('div', { class: 'col', style: 'gap:2px;margin:2px 0' },
           ...schedule.map((r) => h('div', { class: 'row between' },
             h('span', { class: 'small muted' }, r.label),
             h('span', { class: 'small' + (r.free ? ' faint' : '') }, r.cost)))) : null,
-        h('p', { class: 'small faint', style: 'margin:0' }, t('arkCoinsRenewAuto')),
         h('button', { class: 'btn-primary btn-block', disabled: !!ui.arkBusy || !selCoins.length, onClick: renew },
           !selCoins.length ? t('arkCoinsRenewNone')
             : selCoins.length < spend.length

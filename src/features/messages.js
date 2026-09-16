@@ -545,7 +545,9 @@ export function messagesFeature(ctx) {
     // least recently seen faces give theirs up first. The row itself stays —
     // that face just paints the way it used to.
     if (JSON.stringify(s).length > THUMB_BUDGET) {
-      const oldestFirst = Object.keys(s).filter((k) => s[k].thumb).sort((a, b) => (s[a].t || 0) - (s[b].t || 0));
+      // never our own: the header face is the one that must paint offline
+      const mine = new Set(myPubkeys());
+      const oldestFirst = Object.keys(s).filter((k) => s[k].thumb && !mine.has(k)).sort((a, b) => (s[a].t || 0) - (s[b].t || 0));
       for (const k of oldestFirst) {
         delete s[k].thumb; delete s[k].thumbFor;
         if (JSON.stringify(s).length <= THUMB_BUDGET) break;
@@ -648,7 +650,7 @@ export function messagesFeature(ctx) {
     // won't have us is asked about twice a month rather than every boot.
     if (p.thumbFailVersion === THUMB_VERSION && p.thumbFail === p.picture
       && Date.now() - (p.thumbFailAt || 0) < Math.min(THUMB_RETRY * 2 ** ((p.thumbFails || 1) - 1), THUMB_RETRY_MAX)) return;
-    if (thumbing.has(pk) || thumbing.size >= 3) return; // a few at a time
+    if (thumbing.has(pk) || (thumbing.size >= 3 && !isMe(pk))) return; // a few at a time — our own face never waits
     // Making the thumbnail costs one more fetch of the original today to
     // save every fetch after it — but not on a connection someone is
     // nursing. Data Saver keeps today's behaviour.
@@ -1128,11 +1130,13 @@ export function messagesFeature(ctx) {
       msgs.set(rumor.id, { rumor, author });
       bumpMsgRev();
       room.typing.delete(author); // the message itself ends the "typing…"
+      schedulePersist(room);
     } else if (rumor.kind === 5) {
       for (const e of rumor.tags.filter((x) => x[0] === 'e')) {
         const m = room.byChannel.get(channelId)?.get(e[1]);
         if (!m || m.author === author) room.deletes.add(e[1]);
       }
+      schedulePersist(room);
     } else if (rumor.kind === 3302) {
       const target = tag('e')?.[1];
       if (target) {
@@ -1162,6 +1166,16 @@ export function messagesFeature(ctx) {
     return room.jm.channels || [];
   };
 
+  // Messages that ARRIVE get cached too, not only ones we send: the cache
+  // used to be written on our own actions alone, so a member who only reads
+  // had nothing on an offline boot — the room said "No messages yet" with a
+  // hundred messages read the day before. A backfill lands in a burst, so
+  // the write waits for it to settle.
+  const persistTimers = new Map(); // room -> timer
+  function schedulePersist(room) {
+    clearTimeout(persistTimers.get(room));
+    persistTimers.set(room, setTimeout(() => { persistTimers.delete(room); try { persistCache(room); } catch {} }, 2500));
+  }
   function persistCache(room) {
     const s = st();
     for (const [chId, msgs] of room.byChannel) {

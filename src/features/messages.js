@@ -3766,7 +3766,10 @@ export function messagesFeature(ctx) {
   // nip05 (a word character sits before those), and never inside a URL
   // (the URL token starts earlier and swallows it).
   const MENTION = '(?<![\\w.@/])@[A-Za-z0-9_]{2,32}(?![\\w@])';
-  const NOTE_SPLIT = new RegExp('(' + MD_LINK + '|https?:\\/\\/[^\\s]+|nostr:(?:npub|nprofile|note|nevent|naddr)1[a-z0-9]+|' + MENTION + ')', 'gi');
+  // A bare npub/nprofile — with or without an @ in front, no nostr: prefix —
+  // is how Vector (and people) write a mention; it resolves to the name too.
+  const BARE_KEY = '(?<![\\w/])@?(?:npub|nprofile)1[a-z0-9]{20,}(?![\\w])';
+  const NOTE_SPLIT = new RegExp('(' + MD_LINK + '|https?:\\/\\/[^\\s]+|nostr:(?:npub|nprofile|note|nevent|naddr)1[a-z0-9]+|' + BARE_KEY + '|' + MENTION + ')', 'gi');
   const MD_PARTS = new RegExp('^(!?)\\[([^\\]\\n]{0,300})\\]\\(\\s*<?(https?:\\/\\/[^\\s>)]+)>?[^)\\n]{0,300}\\)$', 'i');
 
   // A YouTube link is a video, so show the video. All three shapes it comes
@@ -4135,10 +4138,11 @@ export function messagesFeature(ctx) {
       } else if (/^https?:\/\//i.test(part)) {
         const pack = PACK_LINK_RE.exec(part);
         out.push(pack ? packLinkNode(part, pack[1]) : urlNode(part));
-      } else if (/^nostr:(npub|nprofile)1/i.test(part)) {
-        const ref = parseNostrRef(part.slice(6));
+      } else if (/^(nostr:|@?)(npub|nprofile)1/i.test(part)) {
+        const bare = part.replace(/^(nostr:|@)/i, '');
+        const ref = parseNostrRef(bare);
         if (ref && ref.type === 'pubkey') out.push(h('a', { href: '#', onClick: (e) => { e.preventDefault(); openProfile(ref.pk); } }, '@' + displayName(ref.pk)));
-        else out.push(h('span', { class: 'faint' }, part.slice(6, 18) + '…'));
+        else out.push(h('span', { class: 'faint' }, bare.slice(0, 12) + '…'));
       } else if (/^nostr:(note|nevent)1/i.test(part)) {
         const ref = parseNostrRef(part.slice(6));
         if (ref && ref.type === 'event') {

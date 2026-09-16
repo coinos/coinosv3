@@ -479,6 +479,7 @@ export function messagesFeature(ctx) {
   // reaction that arrives before its message still lands. Ephemeral like the
   // community ones: the wrap backlog rebuilds them on reload.
   const dmReacts = new Map(); // rumorId -> Map(authorPk -> emoji)
+  const dmReactAt = new Map(); // `${rumorId}|${authorPk}` -> ms of the reaction that stands
   const pendingDirect = new Map(); // rumor id -> { bundle, from }
   const profiles = new Map(); // pubkey -> profile | null while loading
   const seenWraps = new Set();
@@ -920,6 +921,7 @@ export function messagesFeature(ctx) {
       edits: new Map(),
       deletes: new Set(),
       reactions: new Map(),
+      reactAt: new Map(), // `${target}|${author}` -> ms of the reaction that stands
       presence: new Map(), // pubkey -> ms of their last beat (this session only)
       typing: new Map(), // pubkey -> { ch, t }
       subbed: new Set(),
@@ -1153,8 +1155,16 @@ export function messagesFeature(ctx) {
     } else if (rumor.kind === 7) {
       const target = tag('e')?.[1];
       if (target) {
-        const r = room.reactions.get(target) || room.reactions.set(target, new Map()).get(target);
-        r.set(author, rumor.content);
+        // One reaction per author, the NEWEST by the rumor's own clock — not
+        // the last to arrive. A reload's backfill hands them back in relay
+        // order, and the flame swapped for confetti came back as the flame.
+        const key = target + '|' + author;
+        const at = eventMs(rumor) || rumor.created_at * 1000;
+        if (at >= (room.reactAt.get(key) || 0)) {
+          room.reactAt.set(key, at);
+          const r = room.reactions.get(target) || room.reactions.set(target, new Map()).get(target);
+          r.set(author, rumor.content);
+        }
       }
     }
     const tms = eventMs(rumor);
@@ -1378,6 +1388,7 @@ export function messagesFeature(ctx) {
     const r = room.reactions.get(m.rumor.id) || room.reactions.set(m.rumor.id, new Map()).get(m.rumor.id);
     const prev = r.get(id.pubkey);
     r.set(id.pubkey, emoji);
+    room.reactAt.set(m.rumor.id + '|' + id.pubkey, eventMs(rumor)); // older ones arriving later stay out
     render();
     try {
       const wrap = await wrapRumor(rumor, id.signer, room.chStream(chId));
@@ -2427,7 +2438,12 @@ export function messagesFeature(ctx) {
         const target = got.rumor.tags?.find((x) => x[0] === 'e')?.[1];
         noteEmoji(got.rumor);
         if (target) {
-          (dmReacts.get(target) || dmReacts.set(target, new Map()).get(target)).set(got.author, got.rumor.content);
+          const key = target + '|' + got.author;
+          const at = got.rumor.created_at * 1000;
+          if (at >= (dmReactAt.get(key) || 0)) {
+            dmReactAt.set(key, at);
+            (dmReacts.get(target) || dmReacts.set(target, new Map()).get(target)).set(got.author, got.rumor.content);
+          }
           scheduleRepaint();
         }
       } else if (got.rumor.kind === 3313 && !isMe(got.author)) {
@@ -2629,6 +2645,7 @@ export function messagesFeature(ctx) {
     const r = dmReacts.get(m.rumor.id) || dmReacts.set(m.rumor.id, new Map()).get(m.rumor.id);
     const prev = r.get(id.pubkey);
     r.set(id.pubkey, emoji);
+    dmReactAt.set(m.rumor.id + '|' + id.pubkey, rumor.created_at * 1000);
     render();
     try {
       const toPeer = await wrapDM(id.signer, peer, rumor);

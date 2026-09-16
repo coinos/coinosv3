@@ -84,6 +84,7 @@ export function mountPublicChat() {
   const deletes = new Map(); // rumorId -> Set(author)
   const reactions = new Map(); // rumorId -> Map(author -> emoji)
   const reactEmoji = new Map(); // shortcode -> url, from reactions' own emoji tags
+  const reactAt = new Map(); // `${rumorId}|${author}` -> ms of the reaction that stands
   const controlEntries = [];
   let folded = null; // foldControl result: banned set + channel renames
   let foldT = 0; // fold-once-per-burst debounce, same as the app's rooms
@@ -157,7 +158,15 @@ export function mountPublicChat() {
       }
     } else if (rumor.kind === 7) {
       const target2 = tag('e')?.[1];
-      if (target2) (reactions.get(target2) || reactions.set(target2, new Map()).get(target2)).set(author, rumor.content);
+      if (target2) {
+        // newest by the rumor's clock, not last to arrive (see the app)
+        const key = target2 + '|' + author;
+        const at = eventMs(rumor) || rumor.created_at * 1000;
+        if (at >= (reactAt.get(key) || 0)) {
+          reactAt.set(key, at);
+          (reactions.get(target2) || reactions.set(target2, new Map()).get(target2)).set(author, rumor.content);
+        }
+      }
       // a :code: reaction names its picture in its own tag; kept by code so
       // the chip can show it
       for (const [code, url] of emojiTagMap(rumor.tags)) reactEmoji.set(code, url);

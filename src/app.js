@@ -1381,6 +1381,14 @@ async function activateAccount(acc, opts = {}) {
   // watch-only entry (see the durable account directory) — you keep seeing your
   // balance/history and re-enter the seed to spend again.
   if (acc.type !== 'watch' && !acc.provisional) acc.xpub = wallet.accountXpub();
+  // an account rebuilt by a silent sign-in starts with the phrase "unseen";
+  // the directory remembers if it was seen on this device before
+  if (acc.xpub && !acc.seedSeen) {
+    try {
+      const dir = JSON.parse(localStorage.getItem(WATCH_KEY) || '[]');
+      if (dir.some((e) => e.xpub === acc.xpub && e.seedSeen)) acc.seedSeen = true;
+    } catch {}
+  }
   persistAccounts();
   autoSave(acc);
   // A name fetched during sign-in seeds the names state BEFORE features init
@@ -1642,7 +1650,7 @@ function saveDirectory() {
             || (wallet.nostrPubkey && wallet.nostrPubkey()) || a.nostrPk;
         } catch {}
       }
-      return { id: a.id, label: a.label, xpub: a.xpub, autoLock: a.autoLock || 0, network: a.network, nostrPk: a.nostrPk };
+      return { id: a.id, label: a.label, xpub: a.xpub, autoLock: a.autoLock || 0, network: a.network, nostrPk: a.nostrPk, seedSeen: !!a.seedSeen };
     });
     localStorage.setItem(WATCH_KEY, JSON.stringify(dir));
   } catch {}
@@ -3000,7 +3008,7 @@ function recoveryCard(a) {
           h('button', { class: 'btn-primary grow', onClick: () => {
             ui.revealShown = 'words';
             // seeing it here counts: no need to be asked again elsewhere
-            if (!a.seedSeen) { a.seedSeen = true; persistAccounts(); if (a.persisted) writeVault(); }
+            markSeedSeen(a);
             render();
           } }, t('revealWords')),
           // the same size as its neighbour: two halves of one row, not a
@@ -3327,9 +3335,7 @@ function onboardScreen() {
     if (!acc || !acc.mnemonic) { ui.onb = null; try { localStorage.removeItem(ONB_STEP_KEY); } catch {} return null; }
     const words = acc.mnemonic.split(' ');
     const done = () => {
-      acc.seedSeen = true;
-      persistAccounts();
-      if (acc.persisted) writeVault();
+      markSeedSeen(acc);
       ui.onb = null;
       try { localStorage.removeItem(ONB_STEP_KEY); } catch {}
       ui.account = 'savings';
@@ -3616,6 +3622,39 @@ function walletScreen() {
     pane
   );
 }
+
+// The recovery phrase has been on screen: record it once, everywhere it
+// counts. Every account on the same seed is covered (one phrase backs them
+// all), the session and vault copies are written, and the wallet cache is
+// saved so the flag rides the synced snapshot to every other device — a
+// phrase read on the laptop shouldn't keep nagging on the phone. The
+// directory entry carries it too (saveDirectory), so a silent sign-in that
+// rebuilds the account on this device finds it before any sync arrives.
+function markSeedSeen(a) {
+  if (!a || a.seedSeen) return;
+  const same = (x) => x.mnemonic && x.mnemonic === a.mnemonic && (x.passphrase || '') === (a.passphrase || '');
+  for (const x of accounts) if (x === a || same(x)) x.seedSeen = true;
+  persistAccounts();
+  if (a.persisted) writeVault();
+  try { wallet.saveCache(); } catch {}
+}
+// The flag's ride on the wallet snapshot (local cache and the synced copy).
+// Commutative — it only ever turns on — so older snapshots merge too.
+wallet.registerCacheExtension({
+  mergeAlways: true,
+  save: () => ((activeAccount() || {}).seedSeen ? { seedSeen: true } : {}),
+  load: (d) => {
+    if (!d || !d.seedSeen) return;
+    const a = activeAccount();
+    if (!a || !a.mnemonic || a.seedSeen) return;
+    const same = (x) => x.mnemonic && x.mnemonic === a.mnemonic && (x.passphrase || '') === (a.passphrase || '');
+    for (const x of accounts) if (x === a || same(x)) x.seedSeen = true;
+    persistAccounts();
+    if (a.persisted) writeVault();
+    // no render here: a synced merge emits from the wallet, and a local
+    // cache load is mid-activation, which paints when it's done
+  },
+});
 
 // A wallet whose recovery phrase has never been on screen keeps one quiet
 // line about it. "Later" is a real answer, so this is a row and not a modal —

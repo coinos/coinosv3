@@ -761,6 +761,8 @@ const STR = {
     nlSignIn: 'Sign in',
     feedOneNew: '1 new post',
     feedNNew: '{n} new posts',
+    feedOneNewWord: 'new post',
+    feedNNewWord: 'new posts',
     composePreview: 'Preview',
     composePreviewHide: 'Hide preview',
     composePreviewTag: 'Preview',

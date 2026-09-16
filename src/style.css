@@ -636,6 +636,12 @@ html.no-scroll { overflow: hidden; scrollbar-gutter: auto; }
   box-shadow: 0 3px 12px rgba(0, 0, 0, .28);
   animation: pill-in .18s ease-out;
 }
+/* the count bumps each time it changes: a fresh node per value replays it */
+.feed-new-pill .n { display: inline-block; min-width: 1.1em; text-align: center; animation: pill-bump .32s cubic-bezier(.2,.9,.3,1.4); }
+@keyframes pill-bump {
+  from { transform: scale(1.7); opacity: .4; }
+  to { transform: scale(1); opacity: 1; }
+}
 @keyframes pill-in {
   from { opacity: 0; transform: translate(-50%, -8px); }
   to { opacity: 1; transform: translate(-50%, 0); }

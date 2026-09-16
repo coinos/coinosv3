@@ -3216,8 +3216,9 @@ export function messagesFeature(ctx) {
   // only runs once a wallet opens.
   if (typeof window !== 'undefined') {
     window.addEventListener('scroll', () => {
-      // back at the top of the feed: the waiting posts belong on screen now
-      if (ui.chatOpen && ui.msgView === 'feed' && atFeedTop()) flushPending(false);
+      // NB no auto-flush of waiting posts here: letting them in the moment
+      // the page reached the top re-rendered the feed under a finger on its
+      // way to the pill, and the tap landed on the post beneath instead.
       if (!ui.profilePk && !(ui.chatOpen && ui.msgView === 'feed')) return;
       if (window.innerHeight + window.scrollY < (document.documentElement.scrollHeight || 0) - 600) return;
       if (ui.profilePk) loadOlderNotes(ui.profilePk).catch(() => {});
@@ -3526,11 +3527,12 @@ export function messagesFeature(ctx) {
     }
     return feed;
   }
-  // A follow list that changed means a feed built from the wrong authors.
+  // A follow list that changed means a feed built from the wrong authors —
+  // rebuilt in place, not offered behind the pill.
   function feedAuthorsChanged() {
     if (!feed) return;
     feedAt = 0;
-    refreshFeed();
+    refreshFeed({ live: false });
   }
   // How far from the top counts as "reading", rather than "sitting at the top
   // of the feed". Inserting a post above what someone is reading moves the
@@ -3643,10 +3645,10 @@ export function messagesFeature(ctx) {
     if (!add.length) return false;
     await notesReady(add);
     for (const e of add) feedStaged.delete(e.id);
-    // A post that arrived on its own while you were reading waits behind the
-    // pill instead of shoving the page down. Anything you asked for — a
-    // refresh, a scroll to the bottom, the first load — goes straight in.
-    if (opts.live && !atFeedTop() && c.notes.length) {
+    // A post that arrived on its own waits behind the pill instead of
+    // shoving the page down — wherever you are on it. Only what you asked
+    // for (the first load, a page of older posts) goes straight in.
+    if (opts.live && c.notes.length) {
       c.pending = [...(c.pending || []), ...add].sort((a, b) => b.created_at - a.created_at).slice(0, FEED_KEEP);
       return true;
     }
@@ -3672,8 +3674,10 @@ export function messagesFeature(ctx) {
       .sort((a, b) => b.created_at - a.created_at).slice(0, FEED_KEEP);
     c.shown = Math.min((c.shown || FEED_PAGE) + add.length, c.notes.length);
     try { wallet.saveFeatureState(FEED_CACHE, c.notes.slice(0, FEED_STORE).map(slimNote)); } catch {}
+    // up first, then paint: the new posts open at the top, under your eyes,
+    // rather than somewhere above a page still gliding upward
+    if (scroll) { try { window.scrollTo({ top: 0 }); } catch {} }
     render();
-    if (scroll) { try { window.scrollTo({ top: 0, behavior: 'smooth' }); } catch { window.scrollTo(0, 0); } }
   }
   // One pass over the plan: each relay is asked only for the authors it
   // actually carries. The slowest relay doesn't hold up the rest — every
@@ -3698,11 +3702,16 @@ export function messagesFeature(ctx) {
     }));
     return got;
   }
+  // Whatever a refresh finds goes behind the pill whenever posts are already
+  // on screen — the cached page at boot included. Posts used to slide in a
+  // beat after the page painted, moving what you had started reading. Only
+  // a first load (nothing to disturb) or a rebuilt follow list goes straight in.
   async function refreshFeed(opts = {}) {
     if (!feedAuthors().length) { if (feed) feed.status = 'ready'; return; }
     if (!opts.force && Date.now() - feedAt < 30_000) return;
     feedAt = Date.now();
-    try { await feedPass({}, { live: !!opts.force }); } catch {} finally {
+    const live = opts.live != null ? !!opts.live : !!(feed && feed.notes.length);
+    try { await feedPass({}, { live }); } catch {} finally {
       if (feed) feed.status = 'ready';
       scheduleRepaint();
     }
@@ -5377,12 +5386,16 @@ export function messagesFeature(ctx) {
     // Posts that arrived while you were reading, waiting to be let in. A
     // floating pill rather than an insertion: it says how many, and the tap
     // that shows them also takes you up to them.
+    // Keyed, so the morph keeps this very node while the count changes —
+    // the count itself is a fresh node each time, which is what replays its
+    // bump. The tap is the pill's alone (no bubbling into the page).
     const waiting = (c.pending || []).length;
     const pill = waiting
       ? h('button', {
-          class: 'feed-new-pill',
-          onClick: () => flushPending(true),
-        }, '↑ ' + (waiting === 1 ? t('feedOneNew') : t('feedNNew', { n: waiting })))
+          class: 'feed-new-pill', 'data-key': 'feed-pill', type: 'button',
+          onClick: (e) => { e.preventDefault(); e.stopPropagation(); flushPending(true); },
+        }, '↑ ', h('span', { class: 'n', 'data-key': 'n:' + waiting }, String(waiting)), ' ',
+          waiting === 1 ? t('feedOneNewWord') : t('feedNNewWord'))
       : null;
     // the chat shell draws the brand header; this is just the page under it
     return h('div', { class: 'card col chat-page', style: 'gap:10px' },

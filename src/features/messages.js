@@ -3840,16 +3840,21 @@ export function messagesFeature(ctx) {
   // they're talking about, inside what they said about it. Fetched once per
   // id and remembered, so a feed that quotes the same note ten times asks for
   // it once.
-  const quoted = new Map(); // id -> { status, ev }
+  // A miss is not final: a relay that was down when we asked (ours was, for
+  // an evening) answered nothing, and the note sat "not on your relays"
+  // until a reload. A missing note is asked for again the next time it is
+  // wanted, half a minute on, with any relay hints the reference carried.
+  const QUOTE_RETRY_MS = 30_000;
+  const quoted = new Map(); // id -> { status, ev, at }
   function quotedNote(ref) {
     let c = quoted.get(ref.id);
-    if (c) return c;
-    c = { status: 'loading', ev: null };
-    quoted.set(ref.id, c);
+    if (c && (c.status !== 'missing' || Date.now() - (c.at || 0) < QUOTE_RETRY_MS)) return c;
+    if (!c) { c = { status: 'loading', ev: null, at: 0 }; quoted.set(ref.id, c); }
+    c.at = Date.now();
     (async () => {
       const relays = [...new Set([...(ref.relays || []), ...zapRelays()])];
       const evs = await queryOn(relays, { ids: [ref.id] }, 4500).catch(() => []);
-      c.ev = (evs || [])[0] || null;
+      c.ev = (evs || [])[0] || c.ev || null;
       c.status = c.ev ? 'ready' : 'missing';
       scheduleRepaint();
     })();
@@ -6317,19 +6322,22 @@ export function messagesFeature(ctx) {
   function notifItem(ev) {
     const my = myPubkeys();
     if (!ev || !ev.id) return null;
-    const lastE = (ev.tags || []).filter((x) => x[0] === 'e' && x[1]).map((x) => x[1]).at(-1) || null;
+    const eTags = (ev.tags || []).filter((x) => x[0] === 'e' && x[1]);
+    const lastE = eTags.map((x) => x[1]).at(-1) || null;
+    // the relay hint on that tag: where the reactor says the note is
+    const hint = /^wss?:\/\//i.test((eTags.at(-1) || [])[2] || '') ? [eTags.at(-1)[2]] : [];
     if (ZAP_KINDS.includes(ev.kind)) {
       const actor = zapperOf(ev), sats = receiptSats(ev);
       if (!actor || my.includes(actor) || !sats) return null;
-      return { id: ev.id, what: 'zap', actor, target: lastE, sats, text: zapText(ev), ts: ev.created_at };
+      return { id: ev.id, what: 'zap', actor, target: lastE, hint, sats, text: zapText(ev), ts: ev.created_at };
     }
     if (my.includes(ev.pubkey)) return null;
     if (ev.kind === 7) {
       if (!lastE) return null;
       const emoji = !ev.content || ev.content === '+' ? '\u2764\ufe0f' : ev.content.slice(0, 12);
-      return { id: ev.id, what: 'react', actor: ev.pubkey, target: lastE, emoji, ts: ev.created_at };
+      return { id: ev.id, what: 'react', actor: ev.pubkey, target: lastE, hint, emoji, ts: ev.created_at };
     }
-    if (ev.kind === 6) return lastE ? { id: ev.id, what: 'boost', actor: ev.pubkey, target: lastE, ts: ev.created_at } : null;
+    if (ev.kind === 6) return lastE ? { id: ev.id, what: 'boost', actor: ev.pubkey, target: lastE, hint, ts: ev.created_at } : null;
     if (ev.kind === 1) {
       const es = (ev.tags || []).filter((x) => x[0] === 'e' && x[1]);
       const replyTo = (es.find((x) => x[3] === 'reply') || es.find((x) => x[3] === 'root') || es.at(-1) || [])[1] || null;
@@ -6390,11 +6398,11 @@ export function messagesFeature(ctx) {
   }
   // The post an item is about, if we have it — ours from the feed or a
   // thread, or fetched once by id (quotedNote remembers and repaints).
-  function notifTarget(id) {
+  function notifTarget(id, relays = []) {
     if (!id) return null;
     for (const pk of myPubkeys()) { const hit = notesInHand(pk).find((e) => e.id === id); if (hit) return hit; }
     if (notifNotes.has(id)) return notifNotes.get(id);
-    const q = quotedNote({ id, relays: [] });
+    const q = quotedNote({ id, relays });
     return q.ev || null;
   }
   // A zap can land on a chat message or a DM rather than a post — the
@@ -6433,7 +6441,7 @@ export function messagesFeature(ctx) {
     profileOf(x.actor);
     const aboutNote = !(x.what === 'reply' || x.what === 'mention');
     const msg = aboutNote ? messageInHand(x.target) : null;
-    const target = aboutNote && !msg ? notifTarget(x.target) : null;
+    const target = aboutNote && !msg ? notifTarget(x.target, x.hint || []) : null;
     const excerpt = !aboutNote
       ? plainExcerpt(x.text)
       : msg ? plainExcerpt(msg.text.slice(0, 140))
@@ -6445,7 +6453,8 @@ export function messagesFeature(ctx) {
       } else if (msg && msg.peer) { ui.msgView = 'dm'; ui.msgPeer = msg.peer; ui.msgStick = true; stopNotifWatch(); render(); }
       else if (msg) { ui.msgView = 'room'; ui.msgCommunity = msg.cid; ui.msgChannel = msg.chId; ui.msgStick = true; stopNotifWatch(); render(); }
       else if (target) openNoteThread(target);
-      else if (x.target && !targetGone(x.target)) openNoteRef({ id: x.target }).catch(() => {});
+      // a note we couldn't find is asked for again on tap, hints and all
+      else if (x.target) openNoteRef({ id: x.target, relays: x.hint || [] }).catch(() => {});
     };
     return h('div', {
       class: 'row alert-row' + (x.ts > notifSeenAtOpen ? ' fresh' : ''),

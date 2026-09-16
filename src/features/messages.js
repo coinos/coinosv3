@@ -525,6 +525,13 @@ export function messagesFeature(ctx) {
   let profilesWarmed = false;
   function warmProfiles() {
     if (profilesWarmed) return;
+    // The cache lives under the WALLET's namespace. The header avatar can
+    // ask for a face before the wallet has its keys (a silent sign-in still
+    // resuming at boot), and warming then read an empty slot under a bogus
+    // key and counted itself done — online the relays papered over it, but
+    // offline every cached face stayed a punk. Wait for the keys; init()
+    // warms again once they're there.
+    if (!wallet.mnemonic && !wallet.xprv && !wallet.xpub) return;
     profilesWarmed = true;
     const cached = wallet.loadFeatureState('profiles', {});
     for (const [pk, p] of Object.entries(cached)) if (!profiles.has(pk)) profiles.set(pk, p);
@@ -6632,6 +6639,10 @@ export function messagesFeature(ctx) {
         h('span', { class: big ? '' : 'small' }, displayName(pk)));
     },
     init() {
+      // this wallet's cached faces, from its own namespace — the keys are
+      // in place now, whatever the header asked for before
+      profilesWarmed = false;
+      warmProfiles();
       // your own profile is the likeliest first tap — warm it early
       setTimeout(() => {
         try { const me = ctx.shownPubkey && ctx.shownPubkey(); if (me) prefetchProfilePage(me); } catch {}

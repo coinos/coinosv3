@@ -2044,7 +2044,15 @@ export function arkFeature(ctx) {
     // bracket it's free, where the wallet renews on its own anyway.
     const table = ((mgr.info || {}).refreshFees || {}).ppmExpiryTable || [];
     const ppmFor = (blocks) => (table.filter((e) => e.thresholdBlocks <= blocks).pop()?.ppm) ?? 0;
-    const feeNowOf = (v) => Math.ceil((v.amountSat * ppmFor((v.expiryHeight || 0) - tip)) / 1_000_000);
+    // A coin's SHARE of the renewal fee, fractional: the server totals the
+    // ppm across every coin in the round and rounds up once (refreshFee), so
+    // a 1-sat coin costs a few thousandths of a sat, not the 1 sat a
+    // per-coin ceiling used to print — nine such chips summing past the
+    // real total made it look as if the page were skipping them.
+    const feeNowOf = (v) => (v.amountSat * ppmFor((v.expiryHeight || 0) - tip)) / 1_000_000;
+    const renewChip = (share) => share <= 0 ? t('arkDepthFree')
+      : share < 1 ? t('arkCoinsChipRenewTiny')
+      : fmtAmount(Math.round(share)) + ' ' + unitLabel();
     const span = (blocks) => {
       if (blocks >= 144) {
         const d = Math.round(blocks / 144);
@@ -2125,7 +2133,7 @@ export function arkFeature(ctx) {
                   h('span', { class: 'coin-chip', title: t('arkCoinsChipExitTitle') },
                     t('arkCoinsChipExit', { fee: xf == null ? '—' : fmtAmount(xf) + ' ' + unitLabel() })),
                   h('span', { class: 'coin-chip', title: t('arkCoinsChipRenewTitle') },
-                    t('arkCoinsChipRenew', { fee: f > 0 ? fmtAmount(f) + ' ' + unitLabel() : t('arkDepthFree') })))));
+                    t('arkCoinsChipRenew', { fee: renewChip(f) })))));
           })),
         h('p', { class: 'small faint', style: 'margin:4px 0 0' }, t('arkCoinsExpiryNote'))),
       h('div', { class: 'card col', style: 'gap:8px' },

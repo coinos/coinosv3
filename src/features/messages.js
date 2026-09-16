@@ -1370,7 +1370,10 @@ export function messagesFeature(ctx) {
     const { created_at, ms } = msTags(Date.now());
     const rumor = rumorWithId({
       kind: 7, pubkey: id.pubkey, content: emoji,
-      tags: [['channel', chId], ['epoch', String(room.chEpoch(chId))], ['e', m.rumor.id], ['k', '9'], ...reactEmojiTags(emoji), ms], created_at,
+      // NIP-25 shape per CORD examples §2.3: e = the message, p = ITS AUTHOR,
+      // k = its kind. Vector refuses a reaction without the p tag, so ours
+      // never showed there until it was added.
+      tags: [['channel', chId], ['epoch', String(room.chEpoch(chId))], ['e', m.rumor.id], ['p', m.author], ['k', '9'], ...reactEmojiTags(emoji), ms], created_at,
     });
     const r = room.reactions.get(m.rumor.id) || room.reactions.set(m.rumor.id, new Map()).get(m.rumor.id);
     const prev = r.get(id.pubkey);

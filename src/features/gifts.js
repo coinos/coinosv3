@@ -808,6 +808,15 @@ export function giftsFeature(ctx) {
     const rec = g.claimed ? null : wallet.giftLink(g.id);
     const line = (k, v) => h('div', { class: 'line' }, h('span', { class: 'k' }, k), h('span', { class: 'v' }, v));
     const back = () => { ui.revokeId = null; ctx.goBack(() => { ui.giftDetail = null; }); };
+    const outs = g.outpoints || (wallet.loaded && (wallet.giftRecords()[g.id] || {}).outpoints) || [];
+    const coinTxid = outs.length ? String(outs[0]).split(':')[0] : null;
+    const txLink = (txid) => {
+      const url = wallet.api && wallet.api.explorerTx ? wallet.api.explorerTx(txid) : null;
+      const label = txid.slice(0, 8) + '…' + txid.slice(-6) + ' ↗';
+      return url
+        ? h('a', { href: url, target: '_blank', rel: 'noopener', onClick: (e) => { e.preventDefault(); openExternal(url); } }, label)
+        : label;
+    };
     return h(
       'div',
       { class: 'card col' },
@@ -819,10 +828,16 @@ export function giftsFeature(ctx) {
         : null,
       // only render the summary box when it has content (an empty gray box
       // otherwise appears for reclaimed gifts with no recorded date)
-      created || (!g.claimed && g.reserved)
+      // The coin the gift is locked against is on-chain from the start —
+      // the gift's own funding transaction is presigned and only broadcast
+      // when someone claims, so until then the coin IS what there is to
+      // look at. Once claimed, the claim transaction joins it.
+      created || (!g.claimed && g.reserved) || coinTxid || g.claimTxid
         ? h('div', { class: 'summary col', style: 'gap:0' },
             created ? line(t('dateLabel'), new Date(created).toLocaleString()) : null,
-            !g.claimed && g.reserved ? line(t('status'), t('lockedInGifts')) : null)
+            !g.claimed && g.reserved ? line(t('status'), t('lockedInGifts')) : null,
+            coinTxid ? line(t('giftCoinLabel'), txLink(coinTxid)) : null,
+            g.claimTxid ? line(t('giftClaimTxLabel'), txLink(g.claimTxid)) : null)
         : null,
       // Reclaim/Revoke up front — no confirm step. A reserved gift offers both;
       // an already-reclaimed one only Revoke (its coin is spendable again, only

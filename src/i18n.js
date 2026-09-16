@@ -550,6 +550,8 @@ const STR = {
     newWalletBody: 'Back up your recovery phrase to keep it safe.',
     giftHistoryTitle: 'Gift link',
     giftUnclaimedTag: 'unclaimed',
+    giftCoinLabel: 'Coin',
+    giftClaimTxLabel: 'Claim',
     giftClaimedTag: 'claimed',
     giftView: 'Gift link',
     giftCodeLabel: 'Claim code (sent via DM)',

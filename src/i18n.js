@@ -321,7 +321,7 @@ const STR = {
     arkCoinsExitTitle: 'Uncooperative exit',
     arkCoinsExitDesc: 'If the server vanished today, publishing every transaction in each coin’s history would cost about {fee} sats in mining fees. After a renewal it would be one fresh coin, one hop: about {after} sats.',
     arkCoinsRenewTitle: 'Renewal',
-    arkCoinsRenewDesc: 'The wallet renews your coins by itself before they expire, in the final stretch where renewal is free — there is nothing you need to do. Renewing early is only worth it if you would rather not count on the coinos server: it replaces your coins with a single fresh one in the next round ({every}), which flattens their history and makes a self-custody exit cheaper. The fee depends on how much lifetime a coin still carries — the later, the cheaper:',
+    arkCoinsRenewDesc: 'The wallet renews your coins by itself before they expire, in the final stretch where renewal is free — there is nothing you need to do. Renewing early is only worth it if you would rather not count on the coinos server: it replaces your coins with a single fresh one in the next round ({every}), which flattens their history and makes a self-custody exit cheaper. The fee depends on how close the coin is to expiry — the closer, the cheaper:',
     arkCoinsRoundEvery: 'rounds run every {n} minutes',
     arkCoinsRoundEveryOne: 'rounds run every minute',
     arkCoinsRenewNowFee: 'Renew now for {fee}',

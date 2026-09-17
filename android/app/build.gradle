@@ -3,6 +3,24 @@ apply plugin: 'com.android.application'
 def keystoreProps = new Properties()
 def keystoreFile = rootProject.file('keystore.properties')
 if (keystoreFile.exists()) keystoreProps.load(new FileInputStream(keystoreFile))
+// COINOS_UNSIGNED=1 builds without the keystore even when it is present —
+// the reproducible-build check compares two unsigned builds byte for byte,
+// and F-Droid builds unsigned and compares against our signed release.
+def signRelease = keystoreFile.exists() && System.getenv('COINOS_UNSIGNED') == null
+
+// The bundled shell carries the built web app as assets. It is copied from
+// ../dist, which the web build produces first: HAL_NO_SW=1 bun run build
+// (the service worker is left out — inside the WebView the app is served
+// from these assets, and a worker would fetch the live site over it).
+tasks.register('copyWeb', Copy) {
+  def dist = rootProject.file('../dist') // the repo root's dist, not the module's
+  doFirst {
+    if (!new File(dist, 'index.html').exists())
+      throw new GradleException('build the web app first: HAL_NO_SW=1 bun run build (in the repo root)')
+  }
+  from(dist) { exclude '*.apk', 'standalone.html', 'sw.js', 'zmq-watcher.js' }
+  into layout.buildDirectory.dir('www')
+}
 
 android {
   namespace 'io.coinos.app'
@@ -23,22 +41,44 @@ android {
   //  webview  — the wallet runs in the app, so a UnifiedPush message can
   //             start it off-screen and let it answer. A separate app id,
   //             because it is a separate wallet: its storage is its own.
+  //  fdroid   — the webview shell with the web app BUNDLED as assets: what
+  //             runs is what was built from this source tree, reproducibly,
+  //             which is what F-Droid publishes. No service worker, no
+  //             remote code; the live site is only reached for its APIs.
   flavorDimensions += 'shell'
+  buildFeatures { buildConfig true }
   productFlavors {
     twa {
       dimension 'shell'
       isDefault = true
+      buildConfigField 'boolean', 'BUNDLED', 'false'
     }
     webview {
       dimension 'shell'
       applicationId 'io.coinos.webview'
       versionNameSuffix '-webview'
       resValue 'string', 'app_name', 'Coinos (UnifiedPush)'
+      buildConfigField 'boolean', 'BUNDLED', 'false'
+    }
+    fdroid {
+      dimension 'shell'
+      applicationId 'io.coinos.fdroid'
+      resValue 'string', 'app_name', 'Coinos'
+      buildConfigField 'boolean', 'BUNDLED', 'true'
+    }
+  }
+  sourceSets {
+    // the same shell as webview, plus the bundled web app
+    fdroid {
+      java.srcDirs = ['src/webview/java']
+      res.srcDirs = ['src/webview/res']
+      manifest.srcFile 'src/webview/AndroidManifest.xml'
+      assets.srcDirs += layout.buildDirectory.dir('www').get().asFile
     }
   }
   signingConfigs {
     release {
-      if (keystoreFile.exists()) {
+      if (signRelease) {
         storeFile rootProject.file(keystoreProps['storeFile'])
         storePassword keystoreProps['storePassword']
         keyAlias keystoreProps['keyAlias']
@@ -49,7 +89,7 @@ android {
   buildTypes {
     release {
       minifyEnabled false
-      if (keystoreFile.exists()) signingConfig signingConfigs.release
+      if (signRelease) signingConfig signingConfigs.release
     }
   }
 }
@@ -57,3 +97,5 @@ dependencies {
   // only the TWA shell needs Chrome's helper; the WebView build carries none
   twaImplementation 'com.google.androidbrowserhelper:androidbrowserhelper:2.5.0'
 }
+
+preBuild.dependsOn copyWeb

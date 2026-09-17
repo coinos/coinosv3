@@ -13,6 +13,7 @@ import android.webkit.PermissionRequest;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
+import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
@@ -64,6 +65,17 @@ public class MainActivity extends Activity {
     CookieManager.getInstance().setAcceptCookie(true);
 
     web.setWebViewClient(new WebViewClient() {
+      // The bundled build answers the site's own files from assets; the
+      // plain webview build lets everything through to the live site.
+      @Override
+      public WebResourceResponse shouldInterceptRequest(WebView v, WebResourceRequest r) {
+        if (BuildConfig.BUNDLED) {
+          WebResourceResponse res = Assets.serve(MainActivity.this, r);
+          if (res != null) return res;
+        }
+        return super.shouldInterceptRequest(v, r);
+      }
+
       @Override
       public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest r) {
         Uri u = r.getUrl();

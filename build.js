@@ -360,6 +360,11 @@ function bootShell(logo, staging) {
 }
 const BOOT_SHELL_SCRIPT = `<script>try{var m=location.pathname.match(/^\\/([A-Za-z0-9._-]{1,64})\\/?$/);if(m){document.getElementById('boot-shell').style.display='';document.getElementById('boot-shell-name').textContent=decodeURIComponent(m[1]);}}catch(e){}</script>`;
 
+// HAL_NO_SW=1: the page registers no service worker. The Android bundled
+// build serves this page from its own assets, where a worker would only
+// fetch the live site over the top of them.
+const NO_SW = !!process.env.HAL_NO_SW;
+
 async function pageHtml({ css, staging, pwa, scriptHtml }) {
   return `<!doctype html>
 <html lang="en">
@@ -376,7 +381,7 @@ ${pwa ? PWA_HEAD : ''}<style>${css}</style>
 <div id="app">${bootShell(await brandSvg(), staging)}</div>
 ${BOOT_SHELL_SCRIPT}
 ${scriptHtml}
-${pwa ? SW_REGISTER + '\n' : ''}</body>
+${pwa && !NO_SW ? SW_REGISTER + '\n' : ''}</body>
 </html>`;
 }
 

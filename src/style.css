@@ -560,6 +560,17 @@ hr.divider { margin: 16px 0; }
 .note-act:hover { background: var(--surface2); color: var(--ink); }
 .note-act.on { color: #e0245e; }
 .note-act.on[aria-label="Boost"] { color: var(--green); }
+/* the zap button carries the sats tally: amber once anyone has zapped, the
+   number in amber too; breathing while our own zap is in the air */
+.note-act.note-zap.zapped, .note-act.note-zap.zapped .note-act-n { color: #e6a800; }
+.note-act.note-zap[aria-disabled] { cursor: default; }
+.note-act.note-zap[aria-disabled]:hover { background: none; color: var(--faint); }
+.note-act.note-zap.zapped[aria-disabled]:hover { color: #e6a800; }
+.note-act.note-zap.flying { animation: zap-breathe 1.15s ease-in-out infinite; }
+.note-act.note-zap.flying svg { animation: zap-flicker 1.15s ease-in-out infinite; transform-origin: center; }
+@media (prefers-reduced-motion: reduce) {
+  .note-act.note-zap.flying, .note-act.note-zap.flying svg { animation: none; opacity: .7; }
+}
 .note-act-emoji { font-size: 17px; line-height: 1; }
 .note-act-n { font-size: 12px; font-weight: 600; color: var(--muted); }
 .note-who-toggle.on { color: var(--muted); }

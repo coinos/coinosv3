@@ -4455,14 +4455,24 @@ export function messagesFeature(ctx) {
     const rm = reacts.get(ev.id);
     const likeN = rm ? [...rm.values()].reduce((n, who) => n + who.size, 0) : 0;
     const boostN = (boosts.get(ev.id) || new Set()).size;
-    const btn = (icon, label, count, on, onClick) => h('button', {
-      class: 'note-act' + (on ? ' on' : ''), title: label, 'aria-label': label,
-      onClick: (e) => { e.stopPropagation(); onClick(); },
+    const btn = (icon, label, count, on, onClick, cls = '') => h('button', {
+      class: 'note-act' + (on ? ' on' : '') + (cls ? ' ' + cls : ''), title: label, 'aria-label': label,
+      'aria-disabled': onClick ? undefined : 'true',
+      onClick: (e) => { e.stopPropagation(); if (onClick) onClick(); },
     },
       typeof icon === 'string' && icon.startsWith('<svg')
         ? h('span', { style: 'display:flex', html: icon })
         : h('span', { class: 'note-act-emoji' }, icon),
       count ? h('span', { class: 'note-act-n' }, String(count)) : null);
+    // the sats tally rides on the zap button, like the like and boost counts
+    // do on theirs — amber once anyone has zapped, breathing while ours flies
+    const z = zapTotals.get(ev.id) || zapSeeds().get(ev.id);
+    const zp = pendingOf(ev.id);
+    const optimistic = zp && zp.state !== 'void' ? zp.sats : 0;
+    const zapSats = (z ? z.sats : 0) + optimistic;
+    const zapFlying = !!zp && zp.state === 'flying';
+    const zapMine = !!((z && z.mine) || optimistic);
+    const zapLabel = zapFlying ? t('zapSending') : zapSats ? t('zapTallyTitle', { n: zapSats.toLocaleString() }) : t('zapTitle');
     return h('div', { class: 'row note-acts' },
       btn(I_REPLY, t('msgReply'), 0, false, () => replyToNote(ev)),
       btn(I_BOOST, t('postBoost'), boostN, iBoosted(ev.id), () => boostNote(ev).catch(() => {})),
@@ -4470,7 +4480,13 @@ export function messagesFeature(ctx) {
       // tap to choose how you feel about it; tap again to take it back
       btn(mineReact || I_HEART(false), t('postLike'), likeN, !!mineReact,
         () => { if (mineReact) unreact(ev).catch(() => {}); else { ui.reactPick = ev; render(); } }),
-      canZap ? btn(I_ZAP, t('zapTitle'), 0, false, () => { zapNote(pk, ev); recheckZap(ev.id); }) : null,
+      // shown whenever there is a tally to read, even where zapping is off
+      // (own post, no wallet) — then it is just a number, not a button
+      canZap || zapSats
+        ? btn(I_ZAP, zapLabel, zapSats ? fmtSats(zapSats) : 0, zapMine,
+            canZap ? () => { zapNote(pk, ev); recheckZap(ev.id); } : null,
+            'note-zap' + (zapSats ? ' zapped' : '') + (zapFlying ? ' flying' : ''))
+        : null,
       // who did all that: a small chevron, only once there is anyone to show
       whoCount(ev.id)
         ? h('button', {
@@ -4581,8 +4597,7 @@ export function messagesFeature(ctx) {
               onClick: (e) => { e.stopPropagation(); openProfile(pk); },
             }, name),
             h('span', { class: 'small faint', style: 'white-space:nowrap' },
-              (isReply ? '↩ ' + t('profReplyTag') + ' · ' : '') + timeLabel(ev.created_at * 1000)),
-            zapChip(ev.id, { onClick: canZap ? () => { zapNote(pk, ev); recheckZap(ev.id); } : null })),
+              (isReply ? '↩ ' + t('profReplyTag') + ' · ' : '') + timeLabel(ev.created_at * 1000))),
           pending ? null : h('button', {
             // the overflow stays up here; reply, boost, quote, react and zap
             // are a row of their own under the post

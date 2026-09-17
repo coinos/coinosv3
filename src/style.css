@@ -582,6 +582,8 @@ hr.divider { margin: 16px 0; }
   flex: 0 0 auto; width: 48px; align-self: stretch; min-height: 44px;
   display: flex; align-items: center; justify-content: center; padding: 0;
 }
+/* beside a growing reply box the icons keep their size, sat on the baseline */
+.thread-reply-input ~ .attach-btn { align-self: flex-end; height: 44px; }
 /* A picture, full screen: the image centred on a dark ground, everything
    else out of the way. Fixed to the viewport (svh, so a phone's address bar
    can't push it), and above every other layer including the toast. */

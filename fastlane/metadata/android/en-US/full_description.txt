@@ -1,0 +1,9 @@
+Bitcoin you actually hold: your wallet is twelve words, nobody else ever has them, and they work in any wallet, anywhere.
+
+* Spending over Ark: instant, low-fee off-chain payments with a unilateral exit — your keys, your coins
+* Savings on-chain: a full BIP84 bitcoin wallet
+* Lightning sends and receives via the coinos Ark server, plus a name@coinos.io payment address (BIP-353, LNURL, BOLT 12)
+* Nostr built in: encrypted DMs, community chat, posts, zaps
+* Handles lightning:, bitcoin:, nostr: and lnurl: links and NFC taps
+
+This build carries the whole app inside the APK. The coinos servers are only reached for their APIs (the Ark server, Electrum, the name registrar).

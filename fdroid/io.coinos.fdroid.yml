@@ -3,9 +3,10 @@
 # the Gradle flavor packs dist/ into the APK as assets. Both halves are
 # reproducible: two clean builds give the same unsigned APK, so F-Droid can
 # publish the coinos-signed release once its own build matches (Binaries +
-# AllowedAPKSigningKeys).
+# AllowedAPKSigningKeys). Summary/description/icon/changelogs live in
+# fastlane/ in this repo — F-Droid pulls them from there.
 Categories:
-  - Money
+  - Wallet
 License: MIT
 AuthorName: Adam Soltys
 WebSite: https://v3.coinos.io
@@ -13,28 +14,14 @@ SourceCode: https://github.com/coinos/coinosv3
 IssueTracker: https://github.com/coinos/coinosv3/issues
 
 AutoName: Coinos
-Summary: Self-custodial bitcoin wallet with instant Ark payments and nostr chat
-Description: |-
-  Bitcoin you actually hold: your wallet is twelve words, nobody else ever
-  has them, and they work in any wallet, anywhere.
-
-  * Spending over Ark: instant, low-fee off-chain payments with a unilateral exit
-  * Savings on-chain: a full BIP84 bitcoin wallet
-  * Lightning sends and receives, plus a name@coinos.io payment address
-  * Nostr built in: encrypted DMs, community chat, posts, zaps
-  * Handles lightning:, bitcoin:, nostr: and lnurl: links and NFC taps
-
-  This build carries the whole app inside the APK; the coinos servers are
-  only reached for their APIs (the Ark server, Electrum, the name registrar).
-
 RepoType: git
 Repo: https://github.com/coinos/coinosv3.git
 Binaries: https://github.com/coinos/coinosv3/releases/download/fdroid-v%v/coinos-fdroid-%v.apk
 
 Builds:
-  - versionName: '1.6'
-    versionCode: 7
-    commit: fdroid-v1.6
+  - versionName: '1.7'
+    versionCode: 8
+    commit: fdroid-v1.7
     subdir: android/app
     sudo:
       - curl -fsSL -o /tmp/bun.zip https://github.com/oven-sh/bun/releases/download/bun-v1.3.9/bun-linux-x64-baseline.zip
@@ -47,12 +34,10 @@ Builds:
       - cd ../.. && bun install --frozen-lockfile && HAL_NO_SW=1 bun run build
     scandelete:
       - node_modules
-      - static/coinos.apk
-      - static/graphene.apk
 
 AllowedAPKSigningKeys: 766483ab8372c02f8406d29595e7389a2869190b429e0ffd092ebb0bfa2bc2f4
 
 AutoUpdateMode: Version
 UpdateCheckMode: Tags ^fdroid-v[0-9.]+$
-CurrentVersion: '1.6'
-CurrentVersionCode: 7
+CurrentVersion: '1.7'
+CurrentVersionCode: 8

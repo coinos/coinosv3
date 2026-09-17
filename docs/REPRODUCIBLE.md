@@ -45,6 +45,10 @@ only `META-INF/` should differ).
 
 ## Release
 
+App store text (summary, description, changelogs, icon) lives in
+`fastlane/metadata/android/en-US/` — F-Droid reads it from the tagged commit,
+so a changelog for the new versionCode goes in `changelogs/<versionCode>.txt`.
+
 1. Bump `versionCode`/`versionName` in `android/app/build.gradle`.
 2. Tag `fdroid-v<versionName>` (the F-Droid recipe watches these tags).
 3. Attach the signed APK to the GitHub release as `coinos-fdroid-<versionName>.apk`

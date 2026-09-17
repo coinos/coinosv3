@@ -1,0 +1,1 @@
+First F-Droid release: the whole app bundled inside the APK, built reproducibly from the tagged source.

@@ -29,8 +29,8 @@ android {
     applicationId 'io.coinos.app'
     minSdk 24
     targetSdk 35
-    versionCode 8
-    versionName '1.7'
+    versionCode 9
+    versionName '1.8'
   }
   // Two builds of the same wallet.
   //
@@ -45,6 +45,12 @@ android {
   //             runs is what was built from this source tree, reproducibly,
   //             which is what F-Droid publishes. No service worker, no
   //             remote code; the live site is only reached for its APIs.
+  // Google's dependency-metadata block (a Play-only extra in the APK
+  // signing block, encrypted to Google) is refused by F-Droid's scanner.
+  dependenciesInfo {
+    includeInApk = false
+    includeInBundle = false
+  }
   flavorDimensions += 'shell'
   buildFeatures { buildConfig true }
   productFlavors {

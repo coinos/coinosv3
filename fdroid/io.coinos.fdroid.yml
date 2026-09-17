@@ -21,9 +21,9 @@ Binaries:
   https://github.com/coinos/coinosv3/releases/download/fdroid-v%v/coinos-fdroid-%v.apk
 
 Builds:
-  - versionName: '1.7'
-    versionCode: 8
-    commit: fdroid-v1.7
+  - versionName: '1.8'
+    versionCode: 9
+    commit: fdroid-v1.8
     subdir: android/app
     sudo:
       - curl -fsSL -o /tmp/bun.zip 
@@ -42,5 +42,5 @@ AllowedAPKSigningKeys: 766483ab8372c02f8406d29595e7389a2869190b429e0ffd092ebb0bf
 
 AutoUpdateMode: Version
 UpdateCheckMode: Tags ^fdroid-v[0-9.]+$
-CurrentVersion: '1.7'
-CurrentVersionCode: 8
+CurrentVersion: '1.8'
+CurrentVersionCode: 9

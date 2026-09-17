@@ -4742,14 +4742,30 @@ export function messagesFeature(ctx) {
     // to live at the bottom of the thread, where nobody scrolled to find it.
     const replyBox = () => h('div', { class: 'col', style: 'gap:8px;padding:2px 0 10px' },
       s.preview ? draftPreview(s.draft) : null,
-      h('div', { class: 'row', style: 'gap:8px;align-items:center' },
-      h('input', {
-        type: 'text', class: 'grow thread-reply-input', placeholder: t('threadReplyHint'),
+      h('div', { class: 'row', style: 'gap:8px;align-items:flex-end' },
+      // A textarea that grows with the reply, like the chat composer: Enter
+      // sends, Shift+Enter (or Ctrl+J) breaks the line — a reply used to be
+      // a one-line field with no way to write a paragraph.
+      h('textarea', {
+        class: 'grow thread-reply-input', placeholder: t('threadReplyHint'),
+        rows: String(Math.min(5, (s.draft || '').split('\n').length)),
+        style: 'font-family:var(--sans);resize:none;max-height:120px;overflow-y:auto;line-height:1.4',
         value: s.draft || '',
         // a render per keystroke only while the preview is open; the morph
         // leaves a focused field alone, so this can't fight the typing
-        onInput: (e) => { s.draft = e.target.value; if (s.preview) render(); },
-        onKeydown: (e) => { if (e.key === 'Enter') e.target.closest('.col').querySelector('.thread-reply-send')?.click(); },
+        onInput: (e) => { s.draft = e.target.value; growComposer(e.target); if (s.preview) render(); },
+        onKeydown: (e) => {
+          if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); e.target.closest('.col').querySelector('.thread-reply-send')?.click(); return; }
+          if (e.ctrlKey && (e.key === 'j' || e.key === 'J')) {
+            e.preventDefault();
+            const el = e.target;
+            const { selectionStart: s0, selectionEnd: s1, value } = el;
+            el.value = value.slice(0, s0) + '\n' + value.slice(s1);
+            el.selectionStart = el.selectionEnd = s0 + 1;
+            s.draft = el.value;
+            growComposer(el);
+          }
+        },
       }),
       // A reply can carry a picture too — same upload, same imeta tag, same
       // paperclip. The URL lands in the draft, which is what every client

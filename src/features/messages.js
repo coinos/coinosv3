@@ -4206,7 +4206,7 @@ export function messagesFeature(ctx) {
       settleZap(ev.id, false);
       ui.profilePk = null;
       ui.chatOpen = false;
-      ui.tab = 'send';
+      ctx.showSend();
       render();
       if (!hook('zapNpub', pk, npubStr, ev.id)) hook('lnZapNpub', pk, npubStr, ev.id);
     }
@@ -5233,7 +5233,7 @@ export function messagesFeature(ctx) {
                   ui.noteThread = null;
                   ui.userSearch = null;
                   ui.chatOpen = false;
-                  ui.tab = 'send';
+                  ctx.showSend(); // and never a lingering payment detail
                   render();
                   hook('matchSendText', npubStr);
                 } }, t('profPay')),

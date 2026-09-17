@@ -112,6 +112,17 @@ const ui = {
   busy: false,
 };
 
+// Take the wallet to the Send pane: any payment detail left open (a tapped
+// history row — which claims the whole tab area, whichever tab is picked)
+// closes first. A feature that jumped straight to ui.tab = 'send' used to
+// land on a renewal's detail card instead of the form.
+function showSend() {
+  ui.txDetail = null; ui.arkMoveDetail = null; ui.arkReconDetail = null; ui.arkExitDetail = null; ui.giftDetail = null;
+  ui.bump = null;
+  ui.sendError = '';
+  ui.tab = 'send';
+}
+
 function blankSend() {
   return {
     recipients: [{ address: '', amount: '' }],
@@ -5315,7 +5326,7 @@ async function importSnapshotFile(e) {
 // sits just before boot so every helper it captures is defined; the hooks are
 // only invoked at runtime (first render happens after loadLocale below).
 const ctx = {
-  h, ui, render, wallet, toast, copy, copyBtn, pasteBtn, blankSend, goBack, goHome, openExternal,
+  h, ui, render, wallet, toast, copy, copyBtn, pasteBtn, blankSend, goBack, goHome, openExternal, showSend,
   fmtAmount, unitLabel, unitTag, getUnit: () => unit, toggleUnit, download,
   // in fiat the typed figure is money, so it needs today's price to become sats
   parseAmount: (v, u) => parseAmount(v, u, rateNow()),

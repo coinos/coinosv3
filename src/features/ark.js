@@ -1546,7 +1546,7 @@ export function arkFeature(ctx) {
     const bail = () => {
       if (!z.autoSat) return; // a form zap: the card keeps the screen and its own status
       ctx.hook('zapSettled', z.eventId, false);
-      z.autoSat = 0; ui.tab = 'send';
+      z.autoSat = 0; ctx.showSend();
     };
     // an instant zap: resolution succeeded — pay the default amount now, no
     // form, and report by toast; failures fall back to the classic form

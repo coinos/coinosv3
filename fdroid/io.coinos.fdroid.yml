@@ -17,7 +17,8 @@ AutoName: Coinos
 
 RepoType: git
 Repo: https://github.com/coinos/coinosv3.git
-Binaries: https://github.com/coinos/coinosv3/releases/download/fdroid-v%v/coinos-fdroid-%v.apk
+Binaries: 
+  https://github.com/coinos/coinosv3/releases/download/fdroid-v%v/coinos-fdroid-%v.apk
 
 Builds:
   - versionName: '1.7'
@@ -25,7 +26,8 @@ Builds:
     commit: fdroid-v1.7
     subdir: android/app
     sudo:
-      - curl -fsSL -o /tmp/bun.zip https://github.com/oven-sh/bun/releases/download/bun-v1.3.9/bun-linux-x64-baseline.zip
+      - curl -fsSL -o /tmp/bun.zip 
+        https://github.com/oven-sh/bun/releases/download/bun-v1.3.9/bun-linux-x64-baseline.zip
       - echo "104d4d037f4b35e10215c0507e1779691f39c57bd91ddeefe11cad781e3fc4b9  /tmp/bun.zip"
         | sha256sum -c
       - unzip -q /tmp/bun.zip -d /tmp/bun

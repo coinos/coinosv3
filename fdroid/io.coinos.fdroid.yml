@@ -23,7 +23,7 @@ Binaries:
 Builds:
   - versionName: '1.8'
     versionCode: 9
-    commit: fdroid-v1.8
+    commit: 2f8794174fd4c441bf6c4b7553b4458cf23631ea
     subdir: android/app
     sudo:
       - curl -fsSL -o /tmp/bun.zip 
@@ -34,7 +34,10 @@ Builds:
       - install -m 0755 /tmp/bun/bun-linux-x64-baseline/bun /usr/local/bin/bun
     gradle:
       - fdroid
-    prebuild: cd ../.. && bun install --frozen-lockfile && HAL_NO_SW=1 bun run build
+    prebuild:
+      - cd ../..
+      - bun install --frozen-lockfile
+      - HAL_NO_SW=1 bun run build
     scandelete:
       - node_modules
 

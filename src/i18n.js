@@ -102,6 +102,8 @@ const STR = {
     profUsername: 'Username',
     profUploadPic: 'Upload photo',
     profDisplayName: 'Display name',
+    profFetchFailed: 'Couldn’t load the latest profile.',
+    profNotFound: 'No profile details found on the available relays.',
     profUnameInvalid: 'Usernames can only use letters, numbers, dots, dashes and underscores.',
     lockSaveDesc: 'The accounts already saved on this device are protected by a password. Enter it to save this account with them and lock.',
     lockAction: 'Lock',

@@ -29,13 +29,14 @@ import {
   packAddr, packNaddr, parsePackRef, parsePackAddr, parseEmojiSet,
 } from '../emoji.js';
 import { saveInbox } from '../dm-inbox.js';
-import { makeSearcher, resultRows, fallbackAvatar, warmSearch } from '../recipient-search.js';
+import { makeSearcher, resultRows, fallbackAvatar, warmSearch, punkImageUrl } from '../recipient-search.js';
 import { getNetwork } from '../api.js';
 import { decodeBolt11 } from '../ark/lightning.js';
 import { hexToBytes, bytesToHex } from '@noble/hashes/utils';
 import { sha256 } from '@noble/hashes/sha256';
 import { base64urlnopad } from '@scure/base';
 import { t } from '../i18n.js';
+import { animateZap, warmZapSound } from '../zap-animation.js';
 import { SIGNER_SILENT } from '../dm.js';
 
 // The coinos community's join material lives in ../community.js — shared
@@ -544,7 +545,7 @@ export function messagesFeature(ctx) {
     if (!p || (!p.name && !p.picture)) return;
     const s = wallet.loadFeatureState('profiles', {});
     s[pk] = { name: p.name || null, picture: p.picture || null, nip05: p.nip05 || null, lud16: p.lud16 || null,
-      about: p.about || null, banner: p.banner || null, t: Date.now(),
+      about: p.about || null, banner: p.banner || null, eventAt: p.eventAt || 0, t: Date.now(),
       ...(p.thumbFor === p.picture && p.thumb
         ? { thumb: p.thumb, thumbFor: p.thumbFor, thumbPx: p.thumbPx || 0 } : {}),
       ...(p.thumbFail ? { thumbFail: p.thumbFail, thumbFailAt: p.thumbFailAt || 0, thumbFails: p.thumbFails || 1,
@@ -582,7 +583,7 @@ export function messagesFeature(ctx) {
   const PUNK_PIC_RE = /^(?:https?:\/\/(?:[a-z0-9-]+\.)*coinos\.io\/)?punks\/(\d{1,2})\.webp$/i;
   const localPunk = (url, big) => {
     const m = PUNK_PIC_RE.exec(url || '');
-    return m ? (big ? `punks/${m[1]}.webp` : `punks-sm/${m[1]}.webp`) : null;
+    return m ? punkImageUrl(m[1], !big) : null;
   };
 
   // A refreshed profile whose picture hasn't changed keeps the thumbnail we
@@ -755,7 +756,10 @@ export function messagesFeature(ctx) {
   function applyProfile(pk, ev) {
     let m = null;
     try { m = JSON.parse(ev.content); } catch { m = null; }
-    const p = m ? {
+    if (!m || typeof m !== 'object' || Array.isArray(m)) return false;
+    const prev = profiles.get(pk);
+    if ((prev?.eventAt || 0) > ev.created_at) return true;
+    const p = {
       name: m.display_name || m.name || null,
       picture: m.picture || null,
       nip05: m.nip05 || null,
@@ -767,14 +771,20 @@ export function messagesFeature(ctx) {
       // renders anyway.
       about: typeof m.about === 'string' ? m.about.slice(0, 1000) : null,
       banner: typeof m.banner === 'string' ? m.banner.slice(0, 400) : null,
-    } : null;
-    // An empty answer must never clobber a remembered face with a punk: keep
-    // what we had and just refresh the clock.
-    const prev = profiles.get(pk);
-    const entry = keepThumb(pk, p ? { ...p, t: Date.now(), miss: 0 } : { ...(prev || {}), t: Date.now() });
+    };
+    const entry = keepThumb(pk, { ...p, eventAt: ev.created_at, t: Date.now(), miss: 0 });
     profiles.set(pk, entry);
+    // A page and the batched avatar lookup must share their answer. A slow
+    // page miss must never erase a name/photo the batch already found.
+    if (fullInFlight.has(pk) || fullProfiles.has(pk)) {
+      fullProfiles.set(pk, m);
+      fullFetched.add(pk);
+      fullMisses.delete(pk);
+      persistPage('full', pk, m);
+    }
     persistProfile(pk, entry);
     preloadPicture(entry);
+    return true;
   }
 
   async function fetchProfiles(pks) {
@@ -789,7 +799,7 @@ export function messagesFeature(ctx) {
           const c = newest.get(ev.pubkey);
           if (!c || ev.created_at > c.created_at) newest.set(ev.pubkey, ev);
         }
-        for (const [pk, ev] of newest) { applyProfile(pk, ev); found.add(pk); }
+        for (const [pk, ev] of newest) { if (applyProfile(pk, ev)) found.add(pk); }
         // paint what this batch found before going after the stragglers —
         // the outbox fallback below can take seconds, and there's no reason
         // for a face we already have to wait behind one we don't
@@ -808,7 +818,7 @@ export function messagesFeature(ctx) {
           const c = idxNewest.get(ev.pubkey);
           if (!c || ev.created_at > c.created_at) idxNewest.set(ev.pubkey, ev);
         }
-        for (const [pk, ev] of idxNewest) { applyProfile(pk, ev); found.add(pk); }
+        for (const [pk, ev] of idxNewest) { if (applyProfile(pk, ev)) found.add(pk); }
         if (idxNewest.size) scheduleRepaint();
       }
       const stillLeft = pks.filter((pk) => !found.has(pk));
@@ -822,7 +832,7 @@ export function messagesFeature(ctx) {
             const c = newest.get(ev.pubkey);
             if (!c || ev.created_at > c.created_at) newest.set(ev.pubkey, ev);
           }
-          for (const [pk, ev] of newest) { applyProfile(pk, ev); found.add(pk); }
+          for (const [pk, ev] of newest) { if (applyProfile(pk, ev)) found.add(pk); }
         }));
       }
       // nobody has one: mark the clock so it's retried in minutes, not asked
@@ -1471,7 +1481,7 @@ export function messagesFeature(ctx) {
           close();
           setTimeout(() => document.getElementById('msg-draft')?.focus(), 50);
         }),
-        !ui.emojiPick && !mine && canZapPk(m.author) ? item('⚡', t('msgZap'), () => { close(); zapMessage(m.author, m.rumor.id); }) : null,
+        !ui.emojiPick && canZapPk(m.author) ? item('⚡', t('msgZap'), () => { close(); zapMessage(m.author, m.rumor.id); }) : null,
         ui.emojiPick ? null : item('⧉', t('copy'), async () => {
           try { await navigator.clipboard.writeText(msgSnippet(room, m, 100000)); toast(t('copied')); } catch {}
           close();
@@ -2773,6 +2783,8 @@ export function messagesFeature(ctx) {
 
   const fullProfiles = new Map(); // pk -> { raw kind0 content object, fetched_at }
   const fullFetched = new Set();  // fetched from relays this session
+  const fullInFlight = new Map();
+  const fullMisses = new Set();
 
   // The profile-page cache SURVIVES refreshes: bios and recent posts serve
   // instantly from storage while a background fetch freshens them. Bounded:
@@ -2807,32 +2819,20 @@ export function messagesFeature(ctx) {
       const cached = pageCache().full[pk];
       if (cached) fullProfiles.set(pk, cached.v);
     }
-    if (fullFetched.has(pk)) return;
-    fullFetched.add(pk);
-    queryOn([...new Set([...PROFILE_RELAYS, ...DM_RELAYS])], { kinds: [0], authors: [pk] }, 3500).then((evs) => {
-      const newest = evs.sort((a, b) => b.created_at - a.created_at)[0];
-      let m = {};
-      try { m = newest ? JSON.parse(newest.content) : {}; } catch {}
-      fullProfiles.set(pk, m);
-      persistPage('full', pk, m);
-      // A full fetch is the freshest word on this profile — stamp it into the
-      // light cache (and persist) so a picture changed elsewhere replaces the
-      // stale one everywhere within a session, not after the 24h TTL. The
-      // repaint covers the header/chat avatars, not just an open profile page.
-      const entry = {
-        name: m.display_name || m.name || null, picture: m.picture || null,
-        nip05: m.nip05 || null, lud16: typeof m.lud16 === 'string' ? m.lud16.trim() : null,
-        about: typeof m.about === 'string' ? m.about.slice(0, 1000) : null,
-        banner: typeof m.banner === 'string' ? m.banner.slice(0, 400) : null,
-        t: Date.now(),
-      };
-      keepThumb(pk, entry);
-      profiles.set(pk, entry);
-      persistProfile(pk, entry);
-      preloadPicture(entry);
+    if (fullFetched.has(pk)) return Promise.resolve();
+    if (fullInFlight.has(pk)) return fullInFlight.get(pk);
+    fullMisses.delete(pk);
+    // Use the same index-relay + author's-relay fallbacks as feed avatars.
+    // Only a real kind-0 response marks a page fetched; relay silence is
+    // retryable and leaves cached profile details intact.
+    const pending = fetchProfiles([pk]).catch(() => {}).finally(() => {
+      fullInFlight.delete(pk);
+      if (!fullFetched.has(pk)) fullMisses.add(pk);
       if (ui.profilePk === pk) render();
       else scheduleRepaint();
-    }).catch(() => { if (!fullProfiles.has(pk)) fullProfiles.set(pk, {}); });
+    });
+    fullInFlight.set(pk, pending);
+    return pending;
   }
 
   // Warm a profile PAGE (full kind-0 + latest notes + relay list) before
@@ -2888,7 +2888,10 @@ export function messagesFeature(ctx) {
   // ...and, in the same REQ, what else happened to a note: likes (kind 7)
   // and boosts (kind 6). One round trip for all three.
   const NOTE_KINDS = [9735, 9737, 7, 6];
-  const reacts = new Map();  // note id -> Map(emoji -> Set<pubkey>)
+  const reacts = new Map();  // note id -> Map([emoji, url] -> { emoji, url, who: Set<pubkey> })
+  // Resolve from this reaction's own tag: packs can reuse the same shortcode
+  // for different pictures, and an unrelated event must not change its face.
+  const postReactNode = ({ emoji, url }) => url ? emojiImg(shortcodeOf(emoji), url) : emoji;
   const boosts = new Map();  // note id -> Set<pubkey>
   const seenNoteEv = new Set(); // event ids already counted
   const myReactEv = new Map();  // note id -> the id of OUR reaction, so it can be withdrawn
@@ -2919,7 +2922,13 @@ export function messagesFeature(ctx) {
     try { return String((JSON.parse(tagOf(ev, 'description') || 'null') || {}).content || '').slice(0, 200); } catch { return ''; }
   }
   function zapperOf(ev) {
-    if (ev.kind === 9737) return ev.pubkey;
+    if (ev.kind === 9737) {
+      // Signed by the wallet key; the sender tag names the person behind it.
+      // Older receipts of ours have no such tag — read them as us all the same.
+      const sender = tagOf(ev, 'P') || ev.pubkey;
+      const id = hook('nostrLoginIdentity');
+      return id && wallet.nostr && sender === wallet.nostr.pk ? id.pubkey : sender;
+    }
     if (tagOf(ev, 'P')) return tagOf(ev, 'P');
     try { return (JSON.parse(tagOf(ev, 'description') || 'null') || {}).pubkey || null; } catch { return null; }
   }
@@ -2938,11 +2947,15 @@ export function messagesFeature(ctx) {
         boosts.get(id).add(ev.pubkey);
       } else {
         // '+' and an empty content both mean a plain like
-        const emoji = !ev.content || ev.content === '+' ? '\u2764\ufe0f' : ev.content.slice(0, 12);
+        const code = shortcodeOf(ev.content);
+        const emoji = !ev.content || ev.content === '+' ? '\u2764\ufe0f' : code ? ev.content : ev.content.slice(0, 12);
+        const url = code ? emojiTagMap(ev.tags).get(code) || null : null;
+        const key = JSON.stringify([emoji, url]);
+        noteEmoji(ev);
         if (!reacts.has(id)) reacts.set(id, new Map());
         const m = reacts.get(id);
-        if (!m.has(emoji)) m.set(emoji, new Set());
-        m.get(emoji).add(ev.pubkey);
+        if (!m.has(key)) m.set(key, { emoji, url, who: new Set() });
+        m.get(key).who.add(ev.pubkey);
         // ours, wherever it was sent from — so it can be taken back here
         if (myPubkeys().includes(ev.pubkey)) myReactEv.set(id, ev.id);
       }
@@ -3084,10 +3097,11 @@ export function messagesFeature(ctx) {
     if (Date.now() - p.at > pendTtl(p)) { zapPending.delete(id); return null; }
     return p;
   }
-  function markZapPending(id, sats) {
+  function markZapPending(id, sats, origin) {
     if (!id || !sats) return;
     zapPending.set(id, { sats, at: Date.now(), state: 'flying' });
-    scheduleRepaint();
+    animateZap(sats, origin, id);
+    render();
     // repaint when the in-flight chip would expire, so a zap nobody ever
     // reported on doesn't pulse forever
     setTimeout(scheduleRepaint, ZAP_FLIGHT_MS + 200);
@@ -3118,6 +3132,7 @@ export function messagesFeature(ctx) {
   // The chip: a little bolt + the sats total. Absent until the first receipt
   // — or until you zap it yourself, which is its own kind of receipt.
   function zapChip(id, { onClick, cls = '' } = {}) {
+    if (onClick) warmZapSound();
     const z = zapTotals.get(id) || zapSeeds().get(id);
     const p = pendingOf(id);
     const optimistic = p && p.state !== 'void' ? p.sats : 0;
@@ -4195,20 +4210,18 @@ export function messagesFeature(ctx) {
   // asks once and remembers.
   // Whether a ⚡ makes sense for this author from this wallet: not
   // ourselves, and an instant path (Ark) or a Lightning fallback exists.
-  const canZapPk = (pk) => !!pk && !isMe(pk) && !!(hook('arkReady') || hook('canLnZap'));
-  function zapNote(pk, ev) {
+  // Your own posts and messages too: a zap to yourself is a harmless
+  // round-trip, and one bar that behaves the same everywhere beats a special case.
+  const canZapPk = (pk) => !!pk && !!(hook('arkReady') || hook('canLnZap'));
+  function zapNote(pk, ev, origin) {
+    if (pendingOf(ev.id)?.state === 'flying') return;
     const npubStr = npubOf(pk);
     const def = ctx.zapDefaultSat ? ctx.zapDefaultSat() : 0;
-    if (!def) { ui.zapSetup = { pk, npub: npubStr, eventId: ev.id, amount: '21' }; render(); return; }
-    markZapPending(ev.id, def); // the chip answers the tap; the flow reports back
+    if (!def) { ui.zapSetup = { pk, npub: npubStr, eventId: ev.id, amount: '21', origin }; render(); return; }
+    markZapPending(ev.id, def, origin); // strike now; settlement only corrects the tally
     if (!hook('zapNpub', pk, npubStr, ev.id, def) && !hook('lnZapNpub', pk, npubStr, ev.id, def)) {
-      // no instant path in this build — the classic form flow
       settleZap(ev.id, false);
-      ui.profilePk = null;
-      ui.chatOpen = false;
-      ctx.showSend();
-      render();
-      if (!hook('zapNpub', pk, npubStr, ev.id)) hook('lnZapNpub', pk, npubStr, ev.id);
+      toast('⚡ ' + t('lnZapFailed'), 4000);
     }
   }
 
@@ -4230,8 +4243,11 @@ export function messagesFeature(ctx) {
           const { pk, npub, eventId } = s;
           ui.zapSetup = null;
           render();
-          markZapPending(eventId, n);
-          if (!hook('zapNpub', pk, npub, eventId, n) && !hook('lnZapNpub', pk, npub, eventId, n)) settleZap(eventId, false);
+          markZapPending(eventId, n, s.origin);
+          if (!hook('zapNpub', pk, npub, eventId, n) && !hook('lnZapNpub', pk, npub, eventId, n)) {
+            settleZap(eventId, false);
+            toast('⚡ ' + t('lnZapFailed'), 4000);
+          }
           recheckZap(eventId);
         } }, t('zapSetupSave'))),
       h('button', { class: 'btn-ghost btn-block', onClick: () => { ui.zapSetup = null; render(); } }, t('back')));
@@ -4248,7 +4264,7 @@ export function messagesFeature(ctx) {
     const m = reacts.get(id);
     if (!m) return null;
     const mine = myPubkeys();
-    for (const [emoji, who] of m) for (const pk of mine) if (who.has(pk)) return emoji;
+    for (const reaction of m.values()) for (const pk of mine) if (reaction.who.has(pk)) return reaction;
     return null;
   };
   const iBoosted = (id) => {
@@ -4264,10 +4280,22 @@ export function messagesFeature(ctx) {
   function replyToNote(ev) {
     if (ui.noteThread && ui.noteThread.rootId === rootIdOf(ev)) {
       ui.noteThread.focusId = ev.id;
-      render();
-    } else openNoteThread(ev);
-    if (ui.noteThread) ui.noteThread.refocus = true;
-    setTimeout(() => document.querySelector('.thread-reply-input')?.focus(), 120);
+      ui.noteThread.seed = ev;
+    } else ui.noteThread = { rootId: rootIdOf(ev), focusId: ev.id, seed: ev };
+    const s = ui.noteThread;
+    ui.profOverThread = false;
+    s.scrollPending = false; // focus the composer, without a competing note scroll
+    s.refocus = true;
+    render();
+    // Focus in the tap handler so mobile browsers can open the keyboard.
+    focusThreadReply(s);
+  }
+  function focusThreadReply(s) {
+    if (ui.noteThread !== s || ui.profOverThread) return;
+    const input = document.querySelector('.thread-reply-input');
+    if (!input) return;
+    input.focus({ preventScroll: true });
+    input.scrollIntoView({ block: 'nearest' });
   }
 
   async function unreact(ev) {
@@ -4279,7 +4307,7 @@ export function messagesFeature(ctx) {
       // that don't go on showing it to other people — worth knowing, not
       // worth refusing to try.
       const m = reacts.get(ev.id);
-      if (m) for (const [emoji, who] of [...m]) { for (const pk of myPubkeys()) who.delete(pk); if (!who.size) m.delete(emoji); }
+      if (m) for (const [key, { who }] of [...m]) { for (const pk of myPubkeys()) who.delete(pk); if (!who.size) m.delete(key); }
       render();
       const mineEv = myReactEv.get(ev.id);
       if (!mineEv) return;
@@ -4297,7 +4325,7 @@ export function messagesFeature(ctx) {
     const relays = await noteRelaysFor(ev);
     const partial = {
       kind: 7, content: emoji || '❤️', created_at: Math.floor(Date.now() / 1000),
-      tags: [['e', ev.id], ['p', ev.pubkey], CLIENT_TAG],
+      tags: [['e', ev.id], ['p', ev.pubkey], ...reactEmojiTags(emoji), CLIENT_TAG],
     };
     const evt = id.signer instanceof Uint8Array ? finalizeEvent(partial, id.signer) : await id.signer.signEvent(partial);
     myReactEv.set(ev.id, evt.id);
@@ -4451,14 +4479,15 @@ export function messagesFeature(ctx) {
   const I_ZAP = ICON('<path d="M13 2L4 14h7l-1 8 9-12h-7l1-8z"/>', true);
 
   function noteActions(pk, ev, { canZap }) {
+    if (canZap) warmZapSound(); // the clip is decoded before the first tap
     const mineReact = myReactOn(ev.id);
     const rm = reacts.get(ev.id);
-    const likeN = rm ? [...rm.values()].reduce((n, who) => n + who.size, 0) : 0;
+    const likeN = rm ? [...rm.values()].reduce((n, { who }) => n + who.size, 0) : 0;
     const boostN = (boosts.get(ev.id) || new Set()).size;
     const btn = (icon, label, count, on, onClick, cls = '') => h('button', {
       class: 'note-act' + (on ? ' on' : '') + (cls ? ' ' + cls : ''), title: label, 'aria-label': label,
       'aria-disabled': onClick ? undefined : 'true',
-      onClick: (e) => { e.stopPropagation(); if (onClick) onClick(); },
+      onClick: (e) => { e.stopPropagation(); if (onClick) onClick(e); },
     },
       typeof icon === 'string' && icon.startsWith('<svg')
         ? h('span', { style: 'display:flex', html: icon })
@@ -4478,23 +4507,24 @@ export function messagesFeature(ctx) {
       btn(I_BOOST, t('postBoost'), boostN, iBoosted(ev.id), () => boostNote(ev).catch(() => {})),
       btn(I_QUOTE, t('postQuote'), 0, false, () => quoteNote(ev)),
       // tap to choose how you feel about it; tap again to take it back
-      btn(mineReact || I_HEART(false), t('postLike'), likeN, !!mineReact,
+      btn(mineReact ? postReactNode(mineReact) : I_HEART(false), t('postLike'), likeN, !!mineReact,
         () => { if (mineReact) unreact(ev).catch(() => {}); else { ui.reactPick = ev; render(); } }),
-      // shown whenever there is a tally to read, even where zapping is off
-      // (own post, no wallet) — then it is just a number, not a button
-      canZap || zapSats
-        ? btn(I_ZAP, zapLabel, zapSats ? fmtSats(zapSats) : 0, zapMine,
-            canZap ? () => { zapNote(pk, ev); recheckZap(ev.id); } : null,
-            'note-zap' + (zapSats ? ' zapped' : '') + (zapFlying ? ' flying' : ''))
-        : null,
-      // who did all that: a small chevron, only once there is anyone to show
-      whoCount(ev.id)
-        ? h('button', {
-            class: 'note-act note-who-toggle' + (whoOpen(ev.id) ? ' on' : ''),
-            title: t('postWho'), 'aria-label': t('postWho'), 'aria-expanded': whoOpen(ev.id) ? 'true' : 'false',
-            onClick: (e) => { e.stopPropagation(); toggleWho(ev.id); },
-          }, h('span', { class: 'note-who-chev' + (whoOpen(ev.id) ? ' open' : ''), html: I_CHEV }))
-        : null);
+      // always in the bar — the same row of buttons on every post, so nothing
+      // shifts when a wallet comes online; without one it is just the number
+      btn(I_ZAP, zapLabel, zapSats ? fmtSats(zapSats) : 0, zapMine,
+        canZap ? (e) => { zapNote(pk, ev, e.currentTarget.getBoundingClientRect()); recheckZap(ev.id); } : null,
+        'note-zap' + (zapSats ? ' zapped' : '') + (zapFlying ? ' flying' : '')),
+      // who did all that: a small chevron, always in place — dimmed until
+      // there is someone to show, so the first reaction doesn't reflow the bar
+      (() => {
+        const n = whoCount(ev.id), open = n && whoOpen(ev.id);
+        return h('button', {
+          class: 'note-act note-who-toggle' + (open ? ' on' : ''),
+          title: t('postWho'), 'aria-label': t('postWho'), 'aria-expanded': open ? 'true' : 'false',
+          'aria-disabled': n ? undefined : 'true',
+          onClick: (e) => { e.stopPropagation(); if (n) toggleWho(ev.id); },
+        }, h('span', { class: 'note-who-chev' + (open ? ' open' : ''), html: I_CHEV }));
+      })());
   }
 
   // ---- who reacted, boosted and zapped ------------------------------------
@@ -4507,7 +4537,7 @@ export function messagesFeature(ctx) {
   const toggleWho = (id) => { if (whoOpenIds.has(id)) whoOpenIds.delete(id); else whoOpenIds.add(id); render(); };
   function whoCount(id) {
     const rm = reacts.get(id);
-    let n = rm ? [...rm.values()].reduce((k, who) => k + who.size, 0) : 0;
+    let n = rm ? [...rm.values()].reduce((k, { who }) => k + who.size, 0) : 0;
     n += (boosts.get(id) || new Set()).size;
     n += (zapWho.get(id) || new Map()).size;
     return n;
@@ -4536,8 +4566,8 @@ export function messagesFeature(ctx) {
           person(z.pk, h('span', { class: 'note-who-sats' }, fmtSats(z.sats) + ' sats'
             + (z.text ? ' · ' + z.text : '')))))));
     }
-    for (const [emoji, set] of [...rm.entries()].sort((a, b) => b[1].size - a[1].size)) {
-      lines.push(line(h('span', { class: 'note-act-emoji' }, emoji), people([...set])));
+    for (const reaction of [...rm.values()].sort((a, b) => b.who.size - a.who.size)) {
+      lines.push(line(h('span', { class: 'note-act-emoji' }, postReactNode(reaction)), people([...reaction.who])));
     }
     if (bs.size) lines.push(line(h('span', { style: 'display:flex', html: I_BOOST }), people([...bs])));
     if (!lines.length) return null;
@@ -4567,7 +4597,7 @@ export function messagesFeature(ctx) {
     // profile is actually opened.
     profileOf(pk);
     const isReply = ev.tags.some((x) => x[0] === 'e');
-    const canZap = !isMe(pk) && !!(hook('arkReady') || hook('canLnZap'));
+    const canZap = canZapPk(pk);
     // an optimistic post mid-publish: visible but not yet a real event —
     // dimmed, and no thread/reply/zap until its signed self takes over
     const pending = !!ev.pending;
@@ -4575,6 +4605,7 @@ export function messagesFeature(ctx) {
     if (!pending) watchZaps([ev.id]);
     return h('div', {
       class: 'row',
+      'data-zap-post': ev.id,
       'data-focus-note': focus ? '1' : undefined,
       style: 'gap:10px;align-items:flex-start;padding:10px 0'
         + (openable ? ';cursor:pointer' : '')
@@ -4621,8 +4652,15 @@ export function messagesFeature(ctx) {
   function threadFor(seed) {
     const rootId = rootIdOf(seed);
     let c = threadCache.get(rootId);
-    if (c) return c;
-    c = { status: 'loading', rootId, root: seed.id === rootId ? seed : null, replies: [] };
+    if (c) {
+      if (seed.id === rootId) c.root ||= seed;
+      else if (!c.replies.some((ev) => ev.id === seed.id))
+        c.replies = [...c.replies, seed].sort((a, b) => a.created_at - b.created_at);
+      return c;
+    }
+    // We already have the tapped post. Keep it visible and replyable even
+    // if the root is unavailable or the relay's limited result omits it.
+    c = { status: 'loading', rootId, root: seed.id === rootId ? seed : null, replies: seed.id === rootId ? [] : [seed] };
     threadCache.set(rootId, c);
     (async () => {
       // the conversation's home relays are the root author's (NIP-10 outbox);
@@ -4634,7 +4672,7 @@ export function messagesFeature(ctx) {
       ]);
       if (!c.root) c.root = (roots || [])[0] || null;
       const seen = new Set([rootId]);
-      c.replies = (replies || [])
+      c.replies = [...c.replies, ...(replies || [])]
         .filter((e) => !seen.has(e.id) && seen.add(e.id))
         .sort((a, b) => a.created_at - b.created_at);
       c.status = 'ready';
@@ -4646,7 +4684,8 @@ export function messagesFeature(ctx) {
         // button asked for it.
         if (ui.noteThread.refocus) {
           ui.noteThread.refocus = false;
-          setTimeout(() => document.querySelector('.thread-reply-input')?.focus(), 30);
+          const s = ui.noteThread;
+          setTimeout(() => focusThreadReply(s), 30);
         }
       }
     })().catch(() => {
@@ -5119,6 +5158,9 @@ export function messagesFeature(ctx) {
       // full header on profiles too — losing the search button here made
       // finding the NEXT person a trek back home
       ctx.brandHeader(!ui.pubProf && wallet.loaded),
+      fullMisses.has(pk) ? h('div', { class: 'row between gap6 small muted' },
+        t(full || lp.eventAt || lp.name || lp.picture ? 'profFetchFailed' : 'profNotFound'),
+        h('button', { class: 'btn-sm', onClick: () => { fetchFullProfile(pk); render(); } }, t('retry'))) : null,
       h('div', { class: 'card col', style: 'gap:12px' },
         bannerUrl ? h('div', { class: 'profile-banner', style: `background-image:url(${JSON.stringify(bannerUrl)})` }) : null,
         h('div', { class: 'row gap6', style: 'align-items:center' },
@@ -5954,11 +5996,11 @@ export function messagesFeature(ctx) {
       },
       h('div', { class: 'chat-avatar fallback' }, name.slice(0, 2)),
       h('div', { class: 'col grow', style: 'min-width:0;gap:1px' },
-        h('div', { class: 'row between' },
-          h('span', { class: 'chat-name' }, name),
-          unread ? h('i', { class: 'thread-dot' }) : null),
+        h('span', { class: 'chat-name' }, name),
         h('div', { class: 'muted small' },
-          memberCount ? t('msgMembers', { n: memberCount }) : t('msgEncrypted'))));
+          memberCount ? t('msgMembers', { n: memberCount }) : t('msgEncrypted'))),
+      // the row's own centring puts the dot mid-height, off the edge
+      unread ? h('i', { class: 'thread-dot' }) : null);
     })));
 
     return h('div', { class: 'card col chat-page', style: 'gap:10px' }, ...kids);
@@ -6068,7 +6110,7 @@ export function messagesFeature(ctx) {
                       title: t('msgReact'),
                       onClick: (e) => { e.stopPropagation(); sendReaction(room, chId, m, emoji); },
                     }, reactNode(emoji), n > 1 ? ' ' + n : '')))
-              : null)(zapChip(m.rumor.id, { cls: 'chat-react', onClick: !mine && canZapPk(m.author) ? () => zapMessage(m.author, m.rumor.id) : null }))))
+              : null)(zapChip(m.rumor.id, { cls: 'chat-react', onClick: canZapPk(m.author) ? () => zapMessage(m.author, m.rumor.id) : null }))))
       );
     });
   }
@@ -6244,7 +6286,7 @@ export function messagesFeature(ctx) {
           close();
           setTimeout(() => document.getElementById('msg-draft')?.focus(), 50);
         }),
-        !ui.emojiPick && !m.mine && canZapPk(m.rumor.pubkey) ? item('⚡', t('msgZap'), () => { close(); zapMessage(m.rumor.pubkey, m.rumor.id); }) : null,
+        !ui.emojiPick && canZapPk(m.rumor.pubkey) ? item('⚡', t('msgZap'), () => { close(); zapMessage(m.rumor.pubkey, m.rumor.id); }) : null,
         ui.emojiPick ? null : item('⧉', t('copy'), async () => {
           try { await navigator.clipboard.writeText(m.rumor.content); toast(t('copied')); } catch {}
           close();
@@ -6273,7 +6315,7 @@ export function messagesFeature(ctx) {
     watchZaps(msgs.slice(-150).map((m) => m.rumor.id));
     const dmChips = (m) => {
       const reacts = dmReacts.get(m.rumor.id);
-      const zc = zapChip(m.rumor.id, { cls: 'chat-react', onClick: !m.mine && canZapPk(m.rumor.pubkey) ? () => zapMessage(m.rumor.pubkey, m.rumor.id) : null });
+      const zc = zapChip(m.rumor.id, { cls: 'chat-react', onClick: canZapPk(m.rumor.pubkey) ? () => zapMessage(m.rumor.pubkey, m.rumor.id) : null });
       if ((!reacts || !reacts.size) && !zc) return null;
       const myReact = reacts && my.map((pk) => reacts.get(pk)).find(Boolean);
       const counts = new Map();

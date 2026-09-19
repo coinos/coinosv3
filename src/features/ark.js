@@ -1514,7 +1514,16 @@ export function arkFeature(ctx) {
   // arkoor send and publishes a receipt referencing the delivered vtxo.
   // Kinds are provisional until a NIP lands.
   const ARK_INFO_KIND = 10037; // replaceable: ["ark", <address>], ["network", <net>]
-  const ARK_ZAP_KIND = 9737;   // receipt: ["p", pk], ["e", note?], ["amount", sats], ["vtxo", id], ["network", net]
+  const ARK_ZAP_KIND = 9737;   // receipt: ["p", pk], ["e", note?], ["amount", sats], ["vtxo", id], ["network", net], ["P", sender?]
+  // The receipt is signed by the wallet key, which has no profile. When the
+  // wallet is linked to a nostr login, name that identity as the sender (the
+  // same "P" tag NIP-57 receipts use) so the zap reads as the person, not
+  // as an npub nobody recognizes.
+  const zapSenderTag = () => {
+    const id = ctx.hook('nostrLoginIdentity');
+    const me = wallet.nostrPubkey && wallet.nostrPubkey();
+    return id && id.pubkey && id.pubkey !== me ? [['P', id.pubkey]] : [];
+  };
 
   // npub decode without importing the nostr stack (keeps ark-only builds lean)
   function npubToHex(s) {
@@ -1671,7 +1680,7 @@ export function arkFeature(ctx) {
       kind: ARK_ZAP_KIND,
       content: (z.comment || '').slice(0, 280),
       tags: [['p', z.pk], ...(z.eventId ? [['e', z.eventId]] : []),
-        ['amount', String(sats)], ['vtxo', vtxoId], ['network', getNetwork()]],
+        ['amount', String(sats)], ['vtxo', vtxoId], ['network', getNetwork()], ...zapSenderTag()],
     }).catch(() => {});
   }
 
@@ -1715,7 +1724,7 @@ export function arkFeature(ctx) {
         kind: ARK_ZAP_KIND,
         content: (z.comment || '').slice(0, 280),
         tags: [['p', z.pk], ...(z.eventId ? [['e', z.eventId]] : []),
-          ['amount', String(sats)], ['network', getNetwork()], ['gift', locked.url]],
+          ['amount', String(sats)], ['network', getNetwork()], ['gift', locked.url], ...zapSenderTag()],
       }).catch(() => {});
       const dmText = t('giftDmText', { amount: fmtAmount(sats) + ' ' + unitLabel(), link: locked.url, code: locked.claimCode });
       if (wallet.sendNostrDM) {

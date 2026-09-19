@@ -214,7 +214,7 @@ export function zapsFeature(ctx) {
     }
     const invoice = await requestInvoice(p, { amountMsat: msat, zapRequest, lnurlBech32: t2.lnurlBech32 });
     await hook('arkPayInvoice', invoice, { maxAmountSat: sats + 50 });
-    toast('⚡ ' + t('zapSentShort', { n: fmtAmount(sats) + ' ' + unitLabel() }));
+    if (!target.eventId) toast('⚡ ' + t('zapSentShort', { n: fmtAmount(sats) + ' ' + unitLabel() }));
     render();
   }
 
@@ -454,10 +454,13 @@ export function zapsFeature(ctx) {
         // this went, either way
         autoZap({ kind: 'npub', pk, eventId: eventId || null }, autoSat)
           .then(() => hook('zapSettled', eventId, true, autoSat))
-          .catch((e) => { hook('zapSettled', eventId, false); toast('⚡ ' + e.message); });
+          .catch((e) => { hook('zapSettled', eventId, false); toast('⚡ ' + (e.message || t('lnZapFailed')), 4000); });
         return true;
       }
-      if (autoSat) hook('zapSettled', eventId, false); // one tap couldn't serve it — the form takes over
+      if (autoSat) {
+        hook('zapSettled', eventId, false);
+        if (eventId) { toast('⚡ ' + t('lnZapFailed'), 4000); return true; }
+      }
       begin({ kind: 'npub', pk, eventId: eventId || null }, shortNpub(npub || npubOf(pk)));
       return true;
     },

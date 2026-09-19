@@ -247,8 +247,25 @@ export function installSyncWallet(wallet, { outbox = syncOutbox() } = {}) {
     },
   });
 
+  // Account activation, Spending connect and the live subscription all need
+  // the same initial restore. Share it so history is merged newest-first
+  // before either live source starts delivering an old backlog piecemeal.
+  const restore = wallet.syncFromNostr.bind(wallet);
+  let restoring = null;
+  wallet.syncFromNostr = () => {
+    const pk = wallet.nostr.pk, net = wallet.netName;
+    if (restoring && restoring.pk === pk && restoring.net === net) return restoring.promise;
+    const run = { pk, net, promise: null };
+    run.promise = restore().finally(() => { if (restoring === run) restoring = null; });
+    restoring = run;
+    wallet.nostrRestoreReady ||= run.promise;
+    return run.promise;
+  };
+
   // identity follows the open wallet
   wallet.registerLoadHook(() => {
+    restoring = null;
+    wallet.nostrRestoreReady = null;
     if (wallet.mnemonic) wallet.nostr.load(wallet.mnemonic, wallet.passphrase, wallet.accountIndex || 0);
     else wallet.nostr.unload();
     outbox?.wake();
@@ -305,24 +322,32 @@ export function installSyncWallet(wallet, { outbox = syncOutbox() } = {}) {
   // vtxos union) applies live; full snapshots stay a load-time affair. With
   // per-device slots no device overwrites another's, so this only ever adds.
   let stateUnsub = null;
+  let stateGeneration = 0;
   wallet.registerRealtimeHook({
     start: () => {
       const sync = getSyncConfig();
       if (!sync.enabled || !wallet.nostr.pk) return;
       wallet.nostr.setRelays(sync.relays);
       if (stateUnsub) { try { stateUnsub(); } catch {} }
-      stateUnsub = wallet.nostr.subscribeStates((v, dtag) => {
-        if (!v.netName || v.netName !== wallet.netName) return;
-        if (!isOurDtag(dtag, wallet.netName)) return;
-        if (isOwnDeviceDtag(dtag, wallet.netName) && (v.savedAt || 0) === (wallet._savedAt || 0)) return; // our own echo
-        if (!v.blob) { wallet._mergeSnapshotExtensions(v); return; }
-        const pk = wallet.nostr.pk;
-        resolveStates([{ state: v, dtag }]).then((r) => {
-          if (r[0] && wallet.nostr.pk === pk && wallet.netName === r[0].state.netName) wallet._mergeSnapshotExtensions(r[0].state);
-        }).catch(() => {});
-      });
+      stateUnsub = null;
+      const generation = ++stateGeneration;
+      const identity = wallet.nostr.pk, network = wallet.netName;
+      Promise.resolve(wallet.nostrRestoreReady || wallet.syncFromNostr()).then(() => {
+        if (generation !== stateGeneration || wallet.nostr.pk !== identity || wallet.netName !== network) return;
+        stateUnsub = wallet.nostr.subscribeStates((v, dtag) => {
+          if (generation !== stateGeneration || wallet.nostr.pk !== identity) return;
+          if (!v.netName || v.netName !== wallet.netName) return;
+          if (!isOurDtag(dtag, wallet.netName)) return;
+          if (isOwnDeviceDtag(dtag, wallet.netName) && (v.savedAt || 0) === (wallet._savedAt || 0)) return; // our own echo
+          if (!v.blob) { wallet._mergeSnapshotExtensions(v); return; }
+          const pk = wallet.nostr.pk;
+          resolveStates([{ state: v, dtag }]).then((r) => {
+            if (generation === stateGeneration && r[0] && wallet.nostr.pk === pk && wallet.netName === r[0].state.netName) wallet._mergeSnapshotExtensions(r[0].state);
+          }).catch(() => {});
+        });
+      }).catch(() => {});
     },
-    stop: () => { if (stateUnsub) { try { stateUnsub(); } catch {} stateUnsub = null; } },
+    stop: () => { stateGeneration++; if (stateUnsub) { try { stateUnsub(); } catch {} stateUnsub = null; } },
   });
 
   // Capture and sign changed domains NOW, under the saving wallet's identity.

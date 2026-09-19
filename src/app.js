@@ -756,7 +756,7 @@ window.addEventListener('popstate', (e) => {
   // in the browser's history. Walking Back into one with a wallet open showed
   // the start page over a perfectly open session — which reads as "I got
   // logged out". With a wallet open, those entries become the wallet home.
-  if (snap.screen && snap.screen !== 'wallet' && activeAccount() && ui.screen === 'wallet') {
+  if (['unlock', 'vault'].includes(snap.screen) && activeAccount() && ui.screen === 'wallet') {
     snap = Object.fromEntries(NAV_FIELDS.map((f) => [f, null]));
     snap.screen = 'wallet'; snap.tab = ui.tab ?? null;
     try { history.replaceState({ nav: snap, i: st && typeof st.i === 'number' ? st.i : navIndex }, ''); } catch {}
@@ -1381,6 +1381,7 @@ async function activateAccount(acc, opts = {}) {
   // reflow when the name lookup proves Spending a beat later.
   if (opts.spendingHint && !acc.spendingSetup) { acc.spendingSetup = Date.now(); }
   const netName = acc.network;
+  const stillActive = () => activeAccount() === acc && getNetwork() === netName;
   if (netName !== getNetwork()) {
     setNetwork(netName);
     for (const f of FEATURES) { try { f.networkChanged && f.networkChanged(netName); } catch {} }
@@ -1481,15 +1482,19 @@ async function activateAccount(acc, opts = {}) {
     // with no synced state); that's what discovers the used addresses. Otherwise
     // the socket + frontier poll keep us current with no refresh-time burst.
     const hadNostr = wallet.watchOnly || !wallet.syncFromNostr ? false : await wallet.syncFromNostr();
+    if (!stillActive()) return;
     if (!hadCache && !hadNostr) {
       await wallet.scan({ silent: false });
     }
+    if (!stillActive()) return;
     // Re-baseline a fresh open against the final frontier (Nostr or the discovery
     // scan may have advanced it) so payments that predate the open don't celebrate.
     if (opts.fresh) { ack = wallet.nextReceiveIndex; wallet.setReceiveAck(ack); ui.receiveSeenIndex = ack; }
     wallet.retrack(); // re-subscribe to the latest frontier (Nostr/scan may have moved it)
   } catch {
-    enterOfflineFallback();
+    // A scan can finish after logout or an account switch. Its failure must
+    // not put the new session (or an empty wallet) into offline mode.
+    if (stillActive()) enterOfflineFallback();
   }
 }
 
@@ -2267,7 +2272,8 @@ function lock({ offerPassword = false } = {}) {
 function avatarMenu() {
   const me = (featureHook('nostrLoginIdentity') || {}).pubkey || (wallet.nostrPubkey && wallet.nostrPubkey())
     || (activeAccount() || {}).nostrPk;
-  // No identity (watch-only wallet): a neutral face with nowhere to go.
+  // Older watch-only accounts may have no remembered Nostr identity. Keep
+  // account access available even when there is no profile to open.
   const node = (me && featureHook('headerAvatar', me))
     || h('span', {
       class: 'chat-avatar header-ava fallback',
@@ -2275,8 +2281,15 @@ function avatarMenu() {
     });
   return h('button', {
     class: 'header-avatar',
-    title: me ? t('profYourProfile') : undefined,
-    onClick: me ? () => { featureHook('showProfile', me); render(); } : undefined,
+    title: me ? t('profYourProfile') : t('accounts'),
+    'aria-label': me ? t('profYourProfile') : t('accounts'),
+    onClick: () => {
+      clearFeatureNav(); ui.screen = 'wallet';
+      if (!me || !featureHook('showProfile', me)) {
+        ui.screen = 'accounts';
+      }
+      render();
+    },
   }, node);
 }
 
@@ -2284,7 +2297,7 @@ function settingsBtn() {
   return h('button', {
     class: 'header-msgs', title: t('tabSettings'), 'aria-label': t('tabSettings'),
     onClick: () => {
-      ui.chatOpen = false; ui.profilePk = null; ui.userSearch = null; ui.noteThread = null;
+      clearFeatureNav();
       ui.screen = 'wallet'; ui.tab = 'settings'; ui.settingsPage = null; render();
     },
   }, h('span', {
@@ -2371,7 +2384,7 @@ function messagesBtn() {
     class: 'header-msgs' + (unread ? ' unread' : ''),
     title: t('msgDmsTitle'),
     'aria-label': t('msgDmsTitle'),
-    onClick: () => { ui.profilePk = null; ui.userSearch = null; ui.noteThread = null; ui.zapSetup = null; ui.chatOpen = true; ui.msgView = 'home'; render(); },
+    onClick: () => { clearFeatureNav(); ui.screen = 'wallet'; ui.chatOpen = true; ui.msgView = 'home'; render(); },
   }, h('span', {
     class: 'hm-ico',
     html: '<svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>',
@@ -2386,6 +2399,7 @@ function searchBtn() {
     title: t('searchUsers'),
     'aria-label': t('searchUsers'),
     onClick: () => {
+      clearFeatureNav(); ui.screen = 'wallet';
       featureHook('openUserSearch');
       render();
       setTimeout(() => document.querySelector('.user-search-input')?.focus(), 60);
@@ -2800,6 +2814,15 @@ function claimTargets() {
 // Account switcher: pick a wallet, add another, or lock the session.
 function accountsScreen() {
   if (ui.pw) return h('div', { class: 'col', style: 'gap:16px' }, brandHeader(false), pwPromptCard());
+  if (ui.logoutConfirm) {
+    return h('div', { class: 'col', style: 'gap:16px' },
+      brandHeader(false),
+      h('div', { class: 'card col' },
+        h('h3', {}, t('logout') + '?'),
+        h('p', { class: 'small muted' }, t('logoutPopBlurb')),
+        h('button', { class: 'btn-primary btn-block', onClick: () => { ui.logoutConfirm = null; ctx.logout(); } }, t('logout')),
+        h('button', { class: 'btn-ghost btn-block', onClick: () => { ui.logoutConfirm = null; render(); } }, t('back'))));
+  }
   if (ui.addWallet) {
     const aw = ui.addWallet;
     const fulls = accounts.filter((x) => x.type === 'full' && x.mnemonic);
@@ -2866,7 +2889,7 @@ function accountsScreen() {
     // Reached from an open wallet this is a page, not a boot screen — the
     // header icons (search, messages, settings, lock, avatar) stay put.
     // Cold boot lands here with nothing loaded yet, and then they hide.
-    brandHeader(wallet.loaded),
+    brandHeader(!!activeAccount()),
     h('div', { class: 'card col' },
       h('h3', {}, t('accounts')),
       h('div', { class: 'col', style: 'gap:0' },
@@ -2909,6 +2932,8 @@ function accountsScreen() {
         ])
       ),
       h('button', { class: 'btn-block', onClick: () => { ui.addWallet = { kind: 'spending', from: 'new' }; render(); } }, t('addWallet')),
+      h('button', { class: 'btn-block', onClick: signInAnother }, t('signInAnother')),
+      activeAccount() ? h('button', { class: 'btn-ghost btn-block', onClick: () => { ui.logoutConfirm = true; render(); } }, t('logout')) : null,
       hasVault() ? h('button', { class: 'btn-ghost btn-block', onClick: startChangePw }, t('changePassword')) : null,
       h('button', { class: 'btn-ghost btn-block', onClick: () => { ui.confirmClear = true; render(); } }, t('clearAll'))
     ),
@@ -3447,7 +3472,7 @@ function onboardScreen() {
           // a relative path; kind 0 needs the absolute URL (a relative one
           // once replaced a real profile picture with a broken string).
           const picked = o.avatar && !/^https?:/i.test(o.avatar) ? 'https://v3.coinos.io/' + o.avatar : o.avatar;
-          const picture = picked || (me ? 'https://v3.coinos.io/' + punkUrl(me) : undefined);
+          const picture = picked || (me ? new URL(punkUrl(me), 'https://v3.coinos.io/').href : undefined);
           const fields = { name: addr ? addr.split('@')[0] : undefined, picture };
           // Publishing the profile is a nicety — a signer that can't sign
           // right now (a sleeping phone bunker) must not trap the wizard.

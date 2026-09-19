@@ -144,11 +144,11 @@ export function installArkWallet(wallet) {
   });
 }
 
-// A slim projection of ark state for the sync snapshot — the sync relay caps
-// events at 64 KB and the full state (deep-genesis vtxo bytes + done-action
-// hex) blew past it, so publishes silently failed and nothing synced. Another
+// A slim projection of ark state for the sync snapshot. Oversized domains
+// now travel as encrypted Blossom blobs, so preserve the complete history
+// and spent-coin stubs instead of rebuilding them from the mailbox. Another
 // device needs, per vtxo: id/amount/state (+ bytes ONLY for spendable/pending,
-// which it might spend/exit); the movement log (capped) for ark history; and
+// which it might spend/exit); the movement log for ark history; and
 // done board/offboard/exit actions (stripped of hex) so on-chain rows still
 // label. In-flight actions and their signing material stay device-local.
 export function slimArkForSync(s) {
@@ -156,22 +156,20 @@ export function slimArkForSync(s) {
   const HEAVY = ['bytes', 'destBytes', 'changeBytes', 'vtxoBytes', 'txHex', 'fundingTxHex', 'outputVtxos'];
   return {
     v: s.v, serverPubkey: s.serverPubkey, mailboxCheckpoint: s.mailboxCheckpoint, nextKeyIndex: s.nextKeyIndex, receiveAckTs: s.receiveAckTs,
-    // Spent stubs and done actions are pure history and grow forever — cap
-    // them (newest kept) so the sync event's size is bounded for life.
+    // Spent stubs keep old snapshots/mailbox messages from resurrecting coins.
     vtxos: (() => {
       // On the wire the bytes stay HEX for now: a device still on a build
       // that only reads hex would otherwise fail to decode every coin merged
       // from this one. Flip to base64 once builds before 2026-09-10 are gone.
       const live = (s.vtxos || []).filter((v) => v.state !== 'spent')
         .map((v) => (v.bytes ? { ...v, bytes: vtxoBytesToHex(v.bytes) } : v));
-      const stubs = (s.vtxos || []).filter((v) => v.state === 'spent').slice(-200)
+      const stubs = (s.vtxos || []).filter((v) => v.state === 'spent')
         .map((v) => ({ id: v.id, amountSat: v.amountSat, state: 'spent', keyIndex: v.keyIndex, expiryHeight: v.expiryHeight }));
       return [...live, ...stubs];
     })(),
     actions: (() => {
       const done = (s.actions || []).filter((a) => a.step === 'done');
       const core = done.filter((a) => ['board', 'offboard', 'exit'].includes(a.type))
-        .slice(-50)
         .map((a) => { const c = { ...a }; for (const k of HEAVY) delete c[k]; return c; });
       // Spends travel as SLIVERS — id, net amount, and which coins they
       // consumed. That last field is what lets ANOTHER device recognize a
@@ -179,14 +177,13 @@ export function slimArkForSync(s) {
       // another device" row beside the synced Sent movement (one spend was
       // showing twice, at input magnitude the second time).
       const spends = done.filter((a) => ['send', 'ln-pay'].includes(a.type))
-        .slice(-100)
         .map((a) => ({
           id: a.id, type: a.type, step: 'done', amountSat: a.amountSat,
-          inputIds: (a.parts || []).map((p) => p.inputId).concat(a.inputId ? [a.inputId] : []).filter(Boolean),
+          inputIds: [...new Set([...(a.inputIds || []), ...(a.parts || []).map((p) => p.inputId), a.inputId].filter(Boolean))],
         }));
       return [...core, ...spends];
     })(),
-    movements: (s.movements || []).slice(-200).map((m, i, arr) =>
+    movements: (s.movements || []).map((m, i, arr) =>
       // Older rows only need to render a history line; the bolt11 (~400 chars
       // each) and preimage are what pushed snapshots past relay size limits.
       (arr.length - i <= 50 ? m : (({ invoice, preimage, ...rest }) => rest)(m))),
@@ -285,7 +282,12 @@ export function mergeArkStates(a, b) {
   // skips every message this device never processed — balance appears (the
   // vtxo unions in) but its receive movement and celebration never happen.
   // Keep the local checkpoint; re-read messages dedupe harmlessly.
-  out.mailboxCheckpoint = a.mailboxCheckpoint || 0;
+  const pristine = !a.mailboxCheckpoint && !a.vtxos?.length && !a.movements?.length
+    && !a.actions?.length && !a.scheduled?.length;
+  // A manager's empty shell is not local history. Restore the snapshot's
+  // cursor with its coins/history, just as the !a case above does, rather
+  // than replaying the entire mailbox on a first login.
+  out.mailboxCheckpoint = pristine ? b.mailboxCheckpoint || 0 : a.mailboxCheckpoint || 0;
   out.nextKeyIndex = Math.max(a.nextKeyIndex || 1, b.nextKeyIndex || 1);
   out.nextLnRecvIndex = Math.max(a.nextLnRecvIndex || 0, b.nextLnRecvIndex || 0);
   out.receiveAckTs = Math.max(a.receiveAckTs || 0, b.receiveAckTs || 0);
@@ -397,6 +399,7 @@ export function arkFeature(ctx) {
     for (const f of [...arkPersistFlushers]) { try { f(); } catch {} }
     arkPersistFlushers.clear();
     arkInitGen++;
+    lastAutoInit = 0;
     if (arkTimer) clearInterval(arkTimer);
     arkTimer = null;
     if (ark) ark.stopMailboxStream();
@@ -430,7 +433,6 @@ export function arkFeature(ctx) {
   function initArk() {
     stopArk();
     ui.arkError = '';
-    lastAutoInit = Date.now();
     // The ark store is IndexedDB — asynchronous to OPEN, synchronous to read
     // once it has. A boot that beats it open reads no state at all: no
     // Spending balance, no Spending history, and nothing here that looks
@@ -441,7 +443,7 @@ export function arkFeature(ctx) {
       store.open().then(() => { ctx.forgetAmountAnim && ctx.forgetAmountAnim(); render(); initArk(); }).catch(() => {});
       return;
     }
-    if (arkAvailable() && arkWanted()) connectArk().catch(() => {});
+    if (arkAvailable() && arkWanted()) { lastAutoInit = Date.now(); connectArk().catch(() => {}); }
   }
 
   // Automatic re-inits (a synced snapshot arriving) must not restart a
@@ -453,7 +455,9 @@ export function arkFeature(ctx) {
   function maybeInitArk() {
     if (ark || arkConnectPromise) return;
     if (Date.now() - lastAutoInit < 20000) return;
-    initArk();
+    // A fresh snapshot may be held under its server pubkey, so arkWanted()
+    // cannot see it until the handshake identifies the server and adopts it.
+    if (arkAvailable()) { lastAutoInit = Date.now(); connectArk().catch(() => {}); }
   }
 
   // Operator console rescue for a round participation stranded server-side
@@ -524,10 +528,13 @@ export function arkFeature(ctx) {
         const tx = (wallet.txs || []).find((t2) => t2.txid === txid2);
         return tx && tx.confirmed ? { confirmed: true, block_height: tx.blockHeight || NaN } : null;
       },
-      onUpdate: (m) => { maybeAutoSelectSpending(); scheduleLnTag(m); render(); },
+      onUpdate: (m) => { if (gen !== arkInitGen) return; maybeAutoSelectSpending(); scheduleLnTag(m); render(); },
     });
     ui.arkError = '';
-    arkConnectPromise = mgr.init().then(() => {
+    // Open the server connection while Nostr restores, but do not replay the
+    // mailbox before the snapshot's history and cursor have arrived.
+    const restored = Promise.resolve(wallet.nostrRestoreReady || wallet.syncFromNostr?.()).catch(() => false);
+    arkConnectPromise = Promise.all([mgr.init(), restored]).then(() => {
       if (gen !== arkInitGen) throw new Error('superseded'); // wallet switched mid-connect
       ark = mgr;
       // Sync may have arrived while init awaited the server handshake.
@@ -556,20 +563,24 @@ export function arkFeature(ctx) {
       // A failed mailbox read must not starve the action drives: boards and
       // refreshes progress on chain state alone, so push them even when the
       // sync itself errored.
-      const tick = () => mgr.sync().catch(() => mgr.resumePending().catch(() => {}))
+      let ticking = null;
+      const tick = () => ticking || (ticking = mgr.sync().catch(async () => {
+        // Even when mailbox catch-up fails, independently check stale coins
+        // and advance recoverable local actions.
+        await mgr.reconcile().catch(() => {});
+        await mgr.resumePending().catch(() => {});
+      })
         .then(() => driveExits(mgr)).catch(() => {})
         .then(() => { if (ark === mgr) return maybeAutoRefresh(mgr); }).catch(() => {})
-        .then(() => { if (ark === mgr) return maybeAutoWithdraw(mgr); }).catch(() => {});
-      tick();
-      // Reconcile once on connect: a vtxo synced in from another device (or
-      // one this device held while a spend happened elsewhere) is checked
-      // against the server, so a stale spendable is caught here rather than
-      // only at send time.
-      mgr.reconcile().catch(() => {});
+        .then(() => { if (ark === mgr) return maybeAutoWithdraw(mgr); }).catch(() => {})
+        .finally(() => { ticking = null; }));
+      // sync() already reconciles on its first pass. Start the live stream
+      // afterwards, at the caught-up cursor: running both together replayed
+      // the backlog one message/render at a time alongside the batch read.
+      tick().finally(() => { if (ark === mgr) mgr.startMailboxStream(); });
       mergeBgWorkerState(mgr).catch(() => {}); // absorb what the SW did while we were closed
       // Receives arrive in real time over the mailbox stream; the poll is the
       // fallback and what drives in-flight boards/refreshes forward.
-      mgr.startMailboxStream();
       scheduleLnTag(mgr); // receives that landed while this device was closed
       arkTimer = setInterval(() => { if (ark === mgr) tick(); }, getNetwork() === 'regtest' ? 5000 : 30000);
       render();
@@ -577,7 +588,7 @@ export function arkFeature(ctx) {
     }).catch((e) => {
       if (gen === arkInitGen) { ui.arkError = e.message; render(); }
       throw e;
-    }).finally(() => { arkConnectPromise = null; });
+    }).finally(() => { if (gen === arkInitGen) arkConnectPromise = null; });
     render();
     return arkConnectPromise;
   }
@@ -1543,22 +1554,28 @@ export function arkFeature(ctx) {
     // way this goes, say so, so the chip settles instead of pulsing until it
     // times out. (A handover to the Lightning flow doesn't report — that flow
     // is still carrying the same zap, and reports for itself.)
-    const bail = () => {
+    const bail = (error) => {
       if (!z.autoSat) return; // a form zap: the card keeps the screen and its own status
       ctx.hook('zapSettled', z.eventId, false);
-      z.autoSat = 0; ctx.showSend();
+      z.autoSat = 0;
+      if (z.eventId) {
+        if (ui.arkZap === z) ui.arkZap = null;
+        toast('⚡ ' + (error || t('arkZapNoArk')), 4000);
+        return true;
+      } else ctx.showSend();
     };
     // an instant zap: resolution succeeded — pay the default amount now, no
-    // form, and report by toast; failures fall back to the classic form
+    // form. Post zaps settle in place; other payments retain their form.
     const auto = async (label) => {
       try {
         await performArkZap(z, z.autoSat);
         if (ui.arkZap === z) ui.arkZap = null;
         ctx.hook('zapSettled', z.eventId, true, z.autoSat);
-        toast('⚡ ' + t('zapSentShort', { n: fmtAmount(z.autoSat) + ' ' + unitLabel() }));
+        if (!z.eventId) toast('⚡ ' + t('zapSentShort', { n: fmtAmount(z.autoSat) + ' ' + unitLabel() }));
         render();
       } catch (e) {
-        bail(); ui.sendError = e.message; render();
+        if (!bail(e.message)) ui.sendError = e.message;
+        render();
       }
     };
     (async () => {
@@ -1567,7 +1584,7 @@ export function arkFeature(ctx) {
       const adv = await lookupArkZapTarget(pk).catch(() => ({ status: 'noark' }));
       if (!live()) return;
       if (adv.status === 'ready') { Object.assign(z, adv); if (z.autoSat) return auto(); render(); return; }
-      if (adv.status === 'wrongnet') { Object.assign(z, adv); bail(); render(); return; }
+      if (adv.status === 'wrongnet') { Object.assign(z, adv); bail(t('arkGiftWrongNet', { net: adv.net })); render(); return; }
       // 1b. BIP-353 with an ark instruction; remember on-chain as last resort
       const uris = [];
       try {
@@ -1605,6 +1622,7 @@ export function arkFeature(ctx) {
       }
       // 3. on-chain fallback
       if (onchain) {
+        if (z.autoSat && z.eventId) { bail(); render(); return; }
         ui.arkZap = null;
         ui.send.recipients[0].address = onchain;
         bail();
@@ -1612,7 +1630,7 @@ export function arkFeature(ctx) {
         return;
       }
       if (live()) { z.status = 'noark'; bail(); render(); }
-    })().catch((e) => { if (live()) { z.status = 'noark'; bail(); ui.sendError = e.message; render(); } });
+    })().catch((e) => { if (live()) { z.status = 'noark'; if (!bail(e.message)) ui.sendError = e.message; render(); } });
   }
 
   // shared by the ark and lightning zap flows (see zaps.js for the twin)

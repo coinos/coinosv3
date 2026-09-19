@@ -16,23 +16,28 @@ import { queryOn, parseNostrPubkey, npubOf, PROFILE_RELAYS } from './nostr.js';
 // Self-hosted (dist/punks) — coinos.io's own copies 502 for a third of the
 // set. Same deterministic formula the coinos app uses.
 const punkN = (pk) => Math.floor((parseInt(pk.slice(-2), 16) / 256) * 64) + 1;
-export const punkUrl = (pk) => `punks/${punkN(pk)}.webp`;
+export const punkImageUrl = (n, small = false) =>
+  `${typeof location !== 'undefined' && location.protocol === 'file:' ? '' : '/'}punks${small ? '-sm' : ''}/${n}.webp`;
+export const punkUrl = (pk) => punkImageUrl(punkN(pk));
 // The art is 240px, which is what a punk published as someone's nostr
 // picture should be — and eight times what a 30px circle needs. We ship a
 // 128px copy of each (a fifth of the bytes, 20KB → 4KB) and paint the circles
 // from that, so a brand-new wallet with nothing cached fills its faces in
 // straight away. Only the 64px profile avatar takes the full-size one.
-export const punkSmallUrl = (pk) => `punks-sm/${punkN(pk)}.webp`;
-export const punkSmallN = (n) => `punks-sm/${n}.webp`;
+export const punkSmallUrl = (pk) => punkImageUrl(punkN(pk), true);
+export const punkSmallN = (n) => punkImageUrl(n, true);
 
-export const fallbackAvatar = (h, pk, name, cls) =>
-  h('div', { class: cls + ' fallback' },
-    h('img', {
+const failedPunks = new Map();
+export const fallbackAvatar = (h, pk, name, cls) => {
+  const src = cls.includes('profile-avatar') ? punkUrl(pk) : punkSmallUrl(pk);
+  return h('div', { class: cls + ' fallback' },
+    Date.now() - (failedPunks.get(src) || 0) < 60_000 ? null : h('img', {
       class: 'punk', alt: '',
-      src: cls.includes('profile-avatar') ? punkUrl(pk) : punkSmallUrl(pk),
-      onError: (e) => { e.target.style.display = 'none'; },
+      src,
+      onError: (e) => { failedPunks.set(src, Date.now()); e.target.remove(); },
     }),
     (name || npubOf(pk) || '??').slice(0, 2));
+};
 
 const REGISTRAR = 'https://names.coinos.io';
 const SEARCH_RELAYS = ['wss://search.nos.today', 'wss://relay.nostr.band'];
@@ -103,7 +108,8 @@ export function warmSearch() {
 // Caches survive reloads: a name searched yesterday paints instantly today.
 // Profiles cap at 200 by recency; whole-query results keep for 12 hours.
 const PROF_KEY = 'btc-wallet-search-profiles';
-const QUERY_KEY = 'btc-wallet-search-queries';
+// Discard old results that identified migrated accounts by their wallet key.
+const QUERY_KEY = 'btc-wallet-search-queries-v2';
 const QUERY_TTL = 12 * 3600_000;
 const profileCache = new Map(); // pk -> { name, picture }
 const queryCache = new Map(); // q -> rows

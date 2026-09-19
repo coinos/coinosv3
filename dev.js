@@ -6,12 +6,13 @@
 // localhost or from a phone over the LAN/Tailscale — no per-device config, no
 // CORS. HTTP backends by path prefix; WebSocket backends by exact path.
 
-import { buildHtml, buildJsQr } from './build.js';
+import { buildHtml, buildJsQr, buildNip46, buildVerifyWorker } from './build.js';
 
 const port = Number(process.env.PORT || 5173);
 
 const HTTP_PROXY = { '/boltz': 'http://localhost:9001', '/esplora': 'http://localhost:3000', '/sp': 'http://localhost:8888' };
 const WS_PROXY = { '/electrum': 'ws://localhost:50003', '/sp/ws': 'ws://localhost:8888/ws' };
+const JS_ASSETS = { '/jsqr.js': buildJsQr, '/nip46.js': buildNip46, '/verify-worker.js': buildVerifyWorker };
 const CORS = { 'access-control-allow-origin': '*', 'access-control-allow-methods': 'GET,POST,OPTIONS', 'access-control-allow-headers': 'content-type' };
 
 Bun.serve({
@@ -40,10 +41,21 @@ Bun.serve({
           return new Response(await r.arrayBuffer(), { status: r.status, headers: { 'content-type': r.headers.get('content-type') || 'application/json', ...CORS } });
         }
       }
-      if (path === '/jsqr.js') {
-        return new Response(await buildJsQr({ minify: false }), {
+      if (Object.hasOwn(JS_ASSETS, path)) {
+        return new Response(await JS_ASSETS[path]({ minify: false }), {
           headers: { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': NO_STORE },
         });
+      }
+      if (/^\/(punks|punks-sm)\//.test(path)) {
+        // These are bundled images, not app routes. Returning index.html here
+        // produces broken avatars and rebuilds the app for every face.
+        if (!/^\/(punks|punks-sm)\/([1-9]|[1-5][0-9]|6[0-4])\.webp$/.test(path)) {
+          return new Response('Not found', { status: 404 });
+        }
+        const file = Bun.file('static' + path);
+        return await file.exists()
+          ? new Response(file, { headers: { 'content-type': 'image/webp', 'cache-control': NO_STORE } })
+          : new Response('Not found', { status: 404 });
       }
       const loc = path.match(/^\/locales\/([a-z]{2})\.json$/);
       if (loc) {

@@ -31,6 +31,7 @@ import { decodeAddress } from '../src/ark/proto.js';
 import { decodeNoffer } from '../src/noffer.js';
 import { decodeBolt11 } from '../src/ark/lightning.js';
 import { decodeOffer } from '../src/bolt12.js';
+import { registrationIdentity } from './ownership.js';
 
 const CFG = JSON.parse(readFileSync(process.env.NAMES_CONFIG
   || join(import.meta.dir, 'config.json'), 'utf8'));
@@ -1624,10 +1625,7 @@ Bun.serve({
 
       const recordId = await cfWrite(name, domain, published, existing?.recordId);
       state.names[key] = {
-        pubkey: existing?.pubkey || auth.pubkey,
-        // the owner may nominate a key that manages the record from here on
-        manager: (claim.manager && /^[0-9a-f]{64}$/.test(claim.manager) && auth.pubkey !== claim.manager)
-          ? claim.manager : existing?.manager,
+        ...registrationIdentity({ existing, signer: auth.pubkey, manager: claim.manager, grant, granted }),
         uri: published, recordId, updated: Date.now(), domain,
         // the wallet's CLINK offer key, so LNURL can ask it for invoices
         offerPk: (claim.offerPk && /^[0-9a-f]{64}$/.test(claim.offerPk)) ? claim.offerPk : existing?.offerPk,

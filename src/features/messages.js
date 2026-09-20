@@ -6677,9 +6677,14 @@ export function messagesFeature(ctx) {
         if (ev) openNoteThread(ev); else openNoteRef({ id: x.id }).catch(() => {});
       } else if (msg && msg.peer) { ui.msgView = 'dm'; ui.msgPeer = msg.peer; ui.msgStick = true; stopNotifWatch(); render(); }
       else if (msg) { ui.msgView = 'room'; ui.msgCommunity = msg.cid; ui.msgChannel = msg.chId; ui.msgStick = true; stopNotifWatch(); render(); }
-      else if (target) openNoteThread(target);
-      // a note we couldn't find is asked for again on tap, hints and all
-      else if (x.target) openNoteRef({ id: x.target, relays: x.hint || [] }).catch(() => {});
+      else {
+        // a reaction, boost or zap: land on the note with its who-panel
+        // already unfolded, so the tap answers "who?" without a second one
+        if (x.target) whoOpenIds.add(x.target);
+        if (target) openNoteThread(target);
+        // a note we couldn't find is asked for again on tap, hints and all
+        else if (x.target) openNoteRef({ id: x.target, relays: x.hint || [] }).catch(() => {});
+      }
     };
     return h('div', {
       class: 'row alert-row' + (x.ts > notifSeenAtOpen ? ' fresh' : ''),

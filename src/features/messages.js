@@ -6028,10 +6028,10 @@ export function messagesFeature(ctx) {
         },
           h('div', { class: 'chat-avatar fallback' }, '\ud83d\udd14'),
           h('div', { class: 'col grow', style: 'min-width:0;gap:1px' },
-            h('div', { class: 'row between', style: 'align-items:center' },
-              h('span', { class: 'chat-name' }, t('alertsTitle')),
-              n ? h('i', { class: 'thread-dot' }) : null),
-            h('div', { class: 'muted small' }, n ? t('alertsNew', { n }) : t('alertsSub'))));
+            h('span', { class: 'chat-name' }, t('alertsTitle')),
+            h('div', { class: 'muted small' }, n ? t('alertsNew', { n }) : t('alertsSub'))),
+          // like a group row: the dot sits mid-height, padded off the edge
+          n ? h('i', { class: 'thread-dot' }) : null);
       })()));
 
     // ---- DMs

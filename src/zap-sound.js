@@ -1,5 +1,7 @@
-// The supplied zap.mp3, encoded verbatim so hosted and standalone builds
-// both include it. Decode ahead of the tap; no network request is needed.
+// The zap sound: "Jacobs Ladder from Side" by Parabolix, trimmed by egomassive
+// (freesound.org/s/536741, CC0), transcoded to mp3 for Safari and encoded
+// verbatim so hosted and standalone builds both include it. Decode ahead of
+// the tap; no network request is needed.
 import mp3 from './assets/zap.mp3.base64.txt' with { type: 'text' };
 
 let context, buffer, loading, playing, sequence = 0;

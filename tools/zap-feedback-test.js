@@ -42,7 +42,7 @@ function receipt(receiptId, pk, sats) {
 }
 receipt('base', author, 100); render();
 window.test = {
-  get calls() { return calls; }, get toasts() { return toasts; }, ui, render,
+  get calls() { return calls; }, get toasts() { return toasts; }, get amount() { return amount; }, ui, render,
   settle: (ok) => feature.zapSettled(id, ok, amount),
   receipt: () => receipt('ours', me, amount),
   unavailable: () => mode = 'unavailable',
@@ -119,18 +119,20 @@ try {
   check('the same tap plays the supplied MP3 clip', await page.evaluate(() => {
     const samples = zapAudio.buffer?.getChannelData(0);
     return zapAudio.starts === 1 && zapAudio.context.state === 'running'
-      && zapAudio.buffer.duration > 1.8 && zapAudio.buffer.duration < 2
+      && zapAudio.buffer.duration > 1.2 && zapAudio.buffer.duration < 1.6
       && samples.some(v => Math.abs(v) > .05)
       && samples.every(v => Number.isFinite(v));
   }));
-  await page.evaluate(() => {
-    window.effect = document.querySelector('.zap-fx'); test.render();
-    document.querySelector('.note-zap').click();
-  });
+  await page.evaluate(() => { window.effect = document.querySelector('.zap-fx'); test.render(); });
   s = await state();
-  check('rerenders preserve effect; double tap does not charge twice', s.effects === 1 && s.calls === 1 && await page.evaluate(() => effect.isConnected));
-  check('rerenders and duplicate taps do not repeat the sound', await page.evaluate(() => zapAudio.starts === 1));
-  check('rerenders and duplicate taps preserve the same post tremble', await page.evaluate(() => document.querySelector('article').getAnimations()[0] === tremble));
+  check('rerenders preserve the effect and charge nothing', s.effects === 1 && s.calls === 1 && await page.evaluate(() => effect.isConnected));
+  check('rerenders do not repeat the sound', await page.evaluate(() => zapAudio.starts === 1));
+  check('rerenders preserve the same post tremble', await page.evaluate(() => document.querySelector('article').getAnimations()[0] === tremble));
+  // A zap still in the air is no reason to refuse the next one.
+  await page.click('.note-zap');
+  s = await state();
+  check('a second tap while the first flies stacks another zap', s.effects === 2 && s.calls === 2 && s.tally === '142' && s.flying);
+  check('the second tap has its own sound', await page.evaluate(() => zapAudio.starts === 2));
   // Freeze animations at their impact frame for an inspectable mobile preview.
   await page.evaluate(() => document.querySelectorAll('.zap-fx *').forEach((e) => e.getAnimations().forEach((a) => { a.pause(); a.currentTime = 230; })));
   const bounds = await page.$eval('.zap-fx-amount', (e) => { const r = e.getBoundingClientRect(); return { left: r.left, right: r.right }; });
@@ -138,8 +140,11 @@ try {
   await page.screenshot({ path: '/tmp/coinos-zap-feedback.png' });
   await page.evaluate(() => test.settle(false)); await pause(100);
   s = await state();
-  check('failure restores the previous total without another animation', s.tally === '100' && !s.flying && s.effects === 1);
-  check('failure does not play another sound', await page.evaluate(() => zapAudio.starts === 1));
+  check('one failure takes one zap off; the other keeps flying', s.tally === '121' && s.flying && s.effects === 2);
+  await page.evaluate(() => test.settle(false)); await pause(100);
+  s = await state();
+  check('failure restores the previous total without another animation', s.tally === '100' && !s.flying && s.effects === 2);
+  check('failure does not play another sound', await page.evaluate(() => zapAudio.starts === 2));
   await pause(1750);
   check('effect cleans up', (await state()).effects === 0);
   check('the post returns to rest without residual transforms', await page.$eval('article', e => !e.getAnimations().length && getComputedStyle(e).transform === 'none'));
@@ -150,7 +155,8 @@ try {
   await pause(1750);
   await page.evaluate(() => test.settle(true)); await pause(100);
   check('late confirmation never replays the effect', (await state()).effects === 0);
-  check('confirmation never replays the sound', await page.evaluate(() => zapAudio.starts === 2));
+  check('confirmation never replays the sound', await page.evaluate(() => zapAudio.starts === 3));
+  check('a repeated confirmation does not count the zap again', (await state()).tally === '121');
   await page.evaluate(() => test.unavailable());
   await page.click('.note-zap'); await pause(100);
   check('unavailable payments roll back in place with an error toast', (await state()).tally === '121' && await page.evaluate(() => test.toasts.length === 1 && test.ui.chatOpen));
@@ -169,12 +175,25 @@ try {
   await page.click('.note-zap'); await pause(100);
   check('Ark payment begins with the optimistic amount', (await state()).tally === '142');
   await page.evaluate(() => test.finishArk(false)); await pause(100);
-  check('Ark failure rolls back and toasts without opening Send', (await state()).tally === '121' && await page.evaluate(() => test.ui.chatOpen && test.ui.arkZap === null && test.toasts.at(-1).includes('Ark payment failed')));
+  check('Ark failure rolls back and toasts without opening Send', (await state()).tally === '121' && await page.evaluate(() => test.ui.chatOpen && !test.ui.arkZap && test.toasts.at(-1).includes('Ark payment failed')));
   await pause(1750);
   await page.click('.note-zap'); await pause(100);
   const toastCount = await page.evaluate(() => test.toasts.length);
   await page.evaluate(() => test.finishArk(true)); await pause(100);
   check('Ark success settles silently without a second effect', (await state()).tally === '142' && !(await state()).flying && (await state()).effects === 1 && await page.evaluate((n) => test.toasts.length === n, toastCount));
+  // Holding the bolt opens the amount screen instead of paying.
+  const calls = await page.evaluate(() => test.calls);
+  const box = await (await page.$('.note-zap')).boundingBox();
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down(); await pause(650); await page.mouse.up(); await pause(100);
+  check('holding the bolt opens the amount screen without paying', await page.evaluate((n) => test.calls === n && document.querySelector('#setup input')?.value === '21', calls));
+  await page.evaluate(() => { const i = document.querySelector('#setup input'); i.value = '50'; i.dispatchEvent(new Event('input')); });
+  await page.click('#setup .btn-primary'); await pause(100);
+  check('saving from the held screen changes the amount and pays nothing', await page.evaluate((n) => test.calls === n && !document.querySelector('#setup input') && test.amount === 50, calls));
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down(); await pause(200); await page.mouse.up(); await pause(100);
+  check('a short press is still a tap', await page.evaluate((n) => test.calls === n + 1 && !document.querySelector('#setup input'), calls));
+  await page.evaluate(() => test.finishArk(true)); await pause(100);
   const silentPage = await browser.newPage();
   silentPage.on('pageerror', e => errors.push(e.message));
   await silentPage.evaluateOnNewDocument(() => {

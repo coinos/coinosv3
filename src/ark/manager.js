@@ -833,8 +833,12 @@ export class ArkManager {
         changeIndex: changeSat > 0 ? this.state.nextKeyIndex++ : null,
       };
     });
+    // Two zaps tapped in quick succession can resolve in the same
+    // millisecond; each needs its own row.
+    let id = `send-${Date.now()}`;
+    while (this.state.actions.some((a) => a.id === id)) id += '-';
     const action = {
-      id: `send-${Date.now()}`, type: 'send', step: 'created',
+      id, type: 'send', step: 'created',
       parts, amountSat, destAddress: addrString,
       destPubkey: dest.userPubkey, destBlindedId: mailboxDelivery.data,
     };

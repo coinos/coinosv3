@@ -2983,7 +2983,7 @@ export function messagesFeature(ctx) {
       }
       // our own zap's receipt: the real thing has landed, so the optimistic
       // amount the chip has been carrying since the tap steps aside
-      if (from && my.includes(from)) { cur.mine = true; voidPending(x[1], ev.created_at * 1000); }
+      if (from && my.includes(from)) { cur.mine = true; voidPending(x[1], ev.created_at * 1000, sats); }
       changed = true;
     }
     if (changed) { saveZapTotals(); scheduleRepaint(); }
@@ -3079,27 +3079,46 @@ export function messagesFeature(ctx) {
   // takes it straight back off.
   const ZAP_FLIGHT_MS = 45_000; // nothing reported back: assume it's gone
   const ZAP_PAID_MS = 5 * 60_000; // paid, but the receipt never showed
-  // id -> { sats, at, state }, where state is:
+  // id -> [{ sats, at, state }], oldest first: one entry per zap of ours on
+  // that id, so tapping again while the first is still in the air stacks a
+  // second zap on top instead of being refused. state is:
   //   flying — tapped, payment in the air: counted on top, chip pulses
   //   paid   — the flow reported success: counted on top, chip solid
   //   void   — one of OUR receipts has been counted into the real total for
-  //            this id, so the optimistic amount must not be added again.
+  //            this zap, so its optimistic amount must not be added again.
   //            Kept rather than deleted, because the receipt usually beats
   //            the flow's own report: an ark zap publishes that receipt
   //            itself, and it returns over the live subscription before the
   //            send call resolves. Deleting would let the later settle
   //            resurrect the amount — which is how a 21-sat zap displayed 42.
+  // Reports and receipts name the id, never the tap, so each is matched to
+  // the oldest entry it can describe (same amount first). Two default-amount
+  // zaps are told apart by order alone, which is all the chip needs: it shows
+  // the sum, and pulses while any is in the air.
   const zapPending = new Map();
   const pendTtl = (p) => (p.state === 'flying' ? ZAP_FLIGHT_MS : ZAP_PAID_MS);
+  // Everything still alive for this id, and what the chip makes of it.
   function pendingOf(id) {
-    const p = zapPending.get(id);
-    if (!p) return null;
-    if (Date.now() - p.at > pendTtl(p)) { zapPending.delete(id); return null; }
-    return p;
+    const all = zapPending.get(id);
+    if (!all) return null;
+    const now = Date.now();
+    const list = all.filter((p) => now - p.at <= pendTtl(p));
+    if (!list.length) { zapPending.delete(id); return null; }
+    zapPending.set(id, list); // the array handed back is the one stored: splices land
+    let sats = 0, flying = false;
+    for (const p of list) if (p.state !== 'void') { sats += p.sats; flying = flying || p.state === 'flying'; }
+    return { sats, flying, list };
   }
+  const pickPending = (list, sats, pred) =>
+    (sats && list.find((p) => pred(p) && p.sats === sats)) || list.find(pred) || null;
+  const dropPending = (id, list, p) => {
+    list.splice(list.indexOf(p), 1);
+    if (!list.length) zapPending.delete(id);
+  };
   function markZapPending(id, sats, origin) {
     if (!id || !sats) return;
-    zapPending.set(id, { sats, at: Date.now(), state: 'flying' });
+    const list = pendingOf(id)?.list || [];
+    zapPending.set(id, [...list, { sats, at: Date.now(), state: 'flying' }]);
     animateZap(sats, origin, id);
     render();
     // repaint when the in-flight chip would expire, so a zap nobody ever
@@ -3110,41 +3129,74 @@ export function messagesFeature(ctx) {
   // failed (the chip was never real — take it off).
   function settleZap(id, ok, sats) {
     if (!id) return;
-    const p = pendingOf(id);
+    const list = pendingOf(id)?.list || [];
     if (!ok) {
-      if (p && p.state !== 'void') { zapPending.delete(id); scheduleRepaint(); }
+      const p = pickPending(list, sats, (x) => x.state === 'flying') || pickPending(list, sats, (x) => x.state === 'paid');
+      if (p) { dropPending(id, list, p); scheduleRepaint(); }
       return;
     }
-    if (p && p.state === 'void') return; // the receipt is already carrying it
-    zapPending.set(id, { sats: sats || (p && p.sats) || 0, at: Date.now(), state: 'paid' });
+    const p = pickPending(list, sats, (x) => x.state === 'flying');
+    if (p) { p.state = 'paid'; p.at = Date.now(); scheduleRepaint(); return; }
+    // nothing in the air: the receipt already beat this report (its marker
+    // stays, so a repeated confirmation can't count it either), or a form
+    // zap paid without a tap — count that one until its receipt lands
+    if (pickPending(list, sats, (x) => x.state === 'void')) return;
+    zapPending.set(id, [...list, { sats: sats || 0, at: Date.now(), state: 'paid' }]);
     scheduleRepaint();
   }
   // One of our own receipts has been counted for this id: the real total
-  // speaks for the zap now, so the optimistic amount stands down.
-  function voidPending(id, evMs) {
-    const p = zapPending.get(id);
+  // speaks for that zap now, so its optimistic amount stands down.
+  function voidPending(id, evMs, sats) {
+    const list = pendingOf(id)?.list || [];
     // ...unless it's the receipt of an OLDER zap of ours arriving (the first
     // paint fetches every receipt a message has). That one is already in the
-    // total and says nothing about the zap currently in the air.
-    if (p && p.state !== 'void' && evMs && evMs < p.at - 120_000) return;
-    zapPending.set(id, { sats: 0, at: Date.now(), state: 'void' });
+    // total and says nothing about the zaps currently in the air.
+    const fresh = (p) => p.state !== 'void' && !(evMs && evMs < p.at - 120_000);
+    const p = pickPending(list, sats, fresh);
+    if (p) { p.state = 'void'; p.at = Date.now(); return; }
+    if (evMs && evMs < Date.now() - 120_000) return; // old: no report is coming for it
+    zapPending.set(id, [...list, { sats: sats || 0, at: Date.now(), state: 'void' }]);
   }
   // The chip: a little bolt + the sats total. Absent until the first receipt
   // — or until you zap it yourself, which is its own kind of receipt.
-  function zapChip(id, { onClick, cls = '' } = {}) {
+  function zapChip(id, { onClick, onHold, cls = '' } = {}) {
     if (onClick) warmZapSound();
     const z = zapTotals.get(id) || zapSeeds().get(id);
     const p = pendingOf(id);
-    const optimistic = p && p.state !== 'void' ? p.sats : 0;
+    const optimistic = p ? p.sats : 0;
     const sats = (z ? z.sats : 0) + optimistic;
     if (!sats) return null;
-    const flying = !!p && p.state === 'flying';
+    const flying = !!p && p.flying;
     return h('span', {
       class: 'zap-tally' + ((z && z.mine) || optimistic ? ' on' : '') + (flying ? ' flying' : '')
         + (onClick ? ' clickable' : '') + (cls ? ' ' + cls : ''),
       title: flying ? t('zapSending') : t('zapTallyTitle', { n: sats.toLocaleString() }),
-      onClick: onClick ? (e) => { e.stopPropagation(); onClick(); } : undefined,
+      ...(onClick ? holdable(onHold, (e) => { e.stopPropagation(); onClick(); }) : {}),
     }, h('span', { style: 'display:flex', html: BOLT_SVG }), fmtSats(sats));
+  }
+  // Hold the ⚡ to change the one-tap amount instead of paying it. The
+  // press's state lives on the element, not in this closure: a background
+  // repaint swaps handlers mid-press, and the lift must still find the timer
+  // the press set, or a finger already gone would count as a hold.
+  const HOLD_MS = 500;
+  function holdable(onHold, onTap) {
+    const clear = (e) => { const el = e.currentTarget; if (el._hold) { clearTimeout(el._hold); el._hold = 0; } };
+    if (!onHold) return { onClick: onTap };
+    return {
+      onPointerdown: (e) => {
+        const el = e.currentTarget;
+        clear(e); el._held = false;
+        if (e.button) return; // right button has its own menu
+        el._hold = setTimeout(() => {
+          el._hold = 0; el._held = true;
+          try { navigator.vibrate?.(12); } catch {}
+          onHold(el);
+        }, HOLD_MS);
+      },
+      onPointerup: clear, onPointercancel: clear, onPointerleave: clear,
+      onContextmenu: (e) => { e.preventDefault(); },
+      onClick: (e) => { const el = e.currentTarget; if (el._held) { el._held = false; e.stopPropagation(); return; } onTap(e); },
+    };
   }
   // Zap a chat message or DM: same one-tap flow as a post (ark first,
   // Lightning fallback, the amount remembered from the first time).
@@ -4282,7 +4334,6 @@ export function messagesFeature(ctx) {
   // round-trip, and one bar that behaves the same everywhere beats a special case.
   const canZapPk = (pk) => !!pk && !!(hook('arkReady') || hook('canLnZap'));
   function zapNote(pk, ev, origin) {
-    if (pendingOf(ev.id)?.state === 'flying') return;
     const npubStr = npubOf(pk);
     const def = ctx.zapDefaultSat ? ctx.zapDefaultSat() : 0;
     if (!def) { ui.zapSetup = { pk, npub: npubStr, eventId: ev.id, amount: '21', origin }; render(); return; }
@@ -4293,31 +4344,55 @@ export function messagesFeature(ctx) {
     }
   }
 
+  // Held ⚡: the same screen, opened to change the amount — saving alone is
+  // the main action, zapping this note with the new amount the second.
+  function openZapSettings(pk, id, origin) {
+    const cur = ctx.zapDefaultSat ? ctx.zapDefaultSat() : 0;
+    ui.zapSetup = { pk, npub: npubOf(pk), eventId: id, amount: String(cur || 21), origin, edit: true };
+    render();
+  }
+
   // First ⚡ tap ever: pick the amount one time, then every zap is one tap.
   function zapSetupScreen() {
     const s = ui.zapSetup;
+    const saved = () => {
+      const n = parseInt(s.amount, 10);
+      if (!n || n <= 0) { toast(t('enterValidAmtForN', { n: 1 })); return 0; }
+      ctx.setZapDefaultSat(n);
+      return n;
+    };
+    const saveAndZap = () => {
+      const n = saved();
+      if (!n) return;
+      const { pk, npub, eventId } = s;
+      ui.zapSetup = null;
+      render();
+      markZapPending(eventId, n, s.origin);
+      if (!hook('zapNpub', pk, npub, eventId, n) && !hook('lnZapNpub', pk, npub, eventId, n)) {
+        settleZap(eventId, false);
+        toast('⚡ ' + t('lnZapFailed'), 4000);
+      }
+      recheckZap(eventId);
+    };
+    const saveOnly = () => {
+      const n = saved();
+      if (!n) return;
+      ui.zapSetup = null;
+      toast('⚡ ' + t('zapAmountSaved', { n: n.toLocaleString() }));
+      render();
+    };
     return h('div', { class: 'col', style: 'gap:16px' },
       ctx.brandHeader(false),
       h('div', { class: 'card col', style: 'gap:10px' },
         h('h3', { style: 'margin:0' }, '⚡ ' + t('zapSetupTitle')),
-        h('div', { class: 'small muted' }, t('zapSetupDesc')),
+        h('div', { class: 'small muted' }, t(s.edit ? 'zapSettingsDesc' : 'zapSetupDesc')),
         h('div', { class: 'input-group' },
           h('input', { type: 'number', min: '1', value: s.amount, onInput: (e) => { s.amount = e.target.value; } }),
           h('span', { class: 'small muted', style: 'align-self:center;padding:0 8px' }, 'sats')),
-        h('button', { class: 'btn-primary btn-block', onClick: () => {
-          const n = parseInt(s.amount, 10);
-          if (!n || n <= 0) { toast(t('enterValidAmtForN', { n: 1 })); return; }
-          ctx.setZapDefaultSat(n);
-          const { pk, npub, eventId } = s;
-          ui.zapSetup = null;
-          render();
-          markZapPending(eventId, n, s.origin);
-          if (!hook('zapNpub', pk, npub, eventId, n) && !hook('lnZapNpub', pk, npub, eventId, n)) {
-            settleZap(eventId, false);
-            toast('⚡ ' + t('lnZapFailed'), 4000);
-          }
-          recheckZap(eventId);
-        } }, t('zapSetupSave'))),
+        s.edit
+          ? [h('button', { class: 'btn-primary btn-block', onClick: saveOnly }, t('save')),
+            h('button', { class: 'btn-ghost btn-block', onClick: saveAndZap }, t('zapSetupSave'))]
+          : h('button', { class: 'btn-primary btn-block', onClick: saveAndZap }, t('zapSetupSave'))),
       h('button', { class: 'btn-ghost btn-block', onClick: () => { ui.zapSetup = null; render(); } }, t('back')));
   }
 
@@ -4552,9 +4627,10 @@ export function messagesFeature(ctx) {
     const rm = reacts.get(ev.id);
     const likeN = rm ? [...rm.values()].reduce((n, { who }) => n + who.size, 0) : 0;
     const boostN = (boosts.get(ev.id) || new Set()).size;
-    const btn = (icon, label, count, on, onClick, cls = '') => h('button', {
+    const btn = (icon, label, count, on, onClick, cls = '', extra = null) => h('button', {
       class: 'note-act' + (on ? ' on' : '') + (cls ? ' ' + cls : ''), title: label, 'aria-label': label,
       'aria-disabled': onClick ? undefined : 'true',
+      ...(extra || {}),
       onClick: (e) => { e.stopPropagation(); if (onClick) onClick(e); },
     },
       typeof icon === 'string' && icon.startsWith('<svg')
@@ -4565,9 +4641,12 @@ export function messagesFeature(ctx) {
     // do on theirs — amber once anyone has zapped, breathing while ours flies
     const z = zapTotals.get(ev.id) || zapSeeds().get(ev.id);
     const zp = pendingOf(ev.id);
-    const optimistic = zp && zp.state !== 'void' ? zp.sats : 0;
+    const optimistic = zp ? zp.sats : 0;
     const zapSats = (z ? z.sats : 0) + optimistic;
-    const zapFlying = !!zp && zp.state === 'flying';
+    const zapFlying = !!zp && zp.flying;
+    // tap pays the default amount; hold opens the screen that sets it
+    const zapHold = canZap ? holdable((el) => openZapSettings(pk, ev.id, el.getBoundingClientRect()),
+      (e) => { zapNote(pk, ev, e.currentTarget.getBoundingClientRect()); recheckZap(ev.id); }) : null;
     const zapMine = !!((z && z.mine) || optimistic);
     const zapLabel = zapFlying ? t('zapSending') : zapSats ? t('zapTallyTitle', { n: zapSats.toLocaleString() }) : t('zapTitle');
     return h('div', { class: 'row note-acts' },
@@ -4580,8 +4659,9 @@ export function messagesFeature(ctx) {
       // always in the bar — the same row of buttons on every post, so nothing
       // shifts when a wallet comes online; without one it is just the number
       btn(I_ZAP, zapLabel, zapSats ? fmtSats(zapSats) : 0, zapMine,
-        canZap ? (e) => { zapNote(pk, ev, e.currentTarget.getBoundingClientRect()); recheckZap(ev.id); } : null,
-        'note-zap' + (zapSats ? ' zapped' : '') + (zapFlying ? ' flying' : '')),
+        zapHold && zapHold.onClick,
+        'note-zap' + (zapSats ? ' zapped' : '') + (zapFlying ? ' flying' : ''),
+        zapHold && { ...zapHold, onClick: undefined }),
       // who did all that: a small chevron, always in place — dimmed until
       // there is someone to show, so the first reaction doesn't reflow the bar
       (() => {
@@ -6177,7 +6257,7 @@ export function messagesFeature(ctx) {
                       title: t('msgReact'),
                       onClick: (e) => { e.stopPropagation(); sendReaction(room, chId, m, emoji); },
                     }, reactNode(emoji), n > 1 ? ' ' + n : '')))
-              : null)(zapChip(m.rumor.id, { cls: 'chat-react', onClick: canZapPk(m.author) ? () => zapMessage(m.author, m.rumor.id) : null }))))
+              : null)(zapChip(m.rumor.id, { cls: 'chat-react', onClick: canZapPk(m.author) ? () => zapMessage(m.author, m.rumor.id) : null, onHold: () => openZapSettings(m.author, m.rumor.id) }))))
       );
     });
   }
@@ -6382,7 +6462,7 @@ export function messagesFeature(ctx) {
     watchZaps(msgs.slice(-150).map((m) => m.rumor.id));
     const dmChips = (m) => {
       const reacts = dmReacts.get(m.rumor.id);
-      const zc = zapChip(m.rumor.id, { cls: 'chat-react', onClick: canZapPk(m.rumor.pubkey) ? () => zapMessage(m.rumor.pubkey, m.rumor.id) : null });
+      const zc = zapChip(m.rumor.id, { cls: 'chat-react', onClick: canZapPk(m.rumor.pubkey) ? () => zapMessage(m.rumor.pubkey, m.rumor.id) : null, onHold: () => openZapSettings(m.rumor.pubkey, m.rumor.id) });
       if ((!reacts || !reacts.size) && !zc) return null;
       const myReact = reacts && my.map((pk) => reacts.get(pk)).find(Boolean);
       const counts = new Map();

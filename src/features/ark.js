@@ -1554,11 +1554,18 @@ export function arkFeature(ctx) {
   //   3. an on-chain address from the BIP-353 record
   const NAMES_REGISTRAR = 'https://names.coinos.io';
   function startNpubPay(pk, npub, eventId = null, autoSat = 0) {
-    const z = (ui.arkZap = { npub, pk, eventId, amount: '', comment: '', status: 'lookup', autoSat });
-    ui.zap = null; // a stale Lightning-zap card must not resurface behind ours
-    ui.sendError = '';
-    render();
-    const live = () => ui.arkZap === z;
+    const z = { npub, pk, eventId, amount: '', comment: '', status: 'lookup', autoSat };
+    // A one-tap post zap has no card: it resolves and pays off-screen, so a
+    // second tap — the same post again, or another — never evicts the one
+    // already in the air. Everything else takes the send screen's zap slot.
+    const instant = !!(autoSat && eventId);
+    if (!instant) {
+      ui.arkZap = z;
+      ui.zap = null; // a stale Lightning-zap card must not resurface behind ours
+      ui.sendError = '';
+      render();
+    }
+    const live = () => instant || ui.arkZap === z;
     // The tap already put a pulsing chip on the note being zapped: whichever
     // way this goes, say so, so the chip settles instead of pulsing until it
     // times out. (A handover to the Lightning flow doesn't report — that flow
@@ -1627,7 +1634,7 @@ export function arkFeature(ctx) {
       if (profile && (profile.lud16 || profile.lud06)) {
         await connectArk().catch(() => {});
         if (!live()) return;
-        if (ctx.hook('canLnZap')) { ui.arkZap = null; ctx.hook('lnZapNpub', pk, npub, z.eventId, z.autoSat); return; }
+        if (ctx.hook('canLnZap')) { if (ui.arkZap === z) ui.arkZap = null; ctx.hook('lnZapNpub', pk, npub, z.eventId, z.autoSat); return; }
       }
       // 3. on-chain fallback
       if (onchain) {

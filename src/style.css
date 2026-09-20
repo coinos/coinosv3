@@ -601,6 +601,8 @@ hr.divider { margin: 16px 0; }
 /* the zap button carries the sats tally: amber once anyone has zapped, the
    number in amber too; breathing while our own zap is in the air */
 .note-act.note-zap.zapped, .note-act.note-zap.zapped .note-act-n { color: #e6a800; }
+/* holdable: no text selection or callout while the finger rests on it */
+.note-act.note-zap, .zap-tally.clickable { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
 .note-act.note-zap[aria-disabled] { cursor: default; }
 .note-act.note-zap[aria-disabled]:hover { background: none; color: var(--faint); }
 .note-act.note-zap.zapped[aria-disabled]:hover { color: #e6a800; }

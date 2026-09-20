@@ -115,10 +115,10 @@ try {
   // scroll down: this is someone reading, not someone sitting at the top
   await page.evaluate(() => window.scrollTo(0, 900));
   await sleep(500);
-  const before = await page.evaluate(() => ({
-    y: Math.round(window.scrollY),
-    first: (document.querySelector('.notes-feed > .row') || {}).innerText || '',
-  }));
+  const before = await page.evaluate(() => {
+    const r = [...document.querySelectorAll('.notes-feed > .row')].find((n) => n.getBoundingClientRect().bottom > 120);
+    return { y: Math.round(window.scrollY), text: r.innerText.split('\n').find((l) => /post number/.test(l)), top: Math.round(r.getBoundingClientRect().top) };
+  });
   check('...reading further down', before.y > 400, 'scrollY ' + before.y);
 
   // a brand new post lands on the live subscription
@@ -126,50 +126,41 @@ try {
   const delivered = await page.evaluate((ev) => window.__inject(ev), fresh);
   check('...a post really arrives on a live subscription', delivered > 0, delivered + ' socket(s)');
   // A post waits at the door for its author's face and its pictures (or the
-  // two-second deadline, for a face nobody has) before it is even counted —
-  // so give it that long, and no longer.
+  // two-second deadline, for a face nobody has) before it goes in — so give
+  // it that long, and no longer.
   await sleep(2600);
-  const after = await page.evaluate(() => ({
-    y: Math.round(window.scrollY),
-    pill: (document.querySelector('.feed-new-pill') || {}).textContent || '',
-    inFeed: /BRAND NEW POST/.test(document.querySelector('.notes-feed')?.innerText || ''),
-  }));
-  check('it does not shove itself into the page', !after.inFeed);
-  check('...it says so in a pill instead', /1 new post/i.test(after.pill), after.pill || 'no pill');
-  check('...and the page has not moved under you', Math.abs(after.y - before.y) < 40,
-    `scrollY ${before.y} → ${after.y}`);
+  const after = await page.evaluate((text) => {
+    const r = [...document.querySelectorAll('.notes-feed > .row')].find((n) => n.innerText.includes(text));
+    return { y: Math.round(window.scrollY), top: r ? Math.round(r.getBoundingClientRect().top) : null,
+      pill: (document.querySelector('.feed-new-pill') || {}).textContent || '',
+      inFeed: /BRAND NEW POST/.test(document.querySelector('.notes-feed')?.innerText || ''),
+      first: (document.querySelector('.notes-feed > .row') || {}).innerText || '' };
+  }, before.text);
+  check('it goes into the feed at once, at the top', after.inFeed && /BRAND NEW POST/.test(after.first));
+  check('...and the post you were reading has not moved', after.top === before.top, `top ${before.top} → ${after.top} (scrollY ${before.y} → ${after.y})`);
+  check('...and a pill says it is up there', /1 new post/i.test(after.pill), after.pill || 'no pill');
 
   await page.evaluate(() => document.querySelector('.feed-new-pill').click());
-  await sleep(1400);
-  const opened = await page.evaluate(() => ({
-    y: Math.round(window.scrollY),
-    inFeed: /BRAND NEW POST/.test(document.querySelector('.notes-feed')?.innerText || ''),
-    pill: !!document.querySelector('.feed-new-pill'),
-  }));
-  check('tapping it shows the post', opened.inFeed);
-  check('...and takes you up to it', opened.y < 120, 'scrollY ' + opened.y);
+  await sleep(600);
+  const opened = await page.evaluate(() => ({ y: Math.round(window.scrollY), pill: !!document.querySelector('.feed-new-pill') }));
+  check('tapping it takes you up to the post', opened.y < 120, 'scrollY ' + opened.y);
   check('...and the pill is done', !opened.pill);
 
   console.log('\n[scrolling back up on your own]');
-  // Deliberately NOT let in by the scroll itself: that re-rendered the feed
-  // under a finger on its way to the pill. The pill waits for its tap.
   await page.evaluate(() => window.scrollTo(0, 900));
   await sleep(400);
   await page.evaluate((ev) => window.__inject(ev), signed('ANOTHER ONE', 0));
   await sleep(2600);
-  check('a pill again', !!(await page.$('.feed-new-pill')));
+  check('a pill again, the post already in', !!(await page.$('.feed-new-pill'))
+    && /ANOTHER ONE/.test(await page.evaluate(() => document.querySelector('.notes-feed')?.innerText || '')));
   await page.evaluate(() => window.scrollTo(0, 0));
   await sleep(900);
-  check('...that scrolling to the top leaves alone', await page.evaluate(() => !!document.querySelector('.feed-new-pill')
-    && !/ANOTHER ONE/.test(document.querySelector('.notes-feed')?.innerText || '')));
-  await page.evaluate(() => document.querySelector('.feed-new-pill').click());
-  await sleep(1200);
-  check('...until it is tapped', await page.evaluate(() => /ANOTHER ONE/.test(document.querySelector('.notes-feed')?.innerText || '') && !document.querySelector('.feed-new-pill')));
+  check('...that reaching the top clears by itself', !(await page.$('.feed-new-pill')));
 
-  console.log('\n[a post arrives whole]');
-  // A row used to paint first and fill in its picture after. The post waits
-  // at the door for its picture before it is even counted; and when the pill
-  // lets it in, the first time the row exists its image is already decoded.
+  console.log('\n[a post arrives whole, at the top]');
+  // At the top of the feed a live post opens itself — no pill. It waits at
+  // the door for its picture first, and the first time the row exists its
+  // image is already decoded. A row used to paint first and fill in after.
   await page.evaluate(() => {
     window.__firstSight = null;
     const feed = document.querySelector('.notes-feed');
@@ -189,16 +180,12 @@ try {
   });
   const t0 = await page.evaluate(() => performance.now());
   await page.evaluate((ev) => window.__inject(ev), signed('PICTURE POST http://localhost:5296/slow.png?' + Date.now(), 0));
-  await sleep(350);
-  check('a post is not even counted before its picture is in', !(await page.$('.feed-new-pill')));
-  await page.waitForSelector('.feed-new-pill', { timeout: 4000 }).catch(() => {});
-  const counted = await page.evaluate(() => performance.now());
-  check('...it is counted once the slow host answered', counted - t0 >= 700, Math.round(counted - t0) + 'ms');
-  await page.evaluate(() => document.querySelector('.feed-new-pill')?.click());
+  check('...sitting at the top', (await page.evaluate(() => window.scrollY)) < 120);
   await page.waitForFunction(() => !!window.__firstSight, { timeout: 4000 }).catch(() => {});
   await sleep(120); // a hair in: the animation has been started and not finished
   const sight = await page.evaluate(() => window.__firstSight);
-  check('the post is in the feed', !!sight && sight.img, JSON.stringify(sight));
+  check('the post let itself in — no pill', !!sight && sight.img && !(await page.$('.feed-new-pill')), JSON.stringify(sight));
+  check('...having waited for the slow host', !!sight && sight.at - t0 >= 700, sight ? Math.round(sight.at - t0) + 'ms' : '');
   const mid = await page.evaluate(() => {
     const row = [...document.querySelectorAll('.notes-feed > .row')].find((n) => /PICTURE POST/.test(n.innerText || ''));
     return row ? { anims: row.getAnimations().length, h: row.getBoundingClientRect().height } : null;
@@ -253,7 +240,8 @@ try {
   check('coming back re-asks the relays without being told', r1.reqsAfter > r1.reqsBefore, `${r1.reqsBefore} → ${r1.reqsAfter} kind-1 requests`);
   const a1 = await rowAt(held.text);
   const feedText = () => page.evaluate(() => document.querySelector('.notes-feed')?.innerText || '');
-  check('a few new posts go straight in — no pill', !(await page.$('.feed-new-pill')) && /CATCH-UP 1/.test(await feedText()));
+  check('a few new posts go straight in', /CATCH-UP 1/.test(await feedText()));
+  check('...and the pill says how many are above you', /3 new posts/i.test(await page.evaluate(() => document.querySelector('.feed-new-pill')?.textContent || '')));
   check('...and the post you were reading has not moved', !!held && !!a1 && a1.text === held.text && Math.abs(a1.top - held.top) <= 2,
     JSON.stringify({ held, now: a1 }));
   // they sort below everything cached: page down to them
@@ -261,8 +249,8 @@ try {
   await sleep(600);
   check('...older posts that merely missed the cache went in quietly too', /not in the cache/.test(await feedText()));
   await page.evaluate(() => window.scrollTo(0, 0));
-  await sleep(300);
-  check('...scrolling up reaches the newest post', /CATCH-UP 1/.test(await topRow()), (await topRow()).slice(0, 40));
+  await sleep(600);
+  check('...scrolling up reaches the newest post, and clears the pill', /CATCH-UP 1/.test(await topRow()) && !(await page.$('.feed-new-pill')), (await topRow()).slice(0, 40));
 
   console.log('\n[coming back while sitting at the top]');
   const wasTop = await anchor();
@@ -270,7 +258,7 @@ try {
   const a2 = await rowAt(wasTop.text);
   check('the post you had at the top stays under your eyes', !!wasTop && !!a2 && a2.text === wasTop.text && Math.abs(a2.top - wasTop.top) <= 2 && a2.y > 0,
     JSON.stringify({ was: wasTop, now: a2 }));
-  check('...with the new ones above it, newest first', /AT-THE-TOP A/.test(await topRow()) && !(await page.$('.feed-new-pill')));
+  check('...with the new ones above it, newest first, and a pill saying so', /AT-THE-TOP A/.test(await topRow()) && /2 new posts/i.test(await page.evaluate(() => document.querySelector('.feed-new-pill')?.textContent || '')));
 
   console.log('\n[coming back after a long time away]');
   await page.evaluate(() => window.scrollTo(0, 900));

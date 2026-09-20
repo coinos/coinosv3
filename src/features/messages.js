@@ -3231,10 +3231,11 @@ export function messagesFeature(ctx) {
   // only runs once a wallet opens.
   if (typeof window !== 'undefined') {
     window.addEventListener('scroll', () => {
-      // NB no auto-flush of waiting posts here: letting them in the moment
-      // the page reached the top re-rendered the feed under a finger on its
-      // way to the pill, and the tap landed on the post beneath instead.
       if (!ui.profilePk && !(ui.chatOpen && ui.msgView === 'feed')) return;
+      // back at the top by yourself: the new posts are under your eyes, so
+      // the notice has done its job (only the pill repaints — the rows are
+      // keyed and stay put, so nothing moves under a finger)
+      if (!ui.profilePk && feed && feed.unseen && atFeedTop()) { feed.unseen = 0; render(); }
       if (window.innerHeight + window.scrollY < (document.documentElement.scrollHeight || 0) - 600) return;
       if (ui.profilePk) loadOlderNotes(ui.profilePk).catch(() => {});
       else loadOlderFeed().catch(() => {});
@@ -3654,7 +3655,7 @@ export function messagesFeature(ctx) {
   const feedStaged = new Set();
   async function mergeFeed(evs, opts = {}) {
     const c = feedNow();
-    const known = new Set([...c.notes, ...(c.pending || []), ...(c.catchup || [])].map((e) => e.id));
+    const known = new Set([...c.notes, ...(c.catchup || [])].map((e) => e.id));
     const add = (evs || []).filter((e) => e.kind === 1 && !isReply(e) && !isMuted(e.pubkey)
       && !known.has(e.id) && !feedStaged.has(e.id) && known.add(e.id) && feedStaged.add(e.id));
     if (!add.length) return false;
@@ -3667,38 +3668,33 @@ export function messagesFeature(ctx) {
       c.catchup = [...(c.catchup || []), ...add];
       return true;
     }
-    // A post that arrived on its own waits behind the pill instead of
-    // shoving the page down — wherever you are on it. Only what you asked
-    // for (the first load, a page of older posts) goes straight in.
-    if (opts.live && c.notes.length) {
-      c.pending = [...(c.pending || []), ...add].sort((a, b) => b.created_at - a.created_at).slice(0, FEED_KEEP);
-      return true;
-    }
+    // A post that arrives on its own goes in at once, wherever you are. At
+    // the top it opens itself under your eyes. Further down it goes in
+    // above the fold with the page held still, and the pill says how many
+    // are up there — a notice, not a gate: the scrollbar already changed,
+    // and scrolling up reaches them in order. (They used to wait behind
+    // the pill, which read as "nothing new ever arrives".)
+    const above = opts.live && c.notes.length && !atFeedTop();
     c.notes = [...c.notes, ...add].sort((a, b) => b.created_at - a.created_at).slice(0, FEED_KEEP);
-    if (opts.live) noteEntering(add);
+    if (opts.live && !above) noteEntering(add);
     // posts arriving at the TOP shouldn't cost you the ones you'd scrolled to
     const fresh = add.filter((e) => e.created_at >= (c.notes[0] || {}).created_at).length;
     if (fresh) c.shown = Math.min((c.shown || FEED_PAGE) + fresh, c.notes.length);
     try { wallet.saveFeatureState(FEED_CACHE, c.notes.slice(0, FEED_STORE).map(slimNote)); } catch {}
+    if (above) {
+      c.unseen = (c.unseen || 0) + add.length;
+      if (ui.chatOpen && ui.msgView === 'feed') holdScroll(render);
+    }
     return true;
   }
 
-  // Let the waiting posts in. Called by the pill, and by simply scrolling
-  // back to the top — once you are up there they cost nothing to show.
-  function flushPending(scroll) {
+  // The pill's tap: the posts are already in, so this just goes up to them.
+  // Reaching the top by yourself clears it too (see the scroll listener).
+  function jumpToNew() {
     const c = feed;
-    if (!c || !(c.pending || []).length) return;
-    const add = c.pending;
-    c.pending = [];
-    noteEntering(add);
-    const seen = new Set(c.notes.map((e) => e.id));
-    c.notes = [...c.notes, ...add.filter((e) => !seen.has(e.id))]
-      .sort((a, b) => b.created_at - a.created_at).slice(0, FEED_KEEP);
-    c.shown = Math.min((c.shown || FEED_PAGE) + add.length, c.notes.length);
-    try { wallet.saveFeatureState(FEED_CACHE, c.notes.slice(0, FEED_STORE).map(slimNote)); } catch {}
-    // up first, then paint: the new posts open at the top, under your eyes,
-    // rather than somewhere above a page still gliding upward
-    if (scroll) { try { window.scrollTo({ top: 0 }); } catch {} }
+    if (!c) return;
+    c.unseen = 0;
+    try { window.scrollTo({ top: 0 }); } catch {}
     render();
   }
   // One pass over the plan: each relay is asked only for the authors it
@@ -3780,6 +3776,9 @@ export function messagesFeature(ctx) {
     // open above the fold
     c.shown = Math.min((c.shown || FEED_PAGE) + inside, c.notes.length);
     holdScroll(render);
+    // the new ones are above you now (even if you were at the top before
+    // the hold): say so — only the pill repaints
+    if (fresh && !atFeedTop()) { c.unseen = (c.unseen || 0) + fresh; render(); }
   }
   // Repaint with the page held still: the post at the top of the viewport
   // stays where it was, however much was inserted above it. Measured after
@@ -5530,17 +5529,16 @@ export function messagesFeature(ctx) {
       i ? h('div', { 'data-key': 'hr:' + ev.id, style: 'height:1px;background:var(--border,rgba(128,128,128,.18));margin:0 -14px' }) : null,
       enterRow(keyed(noteRow(ev.pubkey, ev, displayName(ev.pubkey)), ev.id), ev.id),
     ]);
-    // Posts that arrived while you were reading, waiting to be let in. A
-    // floating pill rather than an insertion: it says how many, and the tap
-    // that shows them also takes you up to them.
+    // Posts that went in above you while you were reading. A floating pill
+    // that says how many are up there; the tap takes you up to them.
     // Keyed, so the morph keeps this very node while the count changes —
     // the count itself is a fresh node each time, which is what replays its
     // bump. The tap is the pill's alone (no bubbling into the page).
-    const waiting = (c.pending || []).length;
+    const waiting = c.unseen || 0;
     const pill = waiting
       ? h('button', {
           class: 'feed-new-pill', 'data-key': 'feed-pill', type: 'button',
-          onClick: (e) => { e.preventDefault(); e.stopPropagation(); flushPending(true); },
+          onClick: (e) => { e.preventDefault(); e.stopPropagation(); jumpToNew(); },
         }, '↑ ', h('span', { class: 'n', 'data-key': 'n:' + waiting }, String(waiting)), ' ',
           waiting === 1 ? t('feedOneNewWord') : t('feedNNewWord'))
       : null;

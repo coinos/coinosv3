@@ -3654,12 +3654,19 @@ export function messagesFeature(ctx) {
   const feedStaged = new Set();
   async function mergeFeed(evs, opts = {}) {
     const c = feedNow();
-    const known = new Set([...c.notes, ...(c.pending || [])].map((e) => e.id));
+    const known = new Set([...c.notes, ...(c.pending || []), ...(c.catchup || [])].map((e) => e.id));
     const add = (evs || []).filter((e) => e.kind === 1 && !isReply(e) && !isMuted(e.pubkey)
       && !known.has(e.id) && !feedStaged.has(e.id) && known.add(e.id) && feedStaged.add(e.id));
     if (!add.length) return false;
     await notesReady(add);
     for (const e of add) feedStaged.delete(e.id);
+    // A catch-up is settled once, after every relay has answered (see
+    // settleCatchup) — not chunk by chunk, which is what made the pill count
+    // up in steps and land on the same round number every time.
+    if (opts.catchup) {
+      c.catchup = [...(c.catchup || []), ...add];
+      return true;
+    }
     // A post that arrived on its own waits behind the pill instead of
     // shoving the page down — wherever you are on it. Only what you asked
     // for (the first load, a page of older posts) goes straight in.
@@ -3725,12 +3732,74 @@ export function messagesFeature(ctx) {
     if (!feedAuthors().length) { if (feed) feed.status = 'ready'; return; }
     if (!opts.force && Date.now() - feedAt < 30_000) return;
     feedAt = Date.now();
-    const live = opts.live != null ? !!opts.live : !!(feed && feed.notes.length);
-    try { await feedPass({}, { live }); } catch {} finally {
+    const catchup = opts.live != null ? !!opts.live : !!(feed && feed.notes.length);
+    const topBefore = feed && feed.notes[0] ? feed.notes[0].created_at : 0;
+    try { await feedPass({}, { catchup }); } catch {} finally {
       if (feed) feed.status = 'ready';
-      scheduleRepaint();
+      if (catchup) settleCatchup(topBefore); else scheduleRepaint();
     }
     watchFeed();
+  }
+  // ---- coming back to the feed ---------------------------------------------
+  // The catch-up asks every relay for its newest posts, with no lower bound,
+  // so most of what it returns is not new at all — it's older posts that
+  // simply weren't in the fifty we keep. Those are gap fills and go in
+  // silently. What's actually new is what's newer than the newest post we
+  // had when we asked, and how many there are decides what happens:
+  //   a few — they go in above what you're looking at, and the page is held
+  //           still, so scrolling up reveals them in order, newest at the top
+  //   a lot — you've been gone a while: the feed goes to the top, at the
+  //           newest post, the way it would on a fresh open
+  const FEED_CATCHUP_MAX = 20;
+  function settleCatchup(topBefore) {
+    const c = feed;
+    if (!c) return;
+    const add = c.catchup || [];
+    c.catchup = [];
+    if (!add.length) { scheduleRepaint(); return; }
+    const seen = new Set(c.notes.map((e) => e.id));
+    const fresh = add.filter((e) => !seen.has(e.id) && e.created_at > topBefore).length;
+    // the window grows only by what lands inside it — gap fills below its
+    // bottom edge are paged in later, not painted now
+    const edge = (c.notes[Math.min(c.shown || FEED_PAGE, c.notes.length) - 1] || {}).created_at || 0;
+    const inside = add.filter((e) => !seen.has(e.id) && e.created_at > edge).length;
+    c.notes = [...c.notes, ...add.filter((e) => !seen.has(e.id))]
+      .sort((a, b) => b.created_at - a.created_at).slice(0, FEED_KEEP);
+    try { wallet.saveFeatureState(FEED_CACHE, c.notes.slice(0, FEED_STORE).map(slimNote)); } catch {}
+    const onScreen = ui.chatOpen && ui.msgView === 'feed';
+    if (!onScreen || fresh > FEED_CATCHUP_MAX) {
+      c.shown = FEED_PAGE;
+      render();
+      // after the paint, so a browser that anchors the scroll through the
+      // repaint can't leave you where you were
+      if (onScreen) { try { window.scrollTo({ top: 0 }); } catch {} }
+      return;
+    }
+    // the window grows by what went in above its edge, so the posts you'd
+    // scrolled to are still there below; no entrance animation — these
+    // open above the fold
+    c.shown = Math.min((c.shown || FEED_PAGE) + inside, c.notes.length);
+    holdScroll(render);
+  }
+  // Repaint with the page held still: the post at the top of the viewport
+  // stays where it was, however much was inserted above it. Measured after
+  // the paint, so a browser that anchored the scroll itself isn't corrected
+  // twice.
+  function holdScroll(paint) {
+    let key = null, top = 0;
+    try {
+      for (const r of document.querySelectorAll('.notes-feed > [data-key]')) {
+        const b = r.getBoundingClientRect();
+        if (b.bottom > FEED_TOP_PX) { key = r.getAttribute('data-key'); top = b.top; break; }
+      }
+    } catch {}
+    paint();
+    if (!key) return;
+    try {
+      const r = document.querySelector('.notes-feed > [data-key="' + CSS.escape(key) + '"]');
+      const d = r ? r.getBoundingClientRect().top - top : 0;
+      if (Math.abs(d) > 1) window.scrollBy(0, d);
+    } catch {}
   }
   // While the feed is what's on screen, new posts arrive by themselves — on
   // the same relays the pass above reads, one subscription each.

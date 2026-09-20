@@ -2160,17 +2160,38 @@ export function messagesFeature(ctx) {
     return changed;
   }
 
+  // The list writers remember what they last sent and when. A relay that
+  // refuses a copy (rate limit, ban) leaves the remote copy stale, and the
+  // next sync would ask for the same write again — and again, every couple
+  // of seconds, forever: that storm filled relay.coinos.io's per-IP budget
+  // for a whole household, and a phone behind the same IP could no longer
+  // reach its remote signer (every NIP-46 request refused as rate-limited),
+  // so its DMs stopped decrypting. An unchanged document is re-sent at most
+  // once per LIST_REPUBLISH_MS; a real local change is a new document and
+  // goes out at once. Our own writes echoing back on the live subscription
+  // are not news either.
+  const LIST_REPUBLISH_MS = 5 * 60_000;
+  const lastListWrite = new Map(); // 'lists' | 'frags' -> { key, at }
+  const ownListIds = new Set();
+  function listWriteDue(what, key) {
+    const prev = lastListWrite.get(what);
+    if (prev && prev.key === key && Date.now() - prev.at < LIST_REPUBLISH_MS) return false;
+    lastListWrite.set(what, { key, at: Date.now() });
+    return true;
+  }
   async function publishLists() {
     const ids = await selfCryptors();
     const s = st();
     publishFragments(ids, fragAt).catch(() => {});
     const docs = [[13302, buildCommunityList(s)], [13303, buildInviteList(s)]];
+    if (!listWriteDue('lists', ids.map((i) => i.pk).join() + '|' + docs.map(([k, d]) => k + ':' + d).join('|'))) return;
     for (const id of ids)
       for (const [kind, doc] of docs) {
         try {
           const evt = await id.sign({
             kind, content: await id.enc(doc), tags: [], created_at: Math.floor(Date.now() / 1000),
           });
+          ownListIds.add(evt.id);
           publishOn(DM_RELAYS, evt);
         } catch {}
       }
@@ -2269,12 +2290,14 @@ export function messagesFeature(ctx) {
   async function publishFragments(ids, prevAt = {}) {
     const s = st();
     const frags = buildFragments(s);
+    if (!listWriteDue('frags', ids.map((i) => i.pk).join() + '|' + JSON.stringify(frags))) return;
     const now = Math.floor(Date.now() / 1000);
     for (const id of ids)
       for (let i = 0; i < frags.length; i++) {
         try {
           const created_at = Math.max(now, ((prevAt[id.pk] || {})[i] || 0) + 1);
           const evt = await id.sign({ kind: LIST_FRAG_KIND, tags: [['d', String(i)]], content: await id.enc(JSON.stringify(frags[i])), created_at });
+          ownListIds.add(evt.id);
           publishOn(listRelays(), evt);
         } catch {}
       }
@@ -2298,8 +2321,13 @@ export function messagesFeature(ctx) {
       queryOn(listRelays(), { kinds: [LIST_FRAG_KIND], authors }, 4500),
     ]);
     if (!listLiveSub) {
-      listLiveSub = subscribeOn(listRelays(), { kinds: [LIST_FRAG_KIND], authors, since: Math.floor(Date.now() / 1000) }, () => {
-        clearTimeout(listLiveSub.t); listLiveSub.t = setTimeout(() => syncLists({ force: true }).catch(() => {}), 1500);
+      listLiveSub = subscribeOn(listRelays(), { kinds: [LIST_FRAG_KIND], authors, since: Math.floor(Date.now() / 1000) }, (e) => {
+        if (ownListIds.has(e.id)) return; // our own write coming back is not news
+        // another device writing: read it soon, but never faster than once
+        // every ten seconds — a device stuck rewriting must not drag every
+        // other one into a query storm alongside it
+        const wait = Math.max(1500, 10_000 - (Date.now() - listsSyncedAt));
+        clearTimeout(listLiveSub.t); listLiveSub.t = setTimeout(() => syncLists({ force: true }).catch(() => {}), wait);
       });
       allUnsubs.push(() => { try { listLiveSub(); } catch {} listLiveSub = null; });
     }

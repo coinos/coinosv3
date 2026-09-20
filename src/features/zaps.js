@@ -476,7 +476,11 @@ export function zapsFeature(ctx) {
               style: 'text-align:right',
               onInput: (e) => { const n = parseInt(e.target.value, 10); if (n > 0) ctx.setZapDefaultSat(n); } }),
             h('span', { class: 'small muted', style: 'align-self:center;padding:0 6px' }, 'sats'))),
-        h('div', { class: 'small faint' }, t('zapDefaultHint')))];
+        h('div', { class: 'small faint' }, t('zapDefaultHint')),
+        ctx.setZapSound ? h('label', { class: 'row gap6', style: 'align-items:center;cursor:pointer;margin-top:4px' },
+          h('input', { type: 'checkbox', checked: ctx.zapSound(), style: 'width:18px;height:18px;accent-color:var(--accent);margin:0',
+            onChange: (e) => { ctx.setZapSound(e.target.checked); } }),
+          h('span', { class: 'small' }, t('zapSoundToggle'))) : null)];
     },
   };
 }

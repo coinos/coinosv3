@@ -5376,6 +5376,14 @@ const ctx = {
     wallet.saveFeatureState('prefs', p);
     try { wallet.saveCache(); } catch {}
   },
+  // the tap's sound effect — on unless switched off from the held-⚡ screen
+  zapSound: () => !wallet.loadFeatureState || wallet.loadFeatureState('prefs', {}).zapSound !== false,
+  setZapSound: (on) => {
+    const p = wallet.loadFeatureState('prefs', {});
+    if (on) delete p.zapSound; else p.zapSound = false;
+    wallet.saveFeatureState('prefs', p);
+    try { wallet.saveCache(); } catch {}
+  },
   // Per-recipient auto-pay budget: a fixed-amount LNURL/address the user
   // trusts to pay without confirmation, up to this many sats. Keyed by the
   // recipient's address/lnurl. Synced with the rest of prefs.

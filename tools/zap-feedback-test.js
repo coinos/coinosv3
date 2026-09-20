@@ -13,12 +13,13 @@ import { arkFeature } from './src/features/ark.js';
 ${domHelper}
 const me = '1'.repeat(64), author = '2'.repeat(64), id = '3'.repeat(64);
 const ev = { id, pubkey: author, kind: 1, tags: [], content: 'A little lightning goes a long way.' };
-let feature, ark, arkResolve, arkReject, amount = 21, mode = 'pending', calls = 0, toasts = [], loginPk = null;
+let feature, ark, arkResolve, arkReject, amount = 21, sound = true, mode = 'pending', calls = 0, toasts = [], loginPk = null;
 const ui = { screen: 'wallet', chatOpen: true };
 const wallet = { nostr: { pk: me }, loadFeatureState: () => ({}), saveFeatureState() {}, loadArkState() {}, registerCacheExtension() {},
   nostrProfile: async () => { throw new Error('Payment unavailable'); } };
 const ctx = { h, ui, wallet, render, toast: (msg) => toasts.push(msg),
   zapDefaultSat: () => amount, setZapDefaultSat: (n) => amount = n,
+  zapSound: () => sound, setZapSound: (on) => sound = on,
   brandHeader: () => null,
   testPay: () => new Promise((resolve, reject) => { arkResolve = resolve; arkReject = reject; }),
   showSend: () => { ui.chatOpen = false; },
@@ -193,6 +194,15 @@ try {
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
   await page.mouse.down(); await pause(200); await page.mouse.up(); await pause(100);
   check('a short press is still a tap', await page.evaluate((n) => test.calls === n + 1 && !document.querySelector('#setup input'), calls));
+  await page.evaluate(() => test.finishArk(true)); await pause(100);
+  // The same screen switches the sound off; the strike and tally stay.
+  await page.mouse.down(); await pause(650); await page.mouse.up(); await pause(100);
+  check('the held screen offers the sound switch, on by default', await page.$eval('#setup input[type=checkbox]', (e) => e.checked));
+  await page.click('#setup input[type=checkbox]');
+  await page.click('#setup .btn-primary'); await pause(100);
+  const starts = await page.evaluate(() => zapAudio.starts);
+  await page.click('.note-zap'); await pause(100);
+  check('with the sound off a tap still strikes and counts, silently', await page.evaluate((n, c) => zapAudio.starts === n && test.calls === c + 2 && !!document.querySelector('.zap-fx'), starts, calls));
   await page.evaluate(() => test.finishArk(true)); await pause(100);
   const silentPage = await browser.newPage();
   silentPage.on('pageerror', e => errors.push(e.message));

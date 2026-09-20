@@ -964,6 +964,7 @@ const STR = {
     zapSetupSave: 'Save and zap',
     zapSettingsDesc: 'This is what one tap on ⚡ sends — no form, no confirmation. Tap again while one is still on its way to send another.',
     zapAmountSaved: 'One tap now zaps {n} sats',
+    zapSoundToggle: 'Play a sound when you zap',
     zapDefaultLabel: 'One-tap zap amount',
     zapDefaultHint: 'What a single tap of the ⚡ button sends.',
     threadNoReplies: 'No replies yet.',

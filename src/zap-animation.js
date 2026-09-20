@@ -37,10 +37,11 @@ function tremblePost(id) {
   }
 }
 
-export function animateZap(sats, origin, postId) {
+export function animateZap(sats, origin, postId, withSound = true) {
   // Warm: play inside the tap itself (the audio context resumes on a
   // gesture). Cold: play when the chunk lands, if that's still soon enough.
-  if (sound) sound.playZapSound();
+  if (!withSound) {} // switched off from the held-⚡ screen: the strike stays
+  else if (sound) sound.playZapSound();
   else { const tappedAt = performance.now(); warmZapSound().then((m) => { if (m) m.playZapSound(tappedAt); }); }
   try { tremblePost(postId); } catch {} // Optional motion must never block a zap.
   const layer = document.createElement('div');

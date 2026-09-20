@@ -3119,7 +3119,7 @@ export function messagesFeature(ctx) {
     if (!id || !sats) return;
     const list = pendingOf(id)?.list || [];
     zapPending.set(id, [...list, { sats, at: Date.now(), state: 'flying' }]);
-    animateZap(sats, origin, id);
+    animateZap(sats, origin, id, zapSoundOn());
     render();
     // repaint when the in-flight chip would expire, so a zap nobody ever
     // reported on doesn't pulse forever
@@ -3159,8 +3159,9 @@ export function messagesFeature(ctx) {
   }
   // The chip: a little bolt + the sats total. Absent until the first receipt
   // — or until you zap it yourself, which is its own kind of receipt.
+  const zapSoundOn = () => (ctx.zapSound ? ctx.zapSound() : true);
   function zapChip(id, { onClick, onHold, cls = '' } = {}) {
-    if (onClick) warmZapSound();
+    if (onClick && zapSoundOn()) warmZapSound();
     const z = zapTotals.get(id) || zapSeeds().get(id);
     const p = pendingOf(id);
     const optimistic = p ? p.sats : 0;
@@ -4348,7 +4349,7 @@ export function messagesFeature(ctx) {
   // the main action, zapping this note with the new amount the second.
   function openZapSettings(pk, id, origin) {
     const cur = ctx.zapDefaultSat ? ctx.zapDefaultSat() : 0;
-    ui.zapSetup = { pk, npub: npubOf(pk), eventId: id, amount: String(cur || 21), origin, edit: true };
+    ui.zapSetup = { pk, npub: npubOf(pk), eventId: id, amount: String(cur || 21), origin, edit: true, sound: zapSoundOn() };
     render();
   }
 
@@ -4359,6 +4360,7 @@ export function messagesFeature(ctx) {
       const n = parseInt(s.amount, 10);
       if (!n || n <= 0) { toast(t('enterValidAmtForN', { n: 1 })); return 0; }
       ctx.setZapDefaultSat(n);
+      if (s.edit && ctx.setZapSound && s.sound !== zapSoundOn()) ctx.setZapSound(s.sound);
       return n;
     };
     const saveAndZap = () => {
@@ -4389,6 +4391,9 @@ export function messagesFeature(ctx) {
         h('div', { class: 'input-group' },
           h('input', { type: 'number', min: '1', value: s.amount, onInput: (e) => { s.amount = e.target.value; } }),
           h('span', { class: 'small muted', style: 'align-self:center;padding:0 8px' }, 'sats')),
+        s.edit ? h('label', { class: 'row gap6', style: 'align-items:center;cursor:pointer' },
+          h('input', { type: 'checkbox', checked: s.sound, style: 'width:18px;height:18px;accent-color:var(--accent);margin:0', onChange: (e) => { s.sound = e.target.checked; } }),
+          h('span', { class: 'small' }, t('zapSoundToggle'))) : null,
         s.edit
           ? [h('button', { class: 'btn-primary btn-block', onClick: saveOnly }, t('save')),
             h('button', { class: 'btn-ghost btn-block', onClick: saveAndZap }, t('zapSetupSave'))]
@@ -4622,7 +4627,7 @@ export function messagesFeature(ctx) {
   const I_ZAP = ICON('<path d="M13 2L4 14h7l-1 8 9-12h-7l1-8z"/>', true);
 
   function noteActions(pk, ev, { canZap }) {
-    if (canZap) warmZapSound(); // the clip is decoded before the first tap
+    if (canZap && zapSoundOn()) warmZapSound(); // the clip is decoded before the first tap
     const mineReact = myReactOn(ev.id);
     const rm = reacts.get(ev.id);
     const likeN = rm ? [...rm.values()].reduce((n, { who }) => n + who.size, 0) : 0;

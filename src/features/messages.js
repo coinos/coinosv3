@@ -3415,6 +3415,63 @@ export function messagesFeature(ctx) {
   // Follow or unfollow, on the freshest list the relays will give us — the
   // local copy alone would quietly drop anyone another client added since.
   // The button flips immediately and goes back if the publish fails.
+  // A brand-new identity starts with something to read: the people behind
+  // coinos, a Bitcoin feed, and one topic as an example of what a feed can
+  // be. Once per identity; a person who unfollows stays unfollowed.
+  const STARTER_FOLLOWS = [
+    '98ae4da926c471c23fd12d1ebdd5839ba82917baa618e184e0c9916d93dcf4f7', // Adam
+    '72bdbc57bdd6dfc4e62685051de8041d148c3c68fe42bf301f71aa6cf53e52fb', // coinos
+  ];
+  // The Bitcoin feed's follow pack (NIP-51 kind 39089): { pk, d, relays, title }.
+  // Until one is chosen the feed reads the #bitcoin topic instead.
+  const STARTER_BITCOIN_PACK = null;
+  async function seedNewIdentity({ onlyIfNoFollows = false } = {}) {
+    const s = st();
+    if (s.seeded) return;
+    s.seeded = Date.now();
+    const at = Date.now();
+    const feeds = [
+      STARTER_BITCOIN_PACK
+        ? { id: 'starter-bitcoin', name: 'Bitcoin', follows: false, authors: [], packs: [STARTER_BITCOIN_PACK], topics: [], at }
+        : { id: 'starter-bitcoin', name: 'Bitcoin', follows: false, authors: [], packs: [], topics: ['bitcoin'], at },
+      { id: 'starter-gardenstr', name: '#gardenstr', follows: false, authors: [], packs: [], topics: ['gardenstr'], at },
+    ];
+    for (const f of feeds) if (!s.feeds.some((x) => x.id === f.id)) s.feeds.push(f);
+    save(s);
+    if (onlyIfNoFollows) {
+      await syncFollows({ force: true }).catch(() => {});
+      if (followsNow().set.size) return;
+    }
+    followMany(STARTER_FOLLOWS).catch(() => {});
+  }
+  // Follow several people in one kind-3 update (toggleFollow is one at a time
+  // and locks while it publishes).
+  async function followMany(pks) {
+    if (followsPub) return;
+    const id = await requireIdentity();
+    const want = pks.filter((pk) => pk && pk !== id.pubkey);
+    if (!want.length) return;
+    followsPub = true;
+    const before = followsNow();
+    try {
+      await syncFollows({ force: true }).catch(() => {});
+      const fetched = followsNow();
+      const base = fetched.at > before.at ? fetched : before;
+      const add = want.filter((pk) => !base.set.has(pk));
+      if (!add.length) return;
+      const tags = [...base.tags, ...add.map((pk) => ['p', pk])];
+      const created_at = Math.max(Math.floor(Date.now() / 1000), base.at + 1);
+      const partial = { kind: 3, content: base.content || '', created_at, tags };
+      const evt = id.signer instanceof Uint8Array ? finalizeEvent(partial, id.signer) : await id.signer.signEvent(partial);
+      saveFollows({ set: new Set(pTags(tags).map((x) => x[1])), tags, content: base.content || '', at: created_at });
+      feedAuthorsChanged();
+      publishOn(zapRelays(), evt).catch(() => {});
+      syncInbox({ force: true }).catch(() => {});
+    } finally {
+      followsPub = false;
+      render();
+    }
+  }
   async function toggleFollow(pk) {
     if (!pk || followsPub) return;
     const id = await requireIdentity();
@@ -7198,6 +7255,7 @@ export function messagesFeature(ctx) {
       // the header sat avatar-less for that beat. A generated seed's pubkey
       // is right here — paint the punk before the next frame.
       const pk = (hook('nostrLoginIdentity') || {}).pubkey || (wallet.nostr && wallet.nostr.pk);
+      setTimeout(seedNewIdentity, 0); // fresh words: something to read from the start
       if (!pk) return;
       const entry = { name: null, picture: null, t: Date.now() };
       profiles.set(pk, entry);
@@ -7331,6 +7389,10 @@ export function messagesFeature(ctx) {
       }, avatar(pk, 'chat-avatar ' + (big ? 'chip-lg' : 'mini'), false),
         h('span', { class: big ? '' : 'small' }, displayName(pk)));
     },
+    // A sign-in (Google, passkey, key) that found no wallet on its identity:
+    // the same start, but only the follows of an identity that follows
+    // nobody yet — an established nostr user keeps their own list.
+    identitySignedInNew() { setTimeout(() => seedNewIdentity({ onlyIfNoFollows: true }), 0); return true; },
     init() {
       // this wallet's cached faces, from its own namespace — the keys are
       // in place now, whatever the header asked for before

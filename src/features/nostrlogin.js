@@ -157,6 +157,7 @@ export function nostrLoginFeature(ctx) {
         // them); anyone signing in wants a wallet, and the backup mechanics
         // stay spelled out in the nostr settings card.
         await createForSigner({ signer });
+        ctx.hook('identitySignedInNew');
         return;
       }
       // Same wallet however you log in: a key-derived seed is published too,

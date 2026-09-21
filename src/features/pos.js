@@ -45,10 +45,20 @@ export function posFeature(ctx) {
     render();
   }
   // Digits on screen, into the same field a keyboard or a paste would fill.
+  // In the user's currency the pad works like a till: digits shift in from
+  // the right with two decimals, so 5 is 0.05, 277 is 2.77, 5588 is 55.88,
+  // and the "." key becomes "00". Sats are whole numbers and type plainly.
   function numpad(get, set) {
+    const cents = getUnit() === 'fiat';
     const press = (k) => {
       let v = String(get() || '');
-      if (k === 'del') v = v.slice(0, -1);
+      if (cents) {
+        let d = v.replace(/\D/g, '');
+        if (k === 'del') d = d.slice(0, -1);
+        else d = (d + (k === '.' ? '00' : k)).slice(0, 12);
+        d = d.replace(/^0+/, '');
+        v = d ? (parseInt(d, 10) / 100).toFixed(2) : '';
+      } else if (k === 'del') v = v.slice(0, -1);
       else if (k === '.') { if (!v.includes('.')) v = (v || '0') + '.'; }
       else if (v === '0') v = k;
       else v += k;
@@ -57,7 +67,7 @@ export function posFeature(ctx) {
     const key = (k, label) => h('button', { class: 'pos-key' + (k === 'del' ? ' del' : ''), type: 'button', 'aria-label': k === 'del' ? t('posBackspace') : label, onClick: () => press(k) }, label);
     return h('div', { class: 'pos-pad' },
       ...['1', '2', '3', '4', '5', '6', '7', '8', '9'].map((k) => key(k, k)),
-      key('.', '.'), key('0', '0'), key('del', '\u232b'));
+      key('.', cents ? '00' : '.'), key('0', '0'), key('del', '\u232b'));
   }
   function close() {
     const p = ui.pos;

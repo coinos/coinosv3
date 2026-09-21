@@ -16,7 +16,7 @@ const wallet = { loadFeatureState: (k, d) => (k in state ? state[k] : d), saveFe
 const ctx = {
   h, ui, wallet, render, toast: (m) => (window.toasts = (window.toasts || [])).push(m), copy: (x) => (window.copied = x),
   fmtAmount: (n) => Number(n).toLocaleString('en-US'), unitLabel: () => 'sats', unitTag: () => h('span', { class: 'unit-tag' }, 'sats'),
-  parseAmount: (v) => { const n = Number(String(v).replace(/,/g, '')); return isFinite(n) ? Math.round(n) : null; }, getUnit: () => 'sats',
+  parseAmount: (v) => { const n = Number(String(v).replace(/,/g, '')); return isFinite(n) ? Math.round(n) : null; }, getUnit: () => window.__unit || 'sats',
   brandHeader: () => null,
   hook(name, ...a) {
     if (name === 'arkReady') return true;
@@ -97,6 +97,17 @@ try {
   check('with the prompt off, Charge goes straight to the invoice', /Scan to pay/.test(await text()) && /300 sats/.test(await text()) && await page.evaluate(() => test.watch === 'ln3'));
   await page.evaluate(() => test.settle(false)); await pause(50);
   check('an expired invoice returns to the amount screen and says so', /That invoice expired/.test(await text()));
+  console.log('\n[a till in dollars]');
+  await page.evaluate(() => { window.__unit = 'fiat'; test.ui.pos = null; test.open(); }); await pause(50);
+  await click('5');
+  check('one digit is cents', await page.$eval('.pos-amount', (i) => i.value) === '0.05');
+  await click('\u232b'); for (const k of ['2', '7', '7']) await click(k);
+  check('digits shift in from the right', await page.$eval('.pos-amount', (i) => i.value) === '2.77');
+  await click('\u232b'); await click('\u232b'); await click('\u232b'); for (const k of ['5', '5', '8', '8']) await click(k);
+  check('...to any length', await page.$eval('.pos-amount', (i) => i.value) === '55.88');
+  await click('\u232b'); await click('\u232b'); await click('00');
+  check('the dot key is 00 in a currency', await page.$eval('.pos-amount', (i) => i.value) === '55.00');
+  await page.evaluate(() => { window.__unit = 'sats'; });
   await page.evaluate(() => { test.ui.pos = null; test.ui.posAtBoot = true; test.init(); }); await pause(50);
   check('the /pos link opens the till once a wallet is up', !!(await page.$('.pos-amount')));
   check('no browser errors', errors.length === 0);

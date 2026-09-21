@@ -22,7 +22,9 @@
   --surface2: #f7f8fa; /* subtle raised surface (hover, mnemonic cells) */
   --toast-bg: #15171a; /* dark toast on light page */
   --toast-fg: #ffffff;
-  --tab-bg: #e9ebef; /* tab strip background */
+  --tab-bg: #ffffff; /* tab strip: paper, like the flat cards beside it */
+  --tab-border: var(--line);
+  --tab-active: #ececef; /* the chosen tab: a quiet grey pill, no shadow */
   --info: #3949ab;
   --info-soft: #eef2ff;
   --info-line: #d4ddfb;
@@ -56,6 +58,8 @@
   --toast-bg: #2c323b; /* raised toast that reads against the dark page */
   --toast-fg: #f3f5f8;
   --tab-bg: #20242b;
+  --tab-border: transparent;
+  --tab-active: var(--paper);
   --wash: rgba(247, 147, 26, 0.07);
   --info: #9db4ff;
   --info-soft: #1a2030;
@@ -184,12 +188,12 @@ input { scroll-margin-top: 12px; }
 .balance .split .v.pending { color: var(--accent-ink); }
 
 /* ---- tabs ---- */
-.tabs { display: flex; gap: 4px; background: var(--tab-bg); border-radius: 12px; padding: 4px; margin: 16px 0; }
+.tabs { display: flex; gap: 4px; background: var(--tab-bg); border: 1px solid var(--tab-border); border-radius: 12px; padding: 4px; margin: 16px 0; }
 .tabs button {
   flex: 1; border: 0; background: transparent; padding: 9px 4px; border-radius: 9px;
   font: inherit; font-weight: 600; font-size: 14px; color: var(--muted); cursor: pointer;
 }
-.tabs button.active { background: var(--paper); color: var(--ink); box-shadow: var(--shadow); }
+.tabs button.active { background: var(--tab-active); color: var(--ink); }
 
 /* ---- buttons ---- */
 button, .btn {

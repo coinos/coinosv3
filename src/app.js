@@ -1334,6 +1334,10 @@ async function openWallet(input, opts = {}) {
 
 // Register a full (seed) wallet as an account and open it.
 async function enterWallet(mnemonic, passphrase, opts = {}) {
+  // A wallet opening is a new set of numbers: the count-up animation must
+  // not run from the previous account's balance (a fresh wallet used to
+  // count DOWN from the old one to zero).
+  _amtLast.clear();
   const acc = addOrGetAccount({
     type: 'full',
     label: defaultLabel('full'),

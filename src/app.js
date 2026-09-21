@@ -1104,24 +1104,7 @@ function createPane() {
           h('div', { class: 'w' }, h('span', { class: 'n' }, i + 1), h('span', { class: 't' }, w))
         )
       ),
-      h(
-        'div',
-        { class: 'row gap6' },
-        copyBtn(ui.draftMnemonic, t('copyPhrase')),
-        // With own entropy the phrase is a pure function of the text —
-        // "Regenerate" would hand back the identical words, so it hides.
-        (ui.ownEntropy || '').trim() ? null : h(
-          'button',
-          {
-            class: 'btn-ghost btn-sm',
-            onClick: () => {
-              ui.draftRandom = ui.draftMnemonic = newMnemonic();
-              render();
-            },
-          },
-          t('regenerate')
-        )
-      ),
+      h('div', { class: 'row gap6' }, copyBtn(ui.draftMnemonic, t('copyPhrase'))),
       optionsPanel(),
       h(
         'button',

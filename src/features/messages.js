@@ -5669,7 +5669,11 @@ export function messagesFeature(ctx) {
               : h('div', { class: 'row gap6 wrap' },
                 h('button', { class: 'btn-primary grow', onClick: () => {
                   const peer = pk;
-                  ui.profilePk = null;
+                  // leave the thread this profile may sit over too: the
+                  // screen router shows an open thread before the chat, so
+                  // a reply half-typed under their post used to win here
+                  ui.profilePk = null; ui.profOverThread = false;
+                  ui.noteThread = null; ui.userSearch = null; ui.feedEdit = null;
                   ui.chatOpen = true;
                   ui.msgView = 'dm';
                   ui.msgPeer = peer;

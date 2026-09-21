@@ -2548,11 +2548,31 @@ function settingsTab() {
 }
 
 // Everything nostr — identity, sync, wallet connect — on its own page.
+// Ask the browser to send a URL scheme's links to this app (the ?u= path
+// the Android intents already use). Chrome shows its own permission bar;
+// a scheme it won't register throws and we say so.
+function registerLinkHandler(scheme) {
+  try {
+    navigator.registerProtocolHandler(scheme, location.origin + '/?u=%s');
+    toast(t('linkHandlerAsked'));
+  } catch (e) { toast(t('linkHandlerRefused')); }
+}
 function nostrSettingsView() {
   return h(
     'div',
     { class: 'col', style: 'gap:16px' },
     ...featureAll('nostrSettingsCards'),
+    // The browser's own "open these links here" registry: njump's "Your
+    // default web app" is a web+nostr: link, and it opens whichever site
+    // asked for that scheme last. Needs a tap (the browser asks).
+    typeof navigator !== 'undefined' && navigator.registerProtocolHandler
+      ? h('div', { class: 'card col', style: 'gap:8px' },
+          h('h3', {}, t('linkHandlerTitle')),
+          h('p', { class: 'small muted', style: 'margin:0' }, t('linkHandlerDesc')),
+          h('div', { class: 'row gap6', style: 'flex-wrap:wrap' },
+            h('button', { class: 'btn-sm', onClick: () => registerLinkHandler('web+nostr') }, t('linkHandlerNostr')),
+            h('button', { class: 'btn-sm', onClick: () => registerLinkHandler('bitcoin') }, t('linkHandlerBitcoin'))))
+      : null,
     h('button', { class: 'btn-ghost btn-block', onClick: () => { ui.settingsPage = null; render(); } }, t('back'))
   );
 }
@@ -5472,9 +5492,11 @@ const INTENT_URI = (() => {
     const u = new URLSearchParams(location.search).get('u');
     if (!u) return null;
     history.replaceState(null, '', location.pathname || '/');
-    const m = u.match(/^nostr:((npub|nprofile|note|nevent)1[a-z0-9]+)\/?$/i);
+    // web+nostr: is what a browser hands a registered protocol handler
+    // (njump's "Your default web app"); nostr: is the Android intent
+    const m = u.match(/^(?:web\+)?nostr:((npub|nprofile|note|nevent)1[a-z0-9]+)\/?$/i);
     if (m) { history.replaceState(null, '', '/' + m[1]); return null; }
-    return u;
+    return u.replace(/^web\+/i, '');
   } catch { return null; }
 })();
 const FEATURES = buildFeatures(ctx);

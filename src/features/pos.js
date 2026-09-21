@@ -85,7 +85,8 @@ export function posFeature(ctx) {
       p.sale = sale; p.step = 'invoice';
       hook('arkLnWatch', inv.id, (a) => settle(sale, a));
     } catch (e) {
-      p.error = e.message || String(e);
+      console.warn('pos: invoice failed', e);
+      p.error = (e && e.message) || String(e);
     }
     p.busy = false; render();
   }
@@ -137,7 +138,8 @@ export function posFeature(ctx) {
         getUnit() !== 'fiat' && billSat() && fiatLine(billSat()) ? h('div', { class: 'small muted', style: 'text-align:right' }, fiatLine(billSat())) : null,
         h('input', { type: 'text', placeholder: t('posNoteHint'), value: p.note, maxlength: '80', onInput: (e) => { p.note = e.target.value; } }),
         p.error ? h('div', { class: 'notice error small' }, p.error) : null,
-        h('button', { class: 'btn-primary btn-block', disabled: !!p.busy, onClick: charge }, p.busy ? h('span', { class: 'spinner sm' }) : t('posCharge'))),
+        h('button', { class: 'btn-primary btn-block', disabled: !!p.busy, onClick: charge }, p.busy ? h('span', { class: 'spinner sm' }) : t('posCharge')),
+        p.busy ? h('div', { class: 'small muted', style: 'text-align:center' }, t('posMakingInvoice')) : null),
       tipSettingsCard(s),
       salesCard(s),
       back());
@@ -202,9 +204,11 @@ export function posFeature(ctx) {
           h('input', { type: 'text', inputmode: 'decimal', placeholder: '0', value: p.tipCustom, autofocus: true, onInput: (e) => { p.tipCustom = e.target.value; render(); } }),
           h('span', { class: 'small muted', style: 'align-self:center;padding:0 8px' }, unitLabel())) : null,
         p.tipMode != null ? h('div', { class: 'small muted' }, t('posTotalLine', { n: fmtAmount(bill + tip) + ' ' + unitLabel() })) : null,
+        p.error ? h('div', { class: 'notice error small', style: 'width:100%' }, p.error) : null,
         h('button', { class: 'btn-primary btn-block', disabled: p.tipMode == null || !!p.busy,
           onClick: () => makeSale(bill, tip, p.tipMode === 'custom' || p.tipMode === 'none' ? 0 : p.tipMode) },
-          p.busy ? h('span', { class: 'spinner sm' }) : t('posContinue'))),
+          p.busy ? h('span', { class: 'spinner sm' }) : t('posContinue')),
+        p.busy ? h('div', { class: 'small muted' }, t('posMakingInvoice')) : null),
       h('button', { class: 'btn-ghost btn-block', onClick: () => { p.step = 'amount'; render(); } }, t('back')));
   }
   function invoiceScreen(p) {

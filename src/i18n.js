@@ -275,6 +275,7 @@ const STR = {
     posTipWord: 'tip',
     posVoid: 'cancelled',
     posAwaiting: 'awaiting payment',
+    posMakingInvoice: 'Creating the invoice…',
     linkHandlerTitle: 'Open links here',
     linkHandlerDesc: 'Make this app the one your browser opens for nostr links (what njump calls "Your default web app") and bitcoin: links.',
     linkHandlerNostr: 'nostr links',

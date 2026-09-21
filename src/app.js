@@ -1070,6 +1070,10 @@ function tabBtn(label, active, onClick) {
 
 function createPane() {
   if (ui.createStep === 'gen') {
+    // The wizard shows words, never a Generate button: a refresh restores
+    // the step but not the draft (drafts live in memory only), so draw a
+    // fresh set right here. Nothing was made from the old words.
+    if (!ui.draftMnemonic && ui.onb && ui.onb.step === 'seed') ui.draftRandom = ui.draftMnemonic = newMnemonic();
     if (!ui.draftMnemonic) {
       return h(
         'div',

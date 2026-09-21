@@ -923,9 +923,20 @@ export function arkFeature(ctx) {
   // A bolt11 lands in Send (via the swaps feature's delegation hook, or
   // directly when swaps is absent): take over when the ark balance can
   // plausibly cover it, else decline so the Boltz path handles it.
+  // Lightning leaves Spending, whichever balance is on screen. With Savings
+  // showing, ask before going on — a person looking at one balance and
+  // charged from the other read it as the wrong wallet paying. Autopay
+  // (a trusted, budgeted code) never asks: nobody is looking.
   function startArkLnPay(invoice, meta) {
     const dec = maybeLnInvoice(invoice);
     if (!dec || !arkAvailable() || wallet.watchOnly) return false;
+    if (ctx.getAccount() === 'savings' && !(meta && meta.autopay) && !ui.arkLnFromSavingsOk) {
+      ui.arkLnFromSavings = { invoice, meta: meta || null, amountSat: dec.amountSat };
+      ui.sendError = '';
+      render();
+      return true;
+    }
+    ui.arkLnFromSavingsOk = false;
     const s = arkStateNow();
     // Coverage by SUM: multi-input pays gather up to 24 coins, so judging by
     // the single largest coin declined invoices the wallet could pay — a
@@ -1649,6 +1660,35 @@ export function arkFeature(ctx) {
       }
       if (live()) { z.status = 'noark'; bail(); render(); }
     })().catch((e) => { if (live()) { z.status = 'noark'; if (!bail(e.message)) ui.sendError = e.message; render(); } });
+  }
+
+  // The ask itself: switch and continue, move Savings over first, or not.
+  function arkLnFromSavingsView() {
+    const p = ui.arkLnFromSavings;
+    const have = arkBalance()?.spendableSat || 0;
+    const need = p.amountSat || 0;
+    const enough = !need || have >= need;
+    const proceed = () => {
+      ui.arkLnFromSavings = null;
+      ctx.setAccount('spending', 'right');
+      ui.arkLnFromSavingsOk = true; // this one call is the answer to the ask
+      if (startArkLnPay(p.invoice, p.meta)) return;
+      ui.arkLnFromSavingsOk = false;
+      // Spending can't carry it: the same offer the Spending side makes
+      if (need && wallet.spendable > 1000 && ctx.hook('arkOfferBoard', need)) return;
+      ui.sendError = t('arkLnExceedsSpending', { need: fmtAmount(need) + ' ' + unitLabel(), have: fmtAmount(have) + ' ' + unitLabel() });
+      render();
+    };
+    return h('div', { class: 'card col', style: 'gap:12px' },
+      h('h3', { style: 'margin:0' }, t('arkLnFromSavingsTitle')),
+      h('p', { class: 'small muted', style: 'margin:0' }, t('arkLnFromSavingsBody', { have: fmtAmount(have) + ' ' + unitLabel() })),
+      need ? h('div', { class: 'row between' }, h('span', { class: 'small muted' }, t('lnPayAmount')), h('span', { class: 'small' }, fmtAmount(need) + ' ' + unitLabel())) : null,
+      !enough ? h('div', { class: 'notice info small' }, t('arkLnFromSavingsShort')) : null,
+      h('button', { class: 'btn-primary btn-block', onClick: proceed }, enough ? t('arkLnUseSpending') : t('arkLnMoveFirst')),
+      enough && wallet.spendable > 1000
+        ? h('button', { class: 'btn-block', onClick: () => { ui.arkLnFromSavings = null; ctx.hook('arkOfferBoard', need || 0); } }, t('arkLnMoveFirst'))
+        : null,
+      h('button', { class: 'btn-ghost btn-block', onClick: () => { ui.arkLnFromSavings = null; ui.sendError = ''; ui.send = blankSend(); render(); } }, t('cancel')));
   }
 
   // shared by the ark and lightning zap flows (see zaps.js for the twin)
@@ -3214,6 +3254,7 @@ export function arkFeature(ctx) {
       return false;
     },
     sendView() {
+      if (ui.arkLnFromSavings) return arkLnFromSavingsView();
       if (ui.arkOffboardSend) return arkOffboardSendView();
       if (ui.arkLnPaid || ui.arkLnPay) return arkLnPayView();
       if (ui.arkZapped || ui.arkZap) return arkZapView();

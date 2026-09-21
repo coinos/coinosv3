@@ -61,6 +61,7 @@ try {
   await page.waitForSelector('#closed');
   await page.evaluate(() => test.open()); await pause(50);
   check('the point of sale opens on the amount screen', /Point of sale/.test(await text()) && !!(await page.$('.pos-amount')));
+  check('the amount reads across a counter', await page.$eval('.pos-amount', (i) => parseFloat(getComputedStyle(i).fontSize)) >= 40);
   await click('Charge'); await pause(50);
   check('charging nothing asks for an amount', /Enter an amount first/.test(await text()));
   for (const k of ['1', '0', '0', '0']) await click(k);

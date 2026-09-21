@@ -590,6 +590,17 @@ hr.divider { margin: 16px 0; }
    post's full width so each is a comfortable target, quiet until one carries
    a count or you've used it. */
 .note-acts { margin-top: 8px; justify-content: space-between; gap: 4px; max-width: 340px; }
+/* point of sale */
+.pos-amount { font-size: 28px; font-weight: 600; text-align: right; }
+.pos-big { font-size: 34px; font-weight: 700; line-height: 1.1; letter-spacing: -.5px; }
+.pos-tips { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; width: 100%; }
+.pos-tip { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 12px 6px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface2); color: var(--ink); cursor: pointer; }
+.pos-tip.on { border-color: var(--accent); background: var(--accent); color: var(--accent-fg); }
+.pos-tip.on .muted { color: inherit; opacity: .8; }
+.pos-tip-label { font-size: 20px; font-weight: 600; }
+.pos-qr svg { width: min(260px, 70vw); height: auto; display: block; }
+.pos-check { width: 64px; height: 64px; border-radius: 50%; background: var(--green, #2e7d32); color: #fff; display: flex; align-items: center; justify-content: center; font-size: 34px; }
+.pos-sale.faint { opacity: .55; }
 /* the feeds row: pills that scroll sideways, the one on screen filled */
 .feed-chips { gap: 6px; flex-wrap: nowrap; overflow-x: auto; margin: 0 -14px; padding: 2px 14px; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
 .feed-chips::-webkit-scrollbar { display: none; }

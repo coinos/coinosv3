@@ -22,14 +22,15 @@ import { syncFeature } from './sync.js';
 import { messagesFeature } from './messages.js';
 
 export function buildFeatures(ctx) {
-  return [{}, arkFeature(ctx), nostrLoginFeature(ctx), namesFeature(ctx), zapsFeature(ctx), {}, {}, syncFeature(ctx), messagesFeature(ctx)];
+  return [{}, arkFeature(ctx), nostrLoginFeature(ctx), namesFeature(ctx), zapsFeature(ctx), {}, {}, syncFeature(ctx), messagesFeature(ctx), {}];
 }
 export async function loadDeferredFeatures(ctx, features) {
   const late = [];
   await Promise.all([
     import('./gifts.js').then((m) => { late.push(features[0] = m.giftsFeature(ctx)); }),
     import('./nwc.js').then((m) => { late.push(features[5] = m.nwcFeature(ctx)); }),
-    import('./hats.js').then((m) => { late.push(features[6] = m.hatsFeature(ctx)); })
+    import('./hats.js').then((m) => { late.push(features[6] = m.hatsFeature(ctx)); }),
+    import('./pos.js').then((m) => { late.push(features[9] = m.posFeature(ctx)); }),
   ]);
   return late;
 }

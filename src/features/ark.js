@@ -3238,6 +3238,16 @@ export function arkFeature(ctx) {
     },
     arkSpendableSat() { const b = arkBalance(); return b ? b.spendableSat : 0; },
     arkReady() { return arkAvailable(); },
+    // A Lightning invoice for another feature to watch (point of sale):
+    // the action id is the handle, the poller tells it when it settles.
+    async arkLnInvoice(amountSat, description) {
+      const mgr = await connectArk();
+      const a = await mgr.createLnInvoice(amountSat, description);
+      return { id: a.id, invoice: a.invoice, paymentHash: a.paymentHash, amountSat, expiresAt: a.expiresAt };
+    },
+    arkLnWatch(id, onSettle) { pollArkLn(id, onSettle); return true; },
+    arkLnUnwatch(id) { stopArkLnPoll(id); return true; },
+    async arkLnCancel(id) { const mgr = await connectArk(); await mgr.cancelLnInvoice(id); return true; },
     async arkMakeInvoice(amountSat, description) {
       const mgr = await connectArk();
       const a = await mgr.createLnInvoice(amountSat, description);

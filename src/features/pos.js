@@ -203,7 +203,7 @@ export function posFeature(ctx) {
         p.tipMode === 'custom' ? h('div', { class: 'input-group', style: 'width:100%' },
           h('input', { type: 'text', inputmode: 'decimal', placeholder: '0', value: p.tipCustom, autofocus: true, onInput: (e) => { p.tipCustom = e.target.value; render(); } }),
           h('span', { class: 'small muted', style: 'align-self:center;padding:0 8px' }, unitLabel())) : null,
-        p.tipMode != null ? h('div', { class: 'small muted' }, t('posTotalLine', { n: fmtAmount(bill + tip) + ' ' + unitLabel() })) : null,
+        p.tipMode != null ? h('div', { class: 'pos-total' }, t('posTotalLine', { n: fmtAmount(bill + tip) + ' ' + unitLabel() })) : null,
         p.error ? h('div', { class: 'notice error small', style: 'width:100%' }, p.error) : null,
         h('button', { class: 'btn-primary btn-block', disabled: p.tipMode == null || !!p.busy,
           onClick: () => makeSale(bill, tip, p.tipMode === 'custom' || p.tipMode === 'none' ? 0 : p.tipMode) },

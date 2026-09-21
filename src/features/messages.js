@@ -5717,6 +5717,15 @@ export function messagesFeature(ctx) {
   }
 
   // ---- the feed view --------------------------------------------------------
+  // One line saying what a feed is made of: who, and on what.
+  function feedSummary(f) {
+    const people = f.follows
+      ? ((f.authors || []).length ? t('feedSumFollowsPlus', { n: f.authors.length }) : t('feedSumFollows'))
+      : (f.authors || []).length === 1 ? displayName(f.authors[0])
+        : (f.authors || []).length ? t('feedSumPeople', { n: f.authors.length }) : '';
+    const topics = feedTopics(f).map((x) => '#' + x).join(' ');
+    return [people, topics].filter(Boolean).join(' \u00b7 ') || t('feedNoQuery');
+  }
   // The row of feeds under the title: Following, then yours, then + for
   // a new one. A topic opened for the session sits at the end until saved.
   function feedChips() {
@@ -6240,7 +6249,7 @@ export function messagesFeature(ctx) {
     kids.push(h('div', { class: 'list' },
       h('div', {
         class: 'item chat-thread-row',
-        onClick: () => { ui.msgView = 'feed'; feedNow(); watchFeed(); render(); },
+        onClick: () => { ui.msgView = 'feed'; switchFeed(FOLLOWING); },
       },
       h('div', { class: 'chat-avatar fallback' }, '\u2605'),
       h('div', { class: 'col grow', style: 'min-width:0;gap:1px' },
@@ -6249,6 +6258,15 @@ export function messagesFeature(ctx) {
           followsNow().set.size === 1 ? t('feedFollowing1')
             : followsNow().set.size ? t('feedFollowingN', { n: followsNow().set.size })
             : t('feedNoFollowsShort')))),
+      // ...the feeds you made, each its own row under it
+      ...st().feeds.map((f) => h('div', {
+        class: 'item chat-thread-row',
+        onClick: () => { ui.msgView = 'feed'; switchFeed(f.id); },
+      },
+      h('div', { class: 'chat-avatar fallback' }, feedTopics(f).length && !f.follows && !(f.authors || []).length ? '#' : '\u2605'),
+      h('div', { class: 'col grow', style: 'min-width:0;gap:1px' },
+        h('span', { class: 'chat-name' }, f.name),
+        h('div', { class: 'muted small chat-preview' }, feedSummary(f))))),
       // ...and what happened to what you posted
       (() => {
         const n = myPubkeys().length ? notifUnread() : 0;

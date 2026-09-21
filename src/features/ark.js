@@ -2200,11 +2200,6 @@ export function arkFeature(ctx) {
                 h('td', { class: 'num' }, renewChip(f)));
             }))))),
       h('div', { class: 'card col', style: 'gap:8px' },
-        h('h4', { style: 'margin:0' }, t('arkCoinsExitTitle')),
-        h('p', { class: 'small muted', style: 'margin:0' },
-          t('arkCoinsExitDesc', { fee: fmtSats(exitFee), after: fmtSats(afterFee) })),
-        h('button', { class: 'btn-ghost btn-block', disabled: !!ui.arkBusy || !spend.length, onClick: () => { ui.arkExitConfirm = true; render(); } }, t('arkCoinsExitBtn'))),
-      h('div', { class: 'card col', style: 'gap:8px' },
         h('h4', { style: 'margin:0' }, t('arkCoinsRenewTitle')),
         // the round cadence comes from the server (it has been an hour and
         // is two minutes as of September 2026) — never a number baked in here
@@ -2218,6 +2213,11 @@ export function arkFeature(ctx) {
             : selCoins.length < spend.length
               ? t('arkCoinsRenewSome', { n: selCoins.length, fee: selFee > 0 ? fmtSats(selFee) + ' sats' : t('arkDepthFree') })
               : selFee > 0 ? t('arkCoinsRenewNowFee', { fee: fmtSats(selFee) + ' sats' }) : t('arkDepthRenewBtn'))),
+      h('div', { class: 'card col', style: 'gap:8px' },
+        h('h4', { style: 'margin:0' }, t('arkCoinsExitTitle')),
+        h('p', { class: 'small muted', style: 'margin:0' },
+          t('arkCoinsExitDesc', { fee: fmtSats(exitFee), after: fmtSats(afterFee) })),
+        h('button', { class: 'btn-ghost btn-block', disabled: !!ui.arkBusy || !spend.length, onClick: () => { ui.arkExitConfirm = true; render(); } }, t('arkCoinsExitBtn'))),
       h('button', { class: 'btn-ghost btn-block', onClick: back }, t('back')));
   }
 

@@ -1116,14 +1116,6 @@ function createPane() {
             },
           },
           t('regenerate')
-        ),
-        h(
-          'button',
-          {
-            class: 'btn-ghost btn-sm',
-            onClick: () => { ui.entropyPage = 'create'; ui.entropyEntry = ''; render(); },
-          },
-          t('entropyToggle')
         )
       ),
       optionsPanel(),

@@ -840,7 +840,7 @@ const STR = {
     onbWelcomeBody: 'Bitcoin you actually hold. Your wallet is twelve words — nobody else ever has them, and they work in any wallet, anywhere.',
     onbStart: 'Create a new wallet',
     onbStartHint: "Takes a minute: write down twelve words and it's yours",
-    onbOrSignIn: 'or, if you already have an account',
+    onbOrSignIn: 'or',
     onbBackupTitle: 'Write down your recovery phrase',
     onbBackupBody: "Signing in was the easy part — but the sign-in isn't your wallet. These twelve words are. They're the only way back in if you lose access to that account, and nobody can reissue them for you.",
     onbBackupDone: "I've written it down",

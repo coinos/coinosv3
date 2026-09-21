@@ -175,9 +175,14 @@ export function posFeature(ctx) {
 
   // ---- screens -------------------------------------------------------------
   const big = (text) => h('div', { class: 'pos-big' }, text);
+  // The amount in the display unit, and underneath in the other one: the
+  // sats a payer's wallet will show under a fiat total, or the money under
+  // a sats total — a rate gone wrong is then plain to see on the counter.
   const money = (sats, rate) => h('div', { class: 'col', style: 'align-items:center;gap:2px' },
     big(fmtAmount(sats) + ' ' + unitLabel()),
-    fiatLine(sats, rate) && getUnit() !== 'fiat' ? h('div', { class: 'muted' }, fiatLine(sats, rate)) : null);
+    getUnit() === 'fiat'
+      ? h('div', { class: 'muted' }, Number(sats).toLocaleString('en-US') + ' sats')
+      : fiatLine(sats, rate) ? h('div', { class: 'muted' }, fiatLine(sats, rate)) : null);
   const back = () => h('button', { class: 'btn-ghost btn-block', onClick: close }, t('back'));
 
   function amountScreen(p) {

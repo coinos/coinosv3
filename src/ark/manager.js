@@ -1355,8 +1355,11 @@ export class ArkManager {
         });
         break;
       } catch (e) {
-        const used = /already been paid|already exists|already in use|duplicate/i.test(e?.message || '');
-        if (!used || tries >= 50) throw e;
+        // "already been paid" for a settled one; "UNIQUE constraint failed:
+        // invoices.payment_hash" for one merely issued before — both mean
+        // this index is spoken for
+        const used = /already been paid|already exists|already in use|duplicate|UNIQUE constraint|payment_hash/i.test(e?.message || '');
+        if (!used || tries >= 200) throw e;
         this._save(); // remember the skipped index even if the next try fails
       }
     }

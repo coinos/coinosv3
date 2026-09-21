@@ -895,6 +895,9 @@ export function namesFeature(ctx) {
     // 'pending' while the restore/claim pass is still running — the wallet
     // screen holds spending-setup prompts until the name question is settled.
     namesSettled() { return checked ? 'yes' : 'pending'; },
+    // the wizard offers Spending only where a name can be claimed — a word,
+    // not a boolean: featureHook reads a false answer as no answer at all
+    namesAvailable() { return available() ? 'yes' : 'no'; },
     // A seed minted seconds ago has nothing to restore anywhere: don't make
     // the spending-setup ask wait out registrar round trips that only exist
     // for wallets with a history. The background claim still runs.

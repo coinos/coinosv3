@@ -3232,6 +3232,15 @@ async function onbUpload(file) {
   return url;
 }
 
+// Whether the wizard can offer Spending at all: an Ark-capable build on a
+// network with the names registrar, for a full (signing) account. Elsewhere
+// the offer would be a spinner that never resolves.
+function canOfferSpending() {
+  const acc = activeAccount();
+  if (!acc || acc.type !== 'full' || wallet.watchOnly) return false;
+  if (!featureHook('arkReady')) return false;
+  return featureHook('namesAvailable') === 'yes';
+}
 function onboardScreen() {
   if (!ui.onb) {
     let saved = null;
@@ -3261,7 +3270,11 @@ function onboardScreen() {
     // Handled further down, where page()/title() exist.
     const arrived = activeAccount();
     if (arrived && arrived.mnemonic && !arrived.seedSeen) o.step = 'backup';
-    else {
+    else if (canOfferSpending()) {
+      // Before the home screen: one offer to set up Spending (a name and a
+      // payment address), with Not now a single tap away.
+      o.step = 'spend'; o.enterAddr = undefined;
+    } else {
       ui.onb = null;
       try { localStorage.removeItem(ONB_STEP_KEY); } catch {}
       // On-chain first: the wizard's promise is "your keys, your coins", and
@@ -3383,6 +3396,7 @@ function onboardScreen() {
     const words = acc.mnemonic.split(' ');
     const done = () => {
       markSeedSeen(acc);
+      if (canOfferSpending()) { o.step = 'spend'; o.enterAddr = undefined; render(); return; }
       ui.onb = null;
       try { localStorage.removeItem(ONB_STEP_KEY); } catch {}
       ui.account = 'savings';
@@ -3401,6 +3415,7 @@ function onboardScreen() {
       // Later means later, not never: seedSeen stays false, so the wallet
       // keeps a quiet reminder until the phrase has actually been seen.
       h('button', { class: 'btn-ghost btn-block', onClick: () => {
+        if (canOfferSpending()) { o.step = 'spend'; o.enterAddr = undefined; render(); return; }
         ui.onb = null;
         try { localStorage.removeItem(ONB_STEP_KEY); } catch {}
         ui.account = 'savings';
@@ -3434,10 +3449,14 @@ function onboardScreen() {
       title(t('onbSpendTitle')),
       h('p', { class: 'muted', style: 'margin:0' }, t('onbSpendBody')),
       featureHook('namesClaimForm') || h('div', { class: 'row gap6', style: 'align-items:center' }, h('span', { class: 'spinner sm' }), h('span', { class: 'small muted' }, t('onbNameWait'))),
-      // Optional means optional: one tap back to the wallet, no questions.
+      // Optional means optional: one tap to the wallet, no questions — on
+      // Savings, the account that exists without any setup.
       h('button', { class: 'btn-ghost btn-block', onClick: () => {
         ui.onb = null;
         try { localStorage.removeItem(ONB_STEP_KEY); } catch {}
+        ui.account = 'savings';
+        try { localStorage.setItem(ACCOUNT_KEY, 'savings'); } catch {}
+        ui.tab = 'history';
         render();
       } }, t('onbNotNow')),
     ]);

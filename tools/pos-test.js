@@ -24,10 +24,11 @@ const ctx = {
     if (name === 'arkLnWatch') { watch = { id: a[0], cb: a[1] }; return true; }
     if (name === 'arkLnUnwatch') { if (watch && watch.id === a[0]) watch = null; return true; }
     if (name === 'arkLnCancel') { cancelled.push(a[0]); return Promise.resolve(true); }
+    if (name === 'arkMovements') return window.__movements || [];
     return null;
   },
 };
-const feature = posFeature(ctx);
+const feature = posFeature(ctx); window.__feature = feature;
 function render() { document.querySelector('#app').replaceChildren(feature.screenView() || h('div', { id: 'closed' }, 'closed')); }
 window.test = { open: () => { feature.openPos(); }, init: () => { feature.init(); render(); }, settle: (ok) => { const w = watch; watch = null; w.cb({ step: ok ? 'done' : 'failed' }); }, get watch() { return watch && watch.id; }, get cancelled() { return cancelled; }, get sales() { return (state.pos || {}).sales || []; }, ui };
 render();
@@ -81,6 +82,13 @@ try {
   check('settlement shows Paid with the breakdown', /Paid/.test(await text()) && /Bill 1,000 \+ tip 150 sats/.test(await text()));
   await click('New sale'); await pause(50);
   check('the ledger keeps the bill and the tip apart', /Bills 1,000 sats/.test(await text()) && /Tips 150 sats/.test(await text()) && /Total 1,150 sats/.test(await text()) && /Table 4/.test(await text()));
+  await page.evaluate(() => { [...document.querySelectorAll('.pos-sale')].find((r) => /Table 4/.test(r.textContent)).click(); }); await pause(50);
+  check('a sale with no payment record yet says so', await page.evaluate(() => (window.toasts || []).at(-1) === 'No payment record for this sale yet'));
+  await page.evaluate(() => { window.__movements = [{ id: 'mv1', type: 'ln-receive', status: 'complete', amountSat: 1150, invoice: 'lnbc1150n1testinvoice1', ts: Date.now() }]; });
+  await page.evaluate(() => { [...document.querySelectorAll('.pos-sale')].find((r) => /Table 4/.test(r.textContent)).click(); }); await pause(50);
+  check('a paid sale opens the payment detail by its movement', await page.evaluate(() => test.ui.arkMoveDetail === 'mv1'));
+  check('...and the detail knows the bill, the tip and the note', await page.evaluate(() => { const lines = window.__feature.arkMoveDetailExtra(window.__movements[0], null).filter(Boolean).map((n) => n.textContent); return JSON.stringify(lines); }) === JSON.stringify(['Bills1,000 sats', 'Tips150 sats (15%)', 'NoteTable 4']));
+  await page.evaluate(() => { test.ui.arkMoveDetail = null; });
 
   console.log('\n[a custom tip, then a cancelled sale]');
   await type('.pos-amount', '2000'); await click('Charge'); await pause(50);

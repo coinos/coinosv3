@@ -145,6 +145,17 @@ export function posFeature(ctx) {
     render();
   }
 
+  // A paid sale's row opens the same payment detail the history page shows,
+  // found by the invoice the movement recorded.
+  const movementOf = (sale) => (hook('arkMovements') || []).find((m) => m.type === 'ln-receive' && m.status === 'complete' && m.invoice && m.invoice === sale.invoice) || null;
+  function openSale(sale) {
+    const m = movementOf(sale);
+    if (!m) { toast(t('posNoDetail')); return; }
+    ui.arkMoveDetail = m.id;
+    render();
+  }
+  const saleOfMovement = (m) => (m && m.type === 'ln-receive' && m.invoice ? st().sales.find((x) => x.invoice === m.invoice) : null);
+
   // ---- screens -------------------------------------------------------------
   const big = (text) => h('div', { class: 'pos-big' }, text);
   const money = (sats, rate) => h('div', { class: 'col', style: 'align-items:center;gap:2px' },
@@ -198,7 +209,11 @@ export function posFeature(ctx) {
     const today = dayKey(Date.now());
     const paidToday = sales.filter((x) => x.status === 'paid' && dayKey(x.paidAt || x.at) === today);
     const sum = (k) => paidToday.reduce((n, x) => n + (x[k] || 0), 0);
-    const row = (x) => h('div', { class: 'row between pos-sale' + (x.status === 'paid' ? '' : ' faint') },
+    const row = (x) => h('div', {
+      class: 'row between pos-sale' + (x.status === 'paid' ? '' : ' faint'),
+      style: x.status === 'paid' ? 'cursor:pointer' : '',
+      onClick: x.status === 'paid' ? () => openSale(x) : undefined,
+    },
       h('div', { class: 'col', style: 'min-width:0;gap:1px' },
         h('span', {}, fmtAmount(x.billSat) + ' ' + unitLabel() + (x.tipSat ? ' + ' + fmtAmount(x.tipSat) + ' ' + t('posTipWord') : '')),
         h('span', { class: 'small muted', style: 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap' },
@@ -302,5 +317,16 @@ export function posFeature(ctx) {
         h('p', { class: 'small faint', style: 'margin:0' }, t('posLinkHint', { url })))];
     },
     openPos: open,
+    // The history detail of a till payment says what was the bill and what the tip.
+    arkMoveDetailExtra(m, row) {
+      const sale = saleOfMovement(m);
+      if (!sale) return null;
+      const line = row || ((k, v) => h('div', { class: 'line' }, h('span', { class: 'k' }, k), h('span', { class: 'v' }, v)));
+      return [
+        line(t('posBills'), fmtAmount(sale.billSat) + ' ' + unitLabel()),
+        line(t('posTips'), fmtAmount(sale.tipSat) + ' ' + unitLabel() + (sale.tipPct ? ' (' + sale.tipPct + '%)' : '')),
+        sale.note ? line(t('posNoteLabel'), sale.note) : null,
+      ];
+    },
   };
 }

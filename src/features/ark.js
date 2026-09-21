@@ -1403,6 +1403,8 @@ export function arkFeature(ctx) {
             (failed ? '' : incoming ? '+' : '-') + fmtAmount(m.amountSat, m.ts / 1000) + ' ' + unitLabel()),
       row(t('dateLabel'), new Date(m.ts).toLocaleString()),
       ctx.worthLine ? ctx.worthLine(m.amountSat, m.ts / 1000, row) : null,
+      // a feature that knows more about this movement (the till: bill and tip)
+      ctx.hook ? ctx.hook('arkMoveDetailExtra', m, row) : null,
       (() => {
         const pk = zapNoteFor(m);
         const chip = pk ? ctx.hook('profileChip', pk) : null;

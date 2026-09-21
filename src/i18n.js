@@ -277,6 +277,8 @@ const STR = {
     posAwaiting: 'awaiting payment',
     posMakingInvoice: 'Creating the invoice…',
     posBackspace: 'Delete',
+    posNoDetail: 'No payment record for this sale yet',
+    posNoteLabel: 'Note',
     posModeToggle: 'Start in point of sale on this device',
     posLinkHint: 'The till can also be bookmarked or added to the home screen: {url}',
     linkHandlerTitle: 'Open links here',

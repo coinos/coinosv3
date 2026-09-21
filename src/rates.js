@@ -134,6 +134,6 @@ export function fmtFiatBare(sats, rate) {
   const v = (Number(sats) / 100_000_000) * rate;
   return v.toLocaleString(undefined, { maximumFractionDigits: fiatDigits(v), minimumFractionDigits: 2 });
 }
-// Under a unit of currency, sats are small: a tenth of a cent still deserves
-// to be a number rather than 0.00.
-const fiatDigits = (v) => (Math.abs(v) < 1 && v !== 0 ? 4 : 2);
+// Money reads to the cent. A tenth of a cent used to get four decimals so a
+// few sats weren't 0.00, but "0.4998" next to a till was noise, not precision.
+const fiatDigits = () => 2;

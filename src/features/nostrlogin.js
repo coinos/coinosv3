@@ -311,7 +311,7 @@ export function nostrLoginFeature(ctx) {
   // "Sign in with Google" — pomegranate: the code (and its FROST dealer)
   // rides in a lazy chunk, so the popup must open HERE, inside the click's
   // user activation, and the module navigates it once loaded.
-  async function googleLogin(run) {
+  async function googleLogin(run, central = null) {
     const popup = window.open('about:blank', 'OAuth', 'width=600,height=600');
     ui.nostrLoginError = '';
     // no status narration — a quiet spinner on the button itself is the whole
@@ -320,7 +320,7 @@ export function nostrLoginFeature(ctx) {
     busy(true);
     try {
       const pome = await import('../pomegranate.js');
-      const { uri } = await pome.loginWithGoogle(popup);
+      const { uri } = await pome.loginWithGoogle(popup, { central });
       await run(() => bunkerSigner(uri, { onAuth: (url) => { ui.nostrLoginAuthUrl = url; render(); } }));
     } catch (e) {
       try { popup && popup.close(); } catch {}
@@ -375,6 +375,12 @@ export function nostrLoginFeature(ctx) {
 
   // Google + passkey, with their transient status rows — shared between the
   // collapsed front-door card and the expanded signer list.
+  // Google accounts live per pomegranate central. coinos runs its own
+  // (auth.coinos.io); whoever signed in while auth.njump.me was the default
+  // still has a door to it. Mirrors pomegranate.js's CENTRALS (that module
+  // is a lazy chunk, so the two strings live here too).
+  const GOOGLE_CENTRAL = 'https://auth.njump.me'; // flip to auth.coinos.io with pomegranate.js DEFAULT_CENTRAL
+  const GOOGLE_LEGACY = 'https://auth.njump.me';
   function externalButtons(run, big = false) {
     const hasPasskey = typeof window !== 'undefined' && !!window.PublicKeyCredential && !!navigator.credentials;
     const pad = big ? 'padding:14px' : '';
@@ -382,6 +388,9 @@ export function nostrLoginFeature(ctx) {
       h('button', { class: 'btn-block', style: pad, disabled: ui.nostrLoginBusy,
         onClick: () => googleLogin(run) },
         markedLabel(GOOGLE_MARK, t('nlGoogle'), ui.nostrLoginVia === 'google')),
+      GOOGLE_CENTRAL !== GOOGLE_LEGACY
+        ? h('button', { class: 'linklike small', style: 'align-self:center', disabled: ui.nostrLoginBusy, onClick: () => googleLogin(run, GOOGLE_LEGACY) }, t('nlGooglePrev'))
+        : null,
       hasPasskey
         ? h('button', { class: 'btn-block', style: pad, disabled: ui.nostrLoginBusy,
             onClick: () => passkeyLogin(run) }, markedLabel(PASSKEY_MARK, t('nlPasskey'), ui.nostrLoginVia === 'passkey'))

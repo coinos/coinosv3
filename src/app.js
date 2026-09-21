@@ -1095,7 +1095,7 @@ function createPane() {
       h('div', { class: 'warn-box' }, t('writeDownWarn')),
       h(
         'div',
-        { class: 'words' },
+        { class: 'words', style: '--rows-3:' + Math.ceil(words.length / 3) + ';--rows-2:' + Math.ceil(words.length / 2) },
         words.map((w, i) =>
           h('div', { class: 'w' }, h('span', { class: 'n' }, i + 1), h('span', { class: 't' }, w))
         )
@@ -3053,7 +3053,7 @@ function recoveryCard(a) {
   return h('div', { class: 'card col' },
     h('h3', {}, t('recoveryPhrase')),
     h('div', { class: 'warn-box' }, t('recoveryWarn')),
-    h('div', { class: 'words' }, words.map((w, i) =>
+    h('div', { class: 'words', style: '--rows-3:' + Math.ceil(words.length / 3) + ';--rows-2:' + Math.ceil(words.length / 2) }, words.map((w, i) =>
       h('div', { class: 'w' + (unmasked ? '' : ' masked') },
         h('span', { class: 'n' }, i + 1),
         h('span', { class: 't' }, unmasked ? w : '••••••')))),
@@ -3405,7 +3405,7 @@ function onboardScreen() {
       title(t('onbBackupTitle')),
       h('p', { class: 'muted', style: 'margin:0' }, t('onbBackupBody')),
       h('div', { class: 'warn-box' }, t('writeDownWarn')),
-      h('div', { class: 'words' }, words.map((w, i) =>
+      h('div', { class: 'words', style: '--rows-3:' + Math.ceil(words.length / 3) + ';--rows-2:' + Math.ceil(words.length / 2) }, words.map((w, i) =>
         h('div', { class: 'w' }, h('span', { class: 'n' }, i + 1), h('span', { class: 't' }, w)))),
       h('div', { class: 'row gap6' }, copyBtn(acc.mnemonic, t('copyPhrase'))),
       h('button', { class: 'btn-primary btn-block', style: 'padding:14px', onClick: done }, t('onbBackupDone')),

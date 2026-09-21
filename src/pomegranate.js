@@ -19,7 +19,13 @@ import { hex } from '@scure/base';
 import { finalizeEvent, generateSecretKey } from 'nostr-tools/pure';
 import { hexPubShard, hexShard, trustedKeyDeal } from '@jsr/fiatjaf__promenade-trusted-dealer';
 
-export const CENTRAL = 'https://auth.njump.me';
+// Which central: coinos runs its own (auth.coinos.io — the Google consent
+// screen and the bunker relay carry our name), but accounts live PER
+// central, so anyone who signed in while auth.njump.me was the default
+// keeps a door to it (see nostrlogin's "previous server" line).
+export const CENTRALS = { coinos: 'https://auth.coinos.io', legacy: 'https://auth.njump.me' };
+export const DEFAULT_CENTRAL = CENTRALS.legacy; // flip to CENTRALS.coinos once its Google client is live
+let CENTRAL = DEFAULT_CENTRAL;
 const OPERATORS = [
   'https://po.f7z.io',
   'https://po.coracle.social',
@@ -147,8 +153,10 @@ async function bunkerUri(token) {
 }
 
 // The whole flow: authenticate, find-or-create the sharded account, hand back
-// a bunker URI. `popup` must come from the caller's click handler.
-export async function loginWithGoogle(popup, { onStatus } = {}) {
+// a bunker URI. `popup` must come from the caller's click handler; `central`
+// picks the server (default: DEFAULT_CENTRAL).
+export async function loginWithGoogle(popup, { onStatus, central } = {}) {
+  CENTRAL = central || DEFAULT_CENTRAL;
   const token = await authenticate(popup);
   const email = emailOf(token);
   if (!email) throw new Error('Google login returned no email');

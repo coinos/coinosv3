@@ -842,6 +842,7 @@ const STR = {
     onbStartHint: "Takes a minute: write down twelve words and it's yours",
     onbOrSignIn: 'or',
     onbHaveSeed: 'Have an existing seed or entropy to import?',
+    nlGooglePrev: 'Signed in with Google here before? Use the previous sign-in server',
     onbCreateInstead: 'Create a new wallet instead',
     onbBackupTitle: 'Write down your recovery phrase',
     onbBackupBody: "Signing in was the easy part — but the sign-in isn't your wallet. These twelve words are. They're the only way back in if you lose access to that account, and nobody can reissue them for you.",

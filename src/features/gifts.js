@@ -209,7 +209,7 @@ export function giftsFeature(ctx) {
         h('div', { class: 'card col' },
           h('h3', {}, t('recoveryPhrase')),
           h('div', { class: 'warn-box' }, t('writeDownWarn')),
-          h('div', { class: 'words' },
+          h('div', { class: 'words', style: '--rows-3:' + Math.ceil(words.length / 3) + ';--rows-2:' + Math.ceil(words.length / 2) },
             words.map((w, i) => h('div', { class: 'w' }, h('span', { class: 'n' }, i + 1), h('span', { class: 't' }, w)))
           ),
           h('div', { class: 'row gap6' }, copyBtn(wallet.mnemonic, t('copyPhrase'))),

@@ -3629,14 +3629,12 @@ export function messagesFeature(ctx) {
   // nostr:naddr — the pack it names.
   function parsePackLink(input) {
     const s = String(input || '').trim();
-    const m = /naddr1[a-z0-9]+/i.exec(s);
-    if (m) {
-      const ref = parseNostrRef(m[0].toLowerCase());
-      return ref && ref.type === 'addr' && ref.kind === PACK_KIND ? { pk: ref.pk, d: ref.d, relays: ref.relays || [] } : null;
-    }
     const link = /\/d\/([^/?#\s]+)[^?\s]*\?(?:[^#\s]*&)?p=([0-9a-f]{64})/i.exec(s);
     if (link) return { pk: link[2].toLowerCase(), d: decodeURIComponent(link[1]), relays: [] };
-    return null;
+    const m = /naddr1[a-z0-9]+/i.exec(s);
+    if (!m) return null;
+    const ref = parseNostrRef(m[0].toLowerCase());
+    return ref && ref.type === 'addr' && ref.kind === PACK_KIND ? { pk: ref.pk, d: ref.d, relays: ref.relays || [] } : null;
   }
   // Every pack the wide relays hold, once per session: the way to find one
   // by a few letters of its title — NIP-50 search only knows the packs the

@@ -74,7 +74,10 @@ page.on('pageerror', (e) => errs.push(String(e)));
 const click = (t) => page.evaluate((x) => { const e = [...document.querySelectorAll('button')].find((n) => n.textContent.trim().toLowerCase().includes(x)); if (e) { e.click(); return true; } return false; }, t);
 const waitText = async (x, ms = 25000) => { for (let i = 0; i < ms / 250; i++) { if ((await page.evaluate(() => document.body.innerText)).toLowerCase().includes(x)) return true; await sleep(250); } return false; };
 const chips = () => page.evaluate(() => [...document.querySelectorAll('.feed-chip')].map((c) => (c.classList.contains('on') ? '*' : '') + c.textContent.trim()));
-const type = async (sel, text) => { await page.click(sel, { clickCount: 3 }); await page.type(sel, text); };
+const type = async (sel, text) => {
+  await page.evaluate((q) => { const i = document.querySelector(q); i.value = ''; i.dispatchEvent(new Event('input', { bubbles: true })); }, sel);
+  await page.click(sel); await page.type(sel, text);
+};
 
 try {
   await page.setViewport({ width: 390, height: 844 });

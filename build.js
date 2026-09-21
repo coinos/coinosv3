@@ -252,7 +252,7 @@ export async function buildSwNwc({ minify = true } = {}) {
 // feature's code (and its network endpoints) never enters the bundle.
 // NB order matters and must match src/features/index.js — nwc sits after ark
 // because it drives ark's headless pay/balance seam.
-const ALL_FEATURES = { gifts: 'giftsFeature', ark: 'arkFeature', nostrlogin: 'nostrLoginFeature', names: 'namesFeature', zaps: 'zapsFeature', nwc: 'nwcFeature', hats: 'hatsFeature', sync: 'syncFeature', messages: 'messagesFeature' };
+const ALL_FEATURES = { gifts: 'giftsFeature', ark: 'arkFeature', nostrlogin: 'nostrLoginFeature', names: 'namesFeature', zaps: 'zapsFeature', nwc: 'nwcFeature', hats: 'hatsFeature', sync: 'syncFeature', messages: 'messagesFeature', pos: 'posFeature' };
 
 // Features with no first-frame surface load as separate chunks right after
 // boot (dynamic import; real files in the split build, inlined in the
@@ -262,7 +262,7 @@ const ALL_FEATURES = { gifts: 'giftsFeature', ark: 'arkFeature', nostrlogin: 'no
 // NOT deferrable: ark (balance on the home screen), messages (deep-linked
 // profiles + the boot shell), gifts is deferrable because app.js awaits the
 // deferred load before the bootUrl check when the path looks like a gift.
-const DEFERRED_FEATURES = ['gifts', 'nwc', 'hats'];
+const DEFERRED_FEATURES = ['gifts', 'nwc', 'hats', 'pos'];
 
 export function enabledFeatures(spec = process.env.HAL_FEATURES) {
   if (spec == null) return Object.keys(ALL_FEATURES);

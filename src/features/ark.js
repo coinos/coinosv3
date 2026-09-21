@@ -3581,11 +3581,16 @@ export function arkFeature(ctx) {
           });
         }
       }
-      if (!lines.length) return [];
+      const manageBtn = () => h('button', { class: 'linklike small', style: 'align-self:flex-end', onClick: () => { ui.arkCoinsPage = true; render(); } }, t('arkDepthBtn'));
+      // Nothing to warn about: the coins page is still a tap away — its
+      // renewal schedule and exit cost are worth a look even when all is well.
+      if (!lines.length) {
+        const st = arkStateNow();
+        const coins = st ? (st.vtxos || []).some((v) => v.state === 'spendable') : false;
+        return coins ? [h('div', { class: 'small muted', style: 'margin:10px 0 0;text-align:center' }, manageBtn())] : [];
+      }
       const err = lines.some((l) => l.err);
-      const manage = lines.some((l) => l.manage)
-        ? h('button', { class: 'linklike small', style: 'align-self:flex-end', onClick: () => { ui.arkCoinsPage = true; render(); } }, t('arkDepthBtn'))
-        : null;
+      const manage = lines.some((l) => l.manage) ? manageBtn() : null;
       // one plain advisory keeps its quiet centred line; anything more, or
       // anything urgent, is a card
       if (!err && lines.length === 1) {

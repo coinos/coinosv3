@@ -3353,11 +3353,6 @@ function onboardScreen() {
     return page([
       h('div', { class: 'onb-hero' }, brandHeader(false)),
       title(t('onbWelcomeTitle')),
-      // What this wallet IS, before the buttons. Four equally weighted
-      // buttons with only the sign-in ones saying what they do sent people
-      // straight past the seed phrase — which is the wallet — into a login
-      // that is only a convenience wrapped around it.
-      h('p', { class: 'muted', style: 'margin:0' }, t('onbWelcomeBody')),
       // Making your own keys is the path; a sign-in is the alternative,
       // below the line.
       h('button', {
@@ -3369,7 +3364,6 @@ function onboardScreen() {
           o.step = 'seed';
           render();
         } }, t('onbStart')),
-      h('p', { class: 'small muted', style: 'margin:-6px 0 0;text-align:center' }, t('onbStartHint')),
       h('div', { class: 'onb-or' }, h('span', {}, t('onbOrSignIn'))),
       // All the sign-in doors right on the welcome screen (Google, passkey,
       // Nostr) — the feature supplies them; the single-button fallback keeps

@@ -1343,7 +1343,12 @@ export class ArkManager {
     // count, but only once the state has travelled), and the server then
     // refuses the hash as already paid. Step past any such index rather
     // than fail the sale — the counter only ever moves up.
-    let idx, paymentHash, invoice;
+    // A restored or merged state can also carry a counter BELOW indices this
+    // wallet already used: never start under one an action of ours names.
+    for (const a of this.state.actions || []) {
+      if (a.type === 'ln-recv' && Number.isInteger(a.preimageIndex) && a.preimageIndex >= (this.state.nextLnRecvIndex || 0)) this.state.nextLnRecvIndex = a.preimageIndex + 1;
+    }
+    let idx, paymentHash, invoice, decInv;
     for (let tries = 0; ; tries++) {
       idx = this.state.nextLnRecvIndex || 0;
       this.state.nextLnRecvIndex = idx + 1;
@@ -1353,7 +1358,6 @@ export class ArkManager {
           paymentHash, amountSat, minCltvDelta,
           mailboxPubkey: this._mailboxKey().pubkey, description,
         });
-        break;
       } catch (e) {
         // "already been paid" for a settled one; "UNIQUE constraint failed:
         // invoices.payment_hash" for one merely issued before — both mean
@@ -1361,13 +1365,23 @@ export class ArkManager {
         const used = /already been paid|already exists|already in use|duplicate|UNIQUE constraint|payment_hash/i.test(e?.message || '');
         if (!used || tries >= 200) throw e;
         this._save(); // remember the skipped index even if the next try fails
+        continue;
       }
+      decInv = decodeBolt11(invoice);
+      if (decInv.paymentHash !== hex.encode(paymentHash)) {
+        throw new Error('server invoice payment hash mismatch');
+      }
+      // The server answers a hash it already holds an unpaid invoice for
+      // with THAT invoice — an earlier sale's amount and memo under a new
+      // QR (seen live 2026-09-21: a 0.60 CAD bill showed an 8,467-sat
+      // invoice). Anything but a fresh invoice for this amount, with a
+      // comfortable expiry, means the index is spoken for.
+      const fresh = decInv.amountSat === amountSat && (!decInv.expiresAt || decInv.expiresAt > Date.now() + 10 * 60_000);
+      if (fresh) break;
+      if (tries >= 200) throw new Error('could not get a fresh invoice from the server');
+      this._save();
     }
     const keyIndex = this.state.nextKeyIndex++;
-    const decInv = decodeBolt11(invoice);
-    if (decInv.paymentHash !== hex.encode(paymentHash)) {
-      throw new Error('server invoice payment hash mismatch');
-    }
     const action = {
       id: `lnrecv-${Date.now()}`, type: 'ln-recv', step: 'awaiting',
       paymentHash: hex.encode(paymentHash), preimageIndex: idx, keyIndex,

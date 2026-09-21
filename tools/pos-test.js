@@ -29,7 +29,7 @@ const ctx = {
 };
 const feature = posFeature(ctx);
 function render() { document.querySelector('#app').replaceChildren(feature.screenView() || h('div', { id: 'closed' }, 'closed')); }
-window.test = { open: () => { feature.openPos(); }, settle: (ok) => { const w = watch; watch = null; w.cb({ step: ok ? 'done' : 'failed' }); }, get watch() { return watch && watch.id; }, get cancelled() { return cancelled; }, get sales() { return (state.pos || {}).sales || []; }, ui };
+window.test = { open: () => { feature.openPos(); }, init: () => { feature.init(); render(); }, settle: (ok) => { const w = watch; watch = null; w.cb({ step: ok ? 'done' : 'failed' }); }, get watch() { return watch && watch.id; }, get cancelled() { return cancelled; }, get sales() { return (state.pos || {}).sales || []; }, ui };
 render();
 `;
 const bundle = await Bun.build({
@@ -42,17 +42,19 @@ const bundle = await Bun.build({
 assert(bundle.success, bundle.logs.join('\n'));
 const css = await Bun.file('src/style.css').text();
 const js = await bundle.outputs[0].text();
-const html = `<!doctype html><meta name="viewport" content="width=device-width, initial-scale=1"><style>${css}</style><div id="app"></div><script type="module">${js}</script>`;
+const html = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><style>${css}</style><div id="app"></div><script type="module">${js}</script>`;
 const server = Bun.serve({ port: 0, fetch: () => new Response(html, { headers: { 'content-type': 'text/html' } }) });
 const browser = await puppeteer.launch({ executablePath: '/usr/bin/google-chrome', headless: true, args: ['--no-sandbox'] });
 const page = await browser.newPage();
 const errors = [];
 page.on('pageerror', (e) => errors.push(e.message));
 const pause = (ms) => new Promise((r) => setTimeout(r, ms));
-const check = (name, value) => { assert(value, name); console.log(' ✓ ' + name); };
+const check = (name, value, detail = '') => { assert(value, name + (detail ? ' — ' + detail : '')); console.log(' ✓ ' + name); };
 const text = () => page.evaluate(() => document.body.innerText.replace(/\s+/g, ' '));
 const click = (label) => page.evaluate((x) => { const b = [...document.querySelectorAll('button')].find((n) => (n.querySelector('.pos-tip-label') || n).textContent.trim() === x); if (!b) return false; b.click(); return true; }, label);
-const type = async (sel, v) => { await page.evaluate((s) => { const i = document.querySelector(s); i.value = ''; }, sel); await page.type(sel, v); };
+// the harness repaints by replacing nodes (the app morphs in place), so a
+// field is filled in one go rather than keystroke by keystroke
+const type = (sel, v) => page.evaluate(([s, val]) => { const i = document.querySelector(s); i.value = val; i.dispatchEvent(new Event('input', { bubbles: true })); }, [sel, v]);
 try {
   await page.setViewport({ width: 390, height: 844 });
   await page.goto(server.url.href);
@@ -61,7 +63,11 @@ try {
   check('the point of sale opens on the amount screen', /Point of sale/.test(await text()) && !!(await page.$('.pos-amount')));
   await click('Charge'); await pause(50);
   check('charging nothing asks for an amount', /Enter an amount first/.test(await text()));
-  await type('.pos-amount', '1000'); await type('input[placeholder="Note (optional)"]', 'Table 4');
+  for (const k of ['1', '0', '0', '0']) await click(k);
+  check('the on-screen pad fills the amount field', await page.$eval('.pos-amount', (i) => i.value) === '1000');
+  const hitDel = await click('\u232b'); const afterDel = await page.$eval('.pos-amount', (i) => i.value); await click('0');
+  check('backspace edits the same field', await page.$eval('.pos-amount', (i) => i.value) === '1000', JSON.stringify({ hitDel, afterDel }));
+  await type('input[placeholder="Note (optional)"]', 'Table 4');
   await click('Charge'); await pause(50);
   check('the tip prompt shows the bill and the tip choices', /Your bill 1,000 sats/.test(await text()) && /10%.*15%.*20%.*Other.*No tip/.test(await text()));
   await click('15%'); await pause(50);
@@ -78,7 +84,7 @@ try {
   console.log('\n[a custom tip, then a cancelled sale]');
   await type('.pos-amount', '2000'); await click('Charge'); await pause(50);
   await click('Other'); await pause(50);
-  await page.evaluate(() => { const i = document.querySelector('input[placeholder="0"]:not(.pos-amount)'); i.value = '50'; i.dispatchEvent(new Event('input')); }); await pause(50);
+  await click('5'); await click('0'); await pause(50);
   check('a custom tip adds what was typed', /Total 2,050 sats/.test(await text()));
   await click('Continue'); await pause(100);
   await click('Cancel'); await pause(50);
@@ -91,6 +97,8 @@ try {
   check('with the prompt off, Charge goes straight to the invoice', /Scan to pay/.test(await text()) && /300 sats/.test(await text()) && await page.evaluate(() => test.watch === 'ln3'));
   await page.evaluate(() => test.settle(false)); await pause(50);
   check('an expired invoice returns to the amount screen and says so', /That invoice expired/.test(await text()));
+  await page.evaluate(() => { test.ui.pos = null; test.ui.posAtBoot = true; test.init(); }); await pause(50);
+  check('the /pos link opens the till once a wallet is up', !!(await page.$('.pos-amount')));
   check('no browser errors', errors.length === 0);
 } finally { await browser.close(); server.stop(true); }
 console.log('\n✅ point of sale');

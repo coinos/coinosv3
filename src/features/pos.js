@@ -28,6 +28,11 @@ export function posFeature(ctx) {
   };
   const save = (s) => { try { wallet.saveFeatureState('pos', s); } catch {} };
   const SALES_MAX = 500;
+  // Point-of-sale mode is per device (the till, not every phone the owner
+  // carries): with it on, the app opens straight onto the point of sale.
+  const POS_MODE = 'btc-wallet-pos-mode';
+  const posMode = () => { try { return localStorage.getItem(POS_MODE) === '1'; } catch { return false; } };
+  const setPosMode = (on) => { try { if (on) localStorage.setItem(POS_MODE, '1'); else localStorage.removeItem(POS_MODE); } catch {} };
 
   const fiatLine = (sats, rate = rateNow(), code = getCurrency()) => (rate ? fmtFiat(sats, rate, code) : '');
   const pct = (sats, p) => Math.round(sats * p / 100);
@@ -38,6 +43,21 @@ export function posFeature(ctx) {
   function open() {
     ui.pos = { step: 'amount', amount: '', note: '', tipMode: null, tipCustom: '', sale: null, error: '' };
     render();
+  }
+  // Digits on screen, into the same field a keyboard or a paste would fill.
+  function numpad(get, set) {
+    const press = (k) => {
+      let v = String(get() || '');
+      if (k === 'del') v = v.slice(0, -1);
+      else if (k === '.') { if (!v.includes('.')) v = (v || '0') + '.'; }
+      else if (v === '0') v = k;
+      else v += k;
+      set(v); render();
+    };
+    const key = (k, label) => h('button', { class: 'pos-key' + (k === 'del' ? ' del' : ''), type: 'button', 'aria-label': k === 'del' ? t('posBackspace') : label, onClick: () => press(k) }, label);
+    return h('div', { class: 'pos-pad' },
+      ...['1', '2', '3', '4', '5', '6', '7', '8', '9'].map((k) => key(k, k)),
+      key('.', '.'), key('0', '0'), key('del', '\u232b'));
   }
   function close() {
     const p = ui.pos;
@@ -130,12 +150,13 @@ export function posFeature(ctx) {
         h('h3', { style: 'margin:0' }, t('posTitle')),
         h('div', { class: 'input-group' },
           h('input', {
-            type: 'text', inputmode: 'decimal', class: 'pos-amount', placeholder: '0', value: p.amount, autofocus: true,
-            onInput: (e) => { p.amount = e.target.value; },
+            type: 'text', inputmode: 'decimal', class: 'pos-amount', placeholder: '0', value: p.amount,
+            onInput: (e) => { p.amount = e.target.value; render(); },
             onKeydown: (e) => { if (e.key === 'Enter') charge(); },
           }),
           unitTag()),
         getUnit() !== 'fiat' && billSat() && fiatLine(billSat()) ? h('div', { class: 'small muted', style: 'text-align:right' }, fiatLine(billSat())) : null,
+        numpad(() => p.amount, (v) => { p.amount = v; }),
         h('input', { type: 'text', placeholder: t('posNoteHint'), value: p.note, maxlength: '80', onInput: (e) => { p.note = e.target.value; } }),
         p.error ? h('div', { class: 'notice error small' }, p.error) : null,
         h('button', { class: 'btn-primary btn-block', disabled: !!p.busy, onClick: charge }, p.busy ? h('span', { class: 'spinner sm' }) : t('posCharge')),
@@ -200,9 +221,11 @@ export function posFeature(ctx) {
           ...s.tips.map((n) => choice(n, n + '%', '+' + fmtAmount(pct(bill, n)) + ' ' + unitLabel())),
           choice('custom', t('posTipCustom'), null),
           choice('none', t('posNoTip'), null)),
-        p.tipMode === 'custom' ? h('div', { class: 'input-group', style: 'width:100%' },
-          h('input', { type: 'text', inputmode: 'decimal', placeholder: '0', value: p.tipCustom, autofocus: true, onInput: (e) => { p.tipCustom = e.target.value; render(); } }),
-          h('span', { class: 'small muted', style: 'align-self:center;padding:0 8px' }, unitLabel())) : null,
+        p.tipMode === 'custom' ? h('div', { class: 'col', style: 'width:100%;gap:8px' },
+          h('div', { class: 'input-group' },
+            h('input', { type: 'text', inputmode: 'decimal', placeholder: '0', value: p.tipCustom, onInput: (e) => { p.tipCustom = e.target.value; render(); } }),
+            h('span', { class: 'small muted', style: 'align-self:center;padding:0 8px' }, unitLabel())),
+          numpad(() => p.tipCustom, (v) => { p.tipCustom = v; })) : null,
         p.tipMode != null ? h('div', { class: 'pos-total' }, t('posTotalLine', { n: fmtAmount(bill + tip) + ' ' + unitLabel() })) : null,
         p.error ? h('div', { class: 'notice error small', style: 'width:100%' }, p.error) : null,
         h('button', { class: 'btn-primary btn-block', disabled: p.tipMode == null || !!p.busy,
@@ -248,20 +271,25 @@ export function posFeature(ctx) {
 
   return {
     id: 'pos',
+    // A wallet just opened: the /pos link or point-of-sale mode lands here.
+    init() {
+      if (ui.posAtBoot || posMode()) { ui.posAtBoot = false; open(); }
+    },
     screenView() {
       if (ui.screen !== 'wallet' || !ui.pos) return null;
       return posScreen();
     },
-    // Settings → Payments: the door, and the tip choices.
+    // Settings → Payments: the door, the mode, and where to bookmark.
     settingsCards() {
-      return [h('div', { class: 'card col', style: 'gap:8px' },
+      const url = (typeof location !== 'undefined' ? location.origin : 'https://v3.coinos.io') + '/pos';
+      return [h('div', { class: 'card col', style: 'gap:10px' },
         h('h3', {}, t('posTitle')),
         h('p', { class: 'small muted', style: 'margin:0' }, t('posDesc')),
-        h('button', { class: 'btn-primary', onClick: open }, t('posOpen')))];
-    },
-    // Under the payment address on Receive.
-    receiveExtras() {
-      return h('button', { class: 'btn-sm', onClick: open }, '\u{1F9FE} ' + t('posTitle'));
+        h('button', { class: 'btn-primary', onClick: open }, t('posOpen')),
+        h('label', { class: 'row gap6', style: 'align-items:center;cursor:pointer' },
+          h('input', { type: 'checkbox', checked: posMode(), style: 'width:18px;height:18px;accent-color:var(--accent);margin:0', onChange: (e) => { setPosMode(e.target.checked); render(); } }),
+          h('span', {}, t('posModeToggle'))),
+        h('p', { class: 'small faint', style: 'margin:0' }, t('posLinkHint', { url })))];
     },
     openPos: open,
   };

@@ -1768,7 +1768,7 @@ export function messagesFeature(ctx) {
     // reserved app routes are never usernames — /chat is the public
     // community page (app.js routes it), and eating it here rewrote the URL
     // to / before that route ever saw it; a note reference is its own link
-    if (m && (['chat'].includes(m[1]) || /^(note|nevent|naddr)1/i.test(m[1]))) return null;
+    if (m && (['chat', 'pos'].includes(m[1]) || /^(note|nevent|naddr)1/i.test(m[1]))) return null;
     return m ? m[1] : null;
   })();
   if (urlProfile) { try { history.replaceState(null, '', '/'); } catch {} }

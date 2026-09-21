@@ -5487,6 +5487,17 @@ const wakeDone = () => {
   try { if (WAKE_PAYLOAD != null && window.CoinosHost && window.CoinosHost.done) window.CoinosHost.done(); } catch {}
 };
 
+// v3.coinos.io/pos: the point of sale, straight away — a bookmark or a
+// home-screen icon for the till. Consumed here (before any feature reads
+// the path) and opened once a wallet is up; the pos feature owns the rest.
+const BOOT_POS = (() => {
+  try {
+    if (!/^\/pos\/?$/i.test(location.pathname)) return false;
+    history.replaceState(null, '', '/' + (location.search || ''));
+    return true;
+  } catch { return false; }
+})();
+if (BOOT_POS) ui.posAtBoot = true;
 const INTENT_URI = (() => {
   try {
     const u = new URLSearchParams(location.search).get('u');

@@ -83,6 +83,7 @@ export function messagesFeature(ctx) {
     s.notify ||= {}; // { [cid]: true } — communities that may buzz your phone (opt-in)
     s.drafts ||= {}; // { ['dm:'+pk | 'ch:'+id]: text } — half-typed messages
     s.zaps ||= {}; // { [eventId]: { s: sats, m: 1 } } — last known zap tallies
+    s.feeds ||= []; // custom feeds: { id, name, follows, authors: [pk], topics: [tag] }
     for (const c of s.communities) c.added_at ||= Date.now();
     // pre-multi-community shape: joined was { [pubkey]: true } for coinos
     for (const k of Object.keys(s.joined))
@@ -3587,9 +3588,37 @@ export function messagesFeature(ctx) {
   const FEED_PAGE = 20;    // posts on screen at once, grown as you scroll
   const FEED_KEEP = 200;   // in memory
   const FEED_STORE = 50;   // ...and on disk
-  let feed = null;         // { status, notes, end, loadingMore }
+  let feed = null;         // the feed on screen: { id, status, notes, shown, end, loadingMore, at }
   let feedUnsubs = [];
-  let feedAt = 0;
+  // ---- many feeds ----------------------------------------------------------
+  // "Following" is one feed among any number the user defines: a set of
+  // people (or everyone they follow), a set of topics (hashtags, any of
+  // them), or both at once — people AND topics, the way a nostr filter
+  // composes them. Definitions live in the synced messages state, so a feed
+  // made on the phone is on the laptop too; each feed keeps its own notes,
+  // clock and disk cache. A topic opened from search or a #tag in a post is
+  // a feed too, until saved just a session one.
+  const FOLLOWING = 'following';
+  const FEED_LS = 'btc-wallet-feed'; // the feed last on screen, remembered per device
+  const feedStates = new Map(); // id -> state
+  const adhocFeeds = new Map(); // id -> definition, this session only
+  let curFeedId = (() => { try { return localStorage.getItem(FEED_LS) || FOLLOWING; } catch { return FOLLOWING; } })();
+  const feedList = () => [{ id: FOLLOWING, name: t('feedFollowingName'), follows: true, builtin: true }, ...st().feeds];
+  function feedDef(id = curFeedId) {
+    if (id === FOLLOWING) return feedList()[0];
+    return st().feeds.find((f) => f.id === id) || adhocFeeds.get(id) || null;
+  }
+  const normTopic = (x) => String(x || '').trim().replace(/^#/, '').toLowerCase();
+  const feedTopics = (def = feedDef()) => [...new Set(((def && def.topics) || []).map(normTopic).filter(Boolean))].slice(0, 20);
+  const feedHasQuery = (def = feedDef()) => !!def && (feedAuthors(def).length > 0 || feedTopics(def).length > 0);
+  const feedCacheKey = (id) => (id === FOLLOWING ? FEED_CACHE : FEED_CACHE + ':' + id);
+  const saveFeedCache = (c) => {
+    if (adhocFeeds.has(c.id)) return; // a session feed leaves nothing behind
+    try { wallet.saveFeatureState(feedCacheKey(c.id), c.notes.slice(0, FEED_STORE).map(slimNote)); } catch {}
+  };
+  // posts on a topic come from the big public relays as well as ours: a
+  // hashtag has no author whose outbox we could read
+  const TOPIC_RELAYS = [...new Set([...NOTE_RELAYS, 'wss://relay.damus.io', 'wss://relay.primal.net', 'wss://nos.lol'])];
 
   // A reply, as against a post that merely POINTS at another one. NIP-10
   // marks a reply's e tags 'root' or 'reply'; a quote's are 'mention', and
@@ -3610,26 +3639,65 @@ export function messagesFeature(ctx) {
   // posts a wider net found in one six-hour window were theirs.
   const FEED_AUTHORS_MAX = 2000;
   const REQ_AUTHORS = 400; // authors per REQ, so one filter stays a sane size
-  const feedAuthors = () => [...followsNow().set].slice(0, FEED_AUTHORS_MAX);
+  const feedAuthors = (def = feedDef()) => {
+    if (!def) return [];
+    const set = new Set(def.follows ? followsNow().set : []);
+    for (const pk of def.authors || []) if (pk) set.add(pk);
+    return [...set].slice(0, FEED_AUTHORS_MAX);
+  };
 
   function feedNow() {
-    if (!feed) {
+    if (!feedDef(curFeedId)) curFeedId = FOLLOWING; // a feed deleted on another device
+    let c = feedStates.get(curFeedId);
+    if (!c) {
       let stored = [];
-      try { stored = wallet.loadFeatureState(FEED_CACHE, []) || []; } catch {}
-      feed = { status: stored.length ? 'ready' : 'loading', notes: stored, shown: FEED_PAGE };
+      try { stored = wallet.loadFeatureState(feedCacheKey(curFeedId), []) || []; } catch {}
+      c = { id: curFeedId, status: stored.length ? 'ready' : 'loading', notes: stored, shown: FEED_PAGE, at: 0 };
+      feedStates.set(curFeedId, c);
+      feed = c;
       // the cached page is on screen already; warm what it shows so the
       // scroll below the fold, and the next boot, paint whole too
       notesReady(stored.slice(0, FEED_PAGE)).catch(() => {});
-      refreshFeed();
+      refreshFeed({}, c);
     }
-    return feed;
+    feed = c;
+    return c;
   }
-  // A follow list that changed means a feed built from the wrong authors —
-  // rebuilt in place, not offered behind the pill.
+  function switchFeed(id) {
+    if (!feedDef(id)) return;
+    if (id !== curFeedId) {
+      curFeedId = id;
+      if (!adhocFeeds.has(id)) { try { localStorage.setItem(FEED_LS, id); } catch {} }
+    }
+    stopFeedWatch();
+    const c = feedNow();
+    c.unseen = 0; c.shown = FEED_PAGE;
+    watchFeed();
+    refreshFeed({}, c);
+    try { window.scrollTo({ top: 0 }); } catch {}
+    render();
+  }
+  // A follow list that changed means every feed built on it has the wrong
+  // authors — the one on screen is rebuilt in place, not offered behind the
+  // pill; the others are simply forgotten and rebuilt when next opened.
   function feedAuthorsChanged() {
-    if (!feed) return;
-    feedAt = 0;
-    refreshFeed({ live: false });
+    for (const c of [...feedStates.values()]) {
+      const def = feedDef(c.id);
+      if (!def || !def.follows) continue;
+      if (c === feed) { c.at = 0; refreshFeed({ live: false }, c); } else feedStates.delete(c.id);
+    }
+  }
+  // A topic straight from search or a #tag in a post: a feed for this
+  // session (a saved single-topic feed with the same tag is reused).
+  function openTopicFeed(tag) {
+    tag = normTopic(tag);
+    if (!tag) return;
+    const saved = st().feeds.find((f) => !f.follows && !(f.authors || []).length && feedTopics(f).length === 1 && feedTopics(f)[0] === tag);
+    const id = saved ? saved.id : 'topic:' + tag;
+    if (!saved) adhocFeeds.set(id, { id, name: '#' + tag, topics: [tag] });
+    ui.userSearch = null; ui.profilePk = null; ui.noteThread = null; ui.feedEdit = null;
+    ui.chatOpen = true; ui.msgView = 'feed';
+    switchFeed(id);
   }
   // How far from the top counts as "reading", rather than "sitting at the top
   // of the feed". Inserting a post above what someone is reading moves the
@@ -3734,8 +3802,7 @@ export function messagesFeature(ctx) {
   // Posts at the door: filtered in synchronously, so the same note from a
   // second relay is dropped while the first copy is still warming.
   const feedStaged = new Set();
-  async function mergeFeed(evs, opts = {}) {
-    const c = feedNow();
+  async function mergeFeed(evs, opts = {}, c = feedNow()) {
     const known = new Set([...c.notes, ...(c.catchup || [])].map((e) => e.id));
     const add = (evs || []).filter((e) => e.kind === 1 && !isReply(e) && !isMuted(e.pubkey)
       && !known.has(e.id) && !feedStaged.has(e.id) && known.add(e.id) && feedStaged.add(e.id));
@@ -3761,10 +3828,10 @@ export function messagesFeature(ctx) {
     // posts arriving at the TOP shouldn't cost you the ones you'd scrolled to
     const fresh = add.filter((e) => e.created_at >= (c.notes[0] || {}).created_at).length;
     if (fresh) c.shown = Math.min((c.shown || FEED_PAGE) + fresh, c.notes.length);
-    try { wallet.saveFeatureState(FEED_CACHE, c.notes.slice(0, FEED_STORE).map(slimNote)); } catch {}
+    saveFeedCache(c);
     if (above) {
       c.unseen = (c.unseen || 0) + add.length;
-      if (ui.chatOpen && ui.msgView === 'feed') holdScroll(render);
+      if (ui.chatOpen && ui.msgView === 'feed' && c === feed) holdScroll(render);
     }
     return true;
   }
@@ -3785,18 +3852,27 @@ export function messagesFeature(ctx) {
   // as disruptive as a live arrival if you were reading halfway down, so it
   // goes behind the pill too. A first load, or paging older posts onto the
   // bottom, does not.
-  async function feedPass(extra = {}, merge = {}) {
-    const authors = feedAuthors();
-    if (!authors.length) return false;
+  async function feedPass(extra = {}, merge = {}, c = feedNow()) {
+    const def = feedDef(c.id);
+    if (!def) return false;
+    const authors = feedAuthors(def), topics = feedTopics(def);
+    const tag = topics.length ? { '#t': topics } : {};
+    let got = false;
+    if (!authors.length) {
+      // topics alone: nobody's outbox to read, so the wide relays, one ask
+      if (!topics.length) return false;
+      const evs = await queryOn(TOPIC_RELAYS, { kinds: [1], ...tag, limit: FEED_LIMIT, ...extra }, 5000).catch(() => []);
+      if (await mergeFeed(evs, merge, c)) { got = true; scheduleRepaint(); }
+      return got;
+    }
     await fetchRelayLists(authors);
     const plan = outboxPlan(authors);
-    let got = false;
     await Promise.all(plan.flatMap(({ relays, authors: a }) => {
       const chunks = [];
       for (let i = 0; i < a.length; i += REQ_AUTHORS) chunks.push(a.slice(i, i + REQ_AUTHORS));
       return chunks.map(async (chunk) => {
-        const evs = await queryOn(relays, { kinds: [1], authors: chunk, limit: FEED_LIMIT, ...extra }, 5000).catch(() => []);
-        if (await mergeFeed(evs, merge)) { got = true; scheduleRepaint(); }
+        const evs = await queryOn(relays, { kinds: [1], authors: chunk, ...tag, limit: FEED_LIMIT, ...extra }, 5000).catch(() => []);
+        if (await mergeFeed(evs, merge, c)) { got = true; scheduleRepaint(); }
       });
     }));
     return got;
@@ -3805,17 +3881,17 @@ export function messagesFeature(ctx) {
   // on screen — the cached page at boot included. Posts used to slide in a
   // beat after the page painted, moving what you had started reading. Only
   // a first load (nothing to disturb) or a rebuilt follow list goes straight in.
-  async function refreshFeed(opts = {}) {
-    if (!feedAuthors().length) { if (feed) feed.status = 'ready'; return; }
-    if (!opts.force && Date.now() - feedAt < 30_000) return;
-    feedAt = Date.now();
-    const catchup = opts.live != null ? !!opts.live : !!(feed && feed.notes.length);
-    const topBefore = feed && feed.notes[0] ? feed.notes[0].created_at : 0;
-    try { await feedPass({}, { catchup }); } catch {} finally {
-      if (feed) feed.status = 'ready';
-      if (catchup) settleCatchup(topBefore); else scheduleRepaint();
+  async function refreshFeed(opts = {}, c = feedNow()) {
+    if (!feedHasQuery(feedDef(c.id))) { c.status = 'ready'; return; }
+    if (!opts.force && Date.now() - c.at < 30_000) return;
+    c.at = Date.now();
+    const catchup = opts.live != null ? !!opts.live : !!c.notes.length;
+    const topBefore = c.notes[0] ? c.notes[0].created_at : 0;
+    try { await feedPass({}, { catchup }, c); } catch {} finally {
+      c.status = 'ready';
+      if (catchup) settleCatchup(topBefore, c); else scheduleRepaint();
     }
-    watchFeed();
+    if (c === feed) watchFeed();
   }
   // ---- coming back to the feed ---------------------------------------------
   // The catch-up asks every relay for its newest posts, with no lower bound,
@@ -3828,8 +3904,7 @@ export function messagesFeature(ctx) {
   //   a lot — you've been gone a while: the feed goes to the top, at the
   //           newest post, the way it would on a fresh open
   const FEED_CATCHUP_MAX = 20;
-  function settleCatchup(topBefore) {
-    const c = feed;
+  function settleCatchup(topBefore, c = feed) {
     if (!c) return;
     const add = c.catchup || [];
     c.catchup = [];
@@ -3842,8 +3917,8 @@ export function messagesFeature(ctx) {
     const inside = add.filter((e) => !seen.has(e.id) && e.created_at > edge).length;
     c.notes = [...c.notes, ...add.filter((e) => !seen.has(e.id))]
       .sort((a, b) => b.created_at - a.created_at).slice(0, FEED_KEEP);
-    try { wallet.saveFeatureState(FEED_CACHE, c.notes.slice(0, FEED_STORE).map(slimNote)); } catch {}
-    const onScreen = ui.chatOpen && ui.msgView === 'feed';
+    saveFeedCache(c);
+    const onScreen = ui.chatOpen && ui.msgView === 'feed' && c === feed;
     if (!onScreen || fresh > FEED_CATCHUP_MAX) {
       c.shown = FEED_PAGE;
       render();
@@ -3885,12 +3960,17 @@ export function messagesFeature(ctx) {
   // the same relays the pass above reads, one subscription each.
   function watchFeed() {
     stopFeedWatch();
-    if (!feedAuthors().length || !ui.chatOpen || ui.msgView !== 'feed') return;
+    const def = feedDef();
+    if (!feedHasQuery(def) || !ui.chatOpen || ui.msgView !== 'feed') return;
+    const c = feedNow();
     const since = Math.floor(Date.now() / 1000) - 60;
-    for (const { relays, authors } of outboxPlan(feedAuthors()))
-      for (let i = 0; i < authors.length; i += REQ_AUTHORS)
-        feedUnsubs.push(subscribeOn(relays, { kinds: [1], authors: authors.slice(i, i + REQ_AUTHORS), since },
-          (ev) => { mergeFeed([ev], { live: true }).then((ok) => { if (ok) scheduleRepaint(); }).catch(() => {}); }));
+    const topics = feedTopics(def), tag = topics.length ? { '#t': topics } : {};
+    const on = (ev) => { mergeFeed([ev], { live: true }, c).then((ok) => { if (ok) scheduleRepaint(); }).catch(() => {}); };
+    const authors = feedAuthors(def);
+    if (!authors.length) { feedUnsubs.push(subscribeOn(TOPIC_RELAYS, { kinds: [1], ...tag, since }, on)); return; }
+    for (const { relays, authors: a } of outboxPlan(authors))
+      for (let i = 0; i < a.length; i += REQ_AUTHORS)
+        feedUnsubs.push(subscribeOn(relays, { kinds: [1], authors: a.slice(i, i + REQ_AUTHORS), ...tag, since }, on));
   }
   function stopFeedWatch() {
     for (const u of feedUnsubs) { try { u(); } catch {} }
@@ -3908,11 +3988,11 @@ export function messagesFeature(ctx) {
     }
     if (c.status !== 'ready' || c.loadingMore || c.end) return;
     const oldest = c.notes[c.notes.length - 1];
-    if (!oldest || !feedAuthors().length) { c.end = true; return; }
+    if (!oldest || !feedHasQuery()) { c.end = true; return; }
     c.loadingMore = true;
     render();
     try {
-      if (await feedPass({ until: oldest.created_at - 1 })) c.shown += FEED_PAGE;
+      if (await feedPass({ until: oldest.created_at - 1 }, {}, c)) c.shown += FEED_PAGE;
       else c.end = true;
     } catch {} finally {
       c.loadingMore = false;
@@ -3939,10 +4019,11 @@ export function messagesFeature(ctx) {
   // nip05 (a word character sits before those), and never inside a URL
   // (the URL token starts earlier and swallows it).
   const MENTION = '(?<![\\w.@/])@[A-Za-z0-9_]{2,32}(?![\\w@])';
+  const HASHTAG = '(?<![\\w#/&])#[A-Za-z0-9_\\u00C0-\\uFFFF]{2,64}(?![\\w])';
   // A bare npub/nprofile — with or without an @ in front, no nostr: prefix —
   // is how Vector (and people) write a mention; it resolves to the name too.
   const BARE_KEY = '(?<![\\w/])@?(?:npub|nprofile)1[a-z0-9]{20,}(?![\\w])';
-  const NOTE_SPLIT = new RegExp('(' + MD_LINK + '|https?:\\/\\/[^\\s]+|nostr:(?:npub|nprofile|note|nevent|naddr)1[a-z0-9]+|' + BARE_KEY + '|' + MENTION + ')', 'gi');
+  const NOTE_SPLIT = new RegExp('(' + MD_LINK + '|https?:\\/\\/[^\\s]+|nostr:(?:npub|nprofile|note|nevent|naddr)1[a-z0-9]+|' + BARE_KEY + '|' + MENTION + '|' + HASHTAG + ')', 'gi');
   const MD_PARTS = new RegExp('^(!?)\\[([^\\]\\n]{0,300})\\]\\(\\s*<?(https?:\\/\\/[^\\s>)]+)>?[^)\\n]{0,300}\\)$', 'i');
 
   // A YouTube link is a video, so show the video. All three shapes it comes
@@ -4337,6 +4418,11 @@ export function messagesFeature(ctx) {
           href: '#', title: t('searchPeopleFor', { q: part.slice(1) }),
           onClick: (e) => { e.preventDefault(); e.stopPropagation(); openPeopleSearch(part.slice(1)); },
         }, part));
+      } else if (/^#[A-Za-z0-9_\u00C0-\uFFFF]{2,64}$/.test(part)) {
+        out.push(h('a', {
+          href: '#', title: t('searchTopicFor', { q: part.slice(1) }),
+          onClick: (e) => { e.preventDefault(); e.stopPropagation(); openTopicFeed(part.slice(1)); },
+        }, part));
       } else if (emojiAt && part.includes(':')) {
         for (const p of splitEmoji(part, emojiAt)) out.push(typeof p === 'string' ? p : emojiImg(p.code, p.url));
       } else out.push(part);
@@ -4693,7 +4779,7 @@ export function messagesFeature(ctx) {
       // shifts when a wallet comes online; without one it is just the number
       btn(I_ZAP, zapLabel, zapSats ? fmtSats(zapSats) : 0, zapMine,
         zapHold && zapHold.onClick,
-        'note-zap' + (zapSats ? ' zapped' : '') + (zapFlying ? ' flying' : ''),
+        'note-zap' + (zapMine ? ' zapped' : '') + (zapFlying ? ' flying' : ''),
         zapHold && { ...zapHold, onClick: undefined }),
       // who did all that: a small chevron, always in place — dimmed until
       // there is someone to show, so the first reaction doesn't reflow the bar
@@ -5631,9 +5717,24 @@ export function messagesFeature(ctx) {
   }
 
   // ---- the feed view --------------------------------------------------------
+  // The row of feeds under the title: Following, then yours, then + for
+  // a new one. A topic opened for the session sits at the end until saved.
+  function feedChips() {
+    const items = feedList();
+    const cur = feedDef();
+    if (cur && adhocFeeds.has(cur.id)) items.push(cur);
+    return h('div', { class: 'row feed-chips', 'data-key': 'feed-chips' },
+      ...items.map((f) => h('button', {
+        class: 'feed-chip' + (f.id === curFeedId ? ' on' : ''), type: 'button', 'data-key': 'chip:' + f.id,
+        onClick: () => switchFeed(f.id),
+      }, f.name)),
+      h('button', { class: 'feed-chip add', type: 'button', title: t('feedNew'), 'aria-label': t('feedNew'), onClick: () => openFeedEditor(null) }, '+'));
+  }
   function feedView() {
     const c = feedNow();
-    const authors = feedAuthors();
+    const def = feedDef();
+    const authors = feedAuthors(def);
+    const hasQuery = feedHasQuery(def);
     const visible = c.notes.filter((ev) => !isMuted(ev.pubkey));
     // Every child keyed by its post, hairlines included, so the morph
     // reconciles the list by post: a new one at the top is inserted as its
@@ -5660,16 +5761,25 @@ export function messagesFeature(ctx) {
         pill,
         h('div', { class: 'row gap6', style: 'align-items:center' },
           backBtn(() => { ui.msgView = 'home'; stopFeedWatch(); render(); }),
-          h('h3', { style: 'margin:0' }, t('feedTitle')),
+          h('h3', { style: 'margin:0;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' }, def.builtin ? t('feedTitle') : def.name),
+          def.builtin ? null
+            : adhocFeeds.has(def.id)
+              ? h('button', { class: 'btn-sm', onClick: () => openFeedEditor(def) }, t('feedSaveAdhoc'))
+              : h('button', { class: 'btn-sm', title: t('feedEdit'), 'aria-label': t('feedEdit'), onClick: () => openFeedEditor(def) }, '\u270e'),
           h('button', {
-            class: 'btn-sm', style: 'margin-left:auto',
+            class: 'btn-sm', style: 'margin-left:auto;flex-shrink:0',
             onClick: () => { ui.profCompose = ui.profCompose == null ? (draftFor(POST_DRAFT) || '') : null; render(); },
           }, t('profNewPost'))),
+        feedChips(),
         postComposer(),
-        !authors.length
-          ? h('div', { class: 'col', style: 'gap:8px' },
-              h('div', { class: 'small muted' }, t('feedNoFollows')),
-              h('button', { class: 'btn-sm', onClick: () => { stopFeedWatch(); hook('openUserSearch'); render(); } }, t('feedFindPeople')))
+        !hasQuery
+          ? def.builtin
+            ? h('div', { class: 'col', style: 'gap:8px' },
+                h('div', { class: 'small muted' }, t('feedNoFollows')),
+                h('button', { class: 'btn-sm', onClick: () => { stopFeedWatch(); hook('openUserSearch'); render(); } }, t('feedFindPeople')))
+            : h('div', { class: 'col', style: 'gap:8px' },
+                h('div', { class: 'small muted' }, t('feedNoQuery')),
+                h('button', { class: 'btn-sm', onClick: () => openFeedEditor(def) }, t('feedEdit')))
           : c.status === 'loading' && !visible.length
             ? h('div', { class: 'row gap6', style: 'justify-content:center;padding:12px 0' }, h('span', { class: 'spinner sm' }))
             : !visible.length
@@ -5682,6 +5792,88 @@ export function messagesFeature(ctx) {
         reactPicker());
   }
 
+
+  // ---- defining a feed ----------------------------------------------------
+  // Name, the people (everyone you follow and/or a hand-picked few) and the
+  // topics. People AND topics narrows to their posts on those topics; either
+  // alone is the whole of it. Saved into the synced state, so every device
+  // has the same feeds.
+  function openFeedEditor(def) {
+    ui.feedEdit = def
+      ? { id: def.id, name: def.name || '', follows: !!def.follows, authors: [...(def.authors || [])],
+          topics: feedTopics(def).map((x) => '#' + x).join(' '), q: '', rows: null, isNew: adhocFeeds.has(def.id) }
+      : { id: null, name: '', follows: false, authors: [], topics: '', q: '', rows: null, isNew: true };
+    render();
+  }
+  const feedPeopleSearcher = makeSearcher((q, rows) => {
+    const e = ui.feedEdit;
+    if (e && e.q === q) { e.rows = rows; render(); }
+    for (const r of rows || []) if (r.pk) prefetchProfilePage(r.pk);
+  });
+  function saveFeedEditor() {
+    const e = ui.feedEdit;
+    if (!e) return;
+    const topics = [...new Set(e.topics.split(/[\s,]+/).map(normTopic).filter(Boolean))].slice(0, 20);
+    if (!e.follows && !e.authors.length && !topics.length) { toast(t('feedNoQuery')); return; }
+    const name = e.name.trim().slice(0, 40) || (topics.length ? '#' + topics[0] : t('feedNewName'));
+    const s = st();
+    const keep = e.id && !adhocFeeds.has(e.id) && s.feeds.some((f) => f.id === e.id);
+    const id = keep ? e.id : 'f' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    const def = { id, name, follows: e.follows, authors: e.authors.slice(0, FEED_AUTHORS_MAX), topics, at: Date.now() };
+    if (keep) s.feeds = s.feeds.map((f) => (f.id === id ? { ...f, ...def } : f)); else s.feeds.push(def);
+    save(s);
+    if (e.id && adhocFeeds.has(e.id)) adhocFeeds.delete(e.id);
+    feedStates.delete(id); // its query changed: rebuild from scratch
+    ui.feedEdit = null;
+    switchFeed(id);
+  }
+  function deleteFeed(id) {
+    const s = st();
+    s.feeds = s.feeds.filter((f) => f.id !== id);
+    save(s);
+    feedStates.delete(id);
+    try { wallet.saveFeatureState(feedCacheKey(id), []); } catch {}
+    ui.feedEdit = null;
+    if (curFeedId === id) switchFeed(FOLLOWING); else render();
+  }
+  function feedEditView() {
+    const e = ui.feedEdit;
+    const person = (pk) => h('div', { class: 'row gap6', style: 'align-items:center' },
+      avatar(pk, 'chat-avatar mini', false),
+      h('span', { class: 'grow', style: 'min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' }, displayName(pk)),
+      h('button', { class: 'btn-sm', type: 'button', 'aria-label': t('remove'), onClick: () => { e.authors = e.authors.filter((x) => x !== pk); render(); } }, '\u00d7'));
+    const picks = (e.rows || []).filter((r) => r.pk && !e.authors.includes(r.pk)).slice(0, 8);
+    return h('div', { class: 'card col chat-page', style: 'gap:14px' },
+      h('div', { class: 'row gap6', style: 'align-items:center' },
+        backBtn(() => { ui.feedEdit = null; render(); }),
+        h('h3', { style: 'margin:0' }, e.isNew ? t('feedNew') : t('feedEdit'))),
+      h('label', { class: 'col', style: 'gap:4px' },
+        h('span', { class: 'small muted' }, t('feedName')),
+        h('input', { type: 'text', value: e.name, placeholder: t('feedNameHint'), maxlength: '40', onInput: (ev) => { e.name = ev.target.value; } })),
+      h('div', { class: 'col', style: 'gap:8px' },
+        h('span', { class: 'small muted' }, t('feedPeople')),
+        h('label', { class: 'row gap6', style: 'align-items:center;cursor:pointer' },
+          h('input', { type: 'checkbox', checked: e.follows, style: 'width:18px;height:18px;accent-color:var(--accent);margin:0', onChange: (ev) => { e.follows = ev.target.checked; render(); } }),
+          h('span', {}, t('feedFollowsToggle'))),
+        ...e.authors.map(person),
+        h('input', {
+          type: 'text', class: 'user-search-input', placeholder: t('feedAddPerson'), value: e.q,
+          autocapitalize: 'none', autocomplete: 'off', spellcheck: 'false',
+          onInput: (ev) => { e.q = ev.target.value; feedPeopleSearcher.update(e.q); },
+        }),
+        picks.length
+          ? h('div', { class: 'list' }, resultRows(h, picks, (r) => {
+              if (!r.pk) return;
+              e.authors.push(r.pk); e.q = ''; e.rows = null; render();
+            }, (pk, node) => hook('wrapAvatar', pk, node)))
+          : null),
+      h('label', { class: 'col', style: 'gap:4px' },
+        h('span', { class: 'small muted' }, t('feedTopics')),
+        h('input', { type: 'text', value: e.topics, placeholder: t('feedTopicsHint'), autocapitalize: 'none', autocomplete: 'off', onInput: (ev) => { e.topics = ev.target.value; } }),
+        h('div', { class: 'small faint' }, t('feedTopicsHelp'))),
+      h('button', { class: 'btn-primary btn-block', onClick: saveFeedEditor }, t('save')),
+      e.id && !e.isNew ? h('button', { class: 'btn-ghost btn-block', onClick: () => deleteFeed(e.id) }, t('feedDelete')) : null);
+  }
 
   // ---- user search: the header magnifier ----------------------------------
   // Same engine the Send form and DMs use (registrar names + Primal cache +
@@ -5702,6 +5894,17 @@ export function messagesFeature(ctx) {
           autocapitalize: 'none', autocomplete: 'off', spellcheck: 'false',
           onInput: (e) => { s.q = e.target.value; userSearcher.update(s.q); },
         }),
+        // a word is a topic too: posts tagged with it, as a feed
+        (() => {
+          const m = /^#?([A-Za-z0-9_\u00C0-\uFFFF]{2,64})$/.exec(s.q.trim());
+          if (!m) return null;
+          const tag = normTopic(m[1]);
+          return h('div', { class: 'list' }, h('div', { class: 'item chat-thread-row', onClick: () => openTopicFeed(tag) },
+            h('div', { class: 'chat-avatar fallback' }, '#'),
+            h('div', { class: 'col grow', style: 'min-width:0;gap:1px' },
+              h('span', { class: 'chat-name' }, '#' + tag),
+              h('div', { class: 'muted small' }, t('searchTopicRow')))));
+        })(),
         s.rows && s.rows.length
           ? h('div', { class: 'list' }, resultRows(h, s.rows, (r) => {
               if (r.pk) { openProfile(r.pk); render(); }
@@ -6763,6 +6966,7 @@ export function messagesFeature(ctx) {
   // ---- feature ------------------------------------------------------------
 
   function messagesTab() {
+    if (ui.feedEdit) return feedEditView();
     if (ui.msgView === 'feed') return feedView();
     if (ui.msgView === 'notifs') return notifView();
     if (ui.msgView === 'room') return roomView();

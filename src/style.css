@@ -590,6 +590,12 @@ hr.divider { margin: 16px 0; }
    post's full width so each is a comfortable target, quiet until one carries
    a count or you've used it. */
 .note-acts { margin-top: 8px; justify-content: space-between; gap: 4px; max-width: 340px; }
+/* the feeds row: pills that scroll sideways, the one on screen filled */
+.feed-chips { gap: 6px; flex-wrap: nowrap; overflow-x: auto; margin: 0 -14px; padding: 2px 14px; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+.feed-chips::-webkit-scrollbar { display: none; }
+.feed-chip { flex: 0 0 auto; border: 1px solid var(--line); background: var(--surface2); color: var(--muted); border-radius: 999px; padding: 5px 12px; font-size: 14px; line-height: 1.2; cursor: pointer; white-space: nowrap; max-width: 180px; overflow: hidden; text-overflow: ellipsis; }
+.feed-chip.on { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+.feed-chip.add { font-weight: 600; padding: 5px 11px; }
 .note-act {
   background: none; border: 0; padding: 4px 6px; margin: 0; line-height: 1;
   color: var(--faint); display: inline-flex; align-items: center; gap: 6px; cursor: pointer;

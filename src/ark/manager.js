@@ -1338,14 +1338,29 @@ export class ArkManager {
     if (this.info.maxUserInvoiceCltvDelta && minCltvDelta > this.info.maxUserInvoiceCltvDelta) {
       throw new Error('server max invoice CLTV delta is too low');
     }
-    const idx = this.state.nextLnRecvIndex || 0;
-    this.state.nextLnRecvIndex = idx + 1;
+    // The preimage comes from a counter. Another device can have spent an
+    // index this one hasn't heard about yet (the merge keeps the higher
+    // count, but only once the state has travelled), and the server then
+    // refuses the hash as already paid. Step past any such index rather
+    // than fail the sale — the counter only ever moves up.
+    let idx, paymentHash, invoice;
+    for (let tries = 0; ; tries++) {
+      idx = this.state.nextLnRecvIndex || 0;
+      this.state.nextLnRecvIndex = idx + 1;
+      paymentHash = sha256(this._lnPreimage(idx));
+      try {
+        invoice = await startLightningReceive(this.arkUrl, {
+          paymentHash, amountSat, minCltvDelta,
+          mailboxPubkey: this._mailboxKey().pubkey, description,
+        });
+        break;
+      } catch (e) {
+        const used = /already been paid|already exists|already in use|duplicate/i.test(e?.message || '');
+        if (!used || tries >= 50) throw e;
+        this._save(); // remember the skipped index even if the next try fails
+      }
+    }
     const keyIndex = this.state.nextKeyIndex++;
-    const paymentHash = sha256(this._lnPreimage(idx));
-    const invoice = await startLightningReceive(this.arkUrl, {
-      paymentHash, amountSat, minCltvDelta,
-      mailboxPubkey: this._mailboxKey().pubkey, description,
-    });
     const decInv = decodeBolt11(invoice);
     if (decInv.paymentHash !== hex.encode(paymentHash)) {
       throw new Error('server invoice payment hash mismatch');

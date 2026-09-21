@@ -151,8 +151,25 @@ export function posFeature(ctx) {
   function openSale(sale) {
     const m = movementOf(sale);
     if (!m) { toast(t('posNoDetail')); return; }
+    // the money arrived while nobody was watching the till (app closed,
+    // screen elsewhere): the record says so now
+    if (sale.status !== 'paid') {
+      const s = st();
+      const row = s.sales.find((x) => x.id === sale.id);
+      if (row) { row.status = 'paid'; row.paidAt = row.paidAt || m.ts || Date.now(); save(s); }
+    }
     ui.arkMoveDetail = m.id;
     render();
+  }
+  // Sales the till never saw settle, but the wallet did: adopt them on paint.
+  function adoptPaid(s) {
+    let changed = false;
+    for (const x of s.sales) {
+      if (x.status === 'paid') continue;
+      const m = movementOf(x);
+      if (m) { x.status = 'paid'; x.paidAt = x.paidAt || m.ts || Date.now(); changed = true; }
+    }
+    if (changed) save(s);
   }
   const saleOfMovement = (m) => (m && m.type === 'ln-receive' && m.invoice ? st().sales.find((x) => x.invoice === m.invoice) : null);
 
@@ -204,6 +221,7 @@ export function posFeature(ctx) {
         h('span', { class: 'small muted' }, '%')) : null);
   }
   function salesCard(s) {
+    adoptPaid(s);
     const sales = [...s.sales].reverse();
     if (!sales.length) return null;
     const today = dayKey(Date.now());

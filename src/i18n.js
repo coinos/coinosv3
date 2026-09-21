@@ -841,6 +841,8 @@ const STR = {
     onbStart: 'Create a new wallet',
     onbStartHint: "Takes a minute: write down twelve words and it's yours",
     onbOrSignIn: 'or',
+    onbHaveSeed: 'Have an existing seed or entropy to import?',
+    onbCreateInstead: 'Create a new wallet instead',
     onbBackupTitle: 'Write down your recovery phrase',
     onbBackupBody: "Signing in was the easy part — but the sign-in isn't your wallet. These twelve words are. They're the only way back in if you lose access to that account, and nobody can reissue them for you.",
     onbBackupDone: "I've written it down",

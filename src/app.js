@@ -935,17 +935,30 @@ function unlockCard() {
   // The entropy page takes the card over entirely — seed words, tabs and
   // other controls step aside until Submit or Back.
   if (ui.entropyPage) return h('div', { class: 'card col' }, entropyPage());
+  // Inside the first-run wizard the words are already on screen: no tabs,
+  // just a line underneath for whoever brought their own seed (and one back).
+  const wizard = ui.screen === 'unlock' && ui.onb && ui.onb.step === 'seed';
+  const swap = wizard ? h('button', {
+    class: 'linklike small', style: 'align-self:center',
+    onClick: () => {
+      clearSeedDrafts(); ui.unlockError = '';
+      if (ui.unlockTab === 'create') ui.unlockTab = 'import';
+      else { ui.unlockTab = 'create'; ui.createStep = 'gen'; ui.draftRandom = ui.draftMnemonic = newMnemonic(); }
+      render();
+    },
+  }, ui.unlockTab === 'create' ? t('onbHaveSeed') : t('onbCreateInstead')) : null;
   return h(
     'div',
     { class: 'card col' },
-    h(
+    wizard ? null : h(
       'div',
       { class: 'tabs' },
       tabBtn(t('createNew'), ui.unlockTab === 'create', () => { clearSeedDrafts(); ui.unlockTab = 'create'; ui.unlockError = ''; render(); }),
       tabBtn(t('importExisting'), ui.unlockTab === 'import', () => { clearSeedDrafts(); ui.unlockTab = 'import'; ui.unlockError = ''; render(); })
     ),
     ui.unlockTab === 'create' ? createPane() : importPane(),
-    ui.unlockError && h('div', { class: 'notice err' }, ui.unlockError)
+    ui.unlockError && h('div', { class: 'notice err' }, ui.unlockError),
+    swap
   );
 }
 
@@ -3361,6 +3374,9 @@ function onboardScreen() {
         class: 'btn-primary btn-block', style: 'font-size:17px;padding:14px', onClick: () => {
           ui.unlockTab = 'create';
           ui.unlockError = '';
+          ui.createStep = 'gen';
+          // the words are the wallet: show them at once, no Generate to tap
+          if (!ui.draftMnemonic) ui.draftRandom = ui.draftMnemonic = newMnemonic();
           o.step = 'seed';
           render();
         } }, t('onbStart')),

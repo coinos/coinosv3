@@ -29,7 +29,7 @@ try {
   await page.reload({ waitUntil: 'domcontentloaded' });
   await sleep(400);
   await click('create a new wallet'); await sleep(500);
-  await click('import existing'); await sleep(400);
+  await click('to import'); await sleep(400);
   await page.waitForSelector('textarea');
   await page.type('textarea', generateMnemonic(wordlist));
   await click('open wallet');

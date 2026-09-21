@@ -51,7 +51,7 @@ const CACHE_MAX = 50; // messages kept per channel / per DM thread in feature st
 // kind-31990 handler coordinate, which we haven't published. Deliberately
 // absent from anything encrypted (DMs, community wraps) — those are private
 // and need no billboard.
-const CLIENT_TAG = ['client', 'coinos'];
+const CLIENT_TAG = ['client', 'coinos', '31990:72bdbc57bdd6dfc4e62685051de8041d148c3c68fe42bf301f71aa6cf53e52fb:coinos'];
 
 // A view the URL asks to open (a notification tap): read once, then taken
 // off the address so a reload doesn't repeat it.
@@ -1767,11 +1767,25 @@ export function messagesFeature(ctx) {
     const m = location.pathname.match(/^\/([A-Za-z0-9._-]{1,64})\/?$/);
     // reserved app routes are never usernames — /chat is the public
     // community page (app.js routes it), and eating it here rewrote the URL
-    // to / before that route ever saw it
-    if (m && ['chat'].includes(m[1])) return null;
+    // to / before that route ever saw it; a note reference is its own link
+    if (m && (['chat'].includes(m[1]) || /^(note|nevent|naddr)1/i.test(m[1]))) return null;
     return m ? m[1] : null;
   })();
   if (urlProfile) { try { history.replaceState(null, '', '/'); } catch {} }
+  // /note1… and /nevent1… open the thread the same way — the NIP-89 handler
+  // event for coinos points njump and friends here for notes, /<npub> for
+  // people. Public content: shown over the front door without a wallet.
+  const urlNote = (() => {
+    if (typeof location === 'undefined' || urlInvite || urlProfile) return null;
+    const m = location.pathname.match(/^\/((?:note|nevent)1[a-z0-9]+)\/?$/i);
+    const ref = m ? parseNostrRef(m[1].toLowerCase()) : null;
+    return ref && ref.type === 'event' ? ref : null;
+  })();
+  if (urlNote) {
+    try { history.replaceState(null, '', '/'); } catch {}
+    ui.pubProf = true;
+    setTimeout(() => { openNoteRef(urlNote).catch(() => {}); }, 0);
+  }
 
   // Resolve and open right away — not in init(), which only runs once a
   // wallet opens (and would replay on every wallet born in this tab). For a

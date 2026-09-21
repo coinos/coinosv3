@@ -5472,7 +5472,7 @@ const INTENT_URI = (() => {
     const u = new URLSearchParams(location.search).get('u');
     if (!u) return null;
     history.replaceState(null, '', location.pathname || '/');
-    const m = u.match(/^nostr:((npub|nprofile)1[a-z0-9]+)\/?$/i);
+    const m = u.match(/^nostr:((npub|nprofile|note|nevent)1[a-z0-9]+)\/?$/i);
     if (m) { history.replaceState(null, '', '/' + m[1]); return null; }
     return u;
   } catch { return null; }

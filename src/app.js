@@ -5201,7 +5201,11 @@ function pager(page, total, onPage) {
   if (pages <= 1) return null;
   return h('div', { class: 'row between', style: 'align-items:center;padding-top:10px' },
     h('button', { class: 'btn-sm', onClick: () => onPage((page - 1 + pages) % pages) }, t('prevPage')),
-    h('span', { class: 'small muted' }, t('pageXofY', { x: page + 1, y: pages })),
+    // the page number is a picker: forty pages is a long swipe to the middle
+    h('select', {
+      class: 'small muted page-pick', 'aria-label': t('pageXofY', { x: page + 1, y: pages }),
+      onChange: (e) => onPage(parseInt(e.target.value, 10) || 0),
+    }, ...Array.from({ length: pages }, (_, i) => h('option', { value: String(i), selected: i === page }, t('pageXofY', { x: i + 1, y: pages })))),
     h('button', { class: 'btn-sm', onClick: () => onPage((page + 1) % pages) }, t('nextPage'))
   );
 }

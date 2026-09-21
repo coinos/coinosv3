@@ -188,6 +188,7 @@ input { scroll-margin-top: 12px; }
 .balance .split .v.pending { color: var(--accent-ink); }
 
 /* ---- tabs ---- */
+.page-pick { width: auto; padding: 6px 28px 6px 10px; font-size: 13px; border-radius: 9px; background-color: var(--paper); }
 .tabs { display: flex; gap: 4px; background: var(--tab-bg); border: 1px solid var(--tab-border); border-radius: 12px; padding: 4px; margin: 16px 0; }
 .tabs button {
   flex: 1; border: 0; background: transparent; padding: 9px 4px; border-radius: 9px;

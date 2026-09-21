@@ -2133,8 +2133,8 @@ export function arkFeature(ctx) {
         h('h3', { style: 'margin:0' }, t('arkCoinsTitle')),
         h('p', { class: 'small muted', style: 'margin:0' },
           spend.length === 1
-            ? t('arkCoinsIntroOne', { total: fmtAmount(totalSat) + ' ' + unitLabel() })
-            : t('arkCoinsIntro', { n: spend.length, total: fmtAmount(totalSat) + ' ' + unitLabel() })),
+            ? t('arkCoinsIntroOne', { total: fmtSats(totalSat) + ' sats' })
+            : t('arkCoinsIntro', { n: spend.length, total: fmtSats(totalSat) + ' sats' })),
         // One coin per row, two lines: the amount (with its renewal price on
         // the right — the number this page's action spends), then a faint
         // meta line. Five flexed columns fit a laptop but wrapped into
@@ -2167,9 +2167,9 @@ export function arkFeature(ctx) {
                 onClick: (e) => { if (e.target.tagName !== 'INPUT') toggle(); },
               },
                 h('td', {}, tick(sel.has(v.id), toggle)),
-                h('td', { class: 'num' }, fmtAmount(v.amountSat), h('span', { class: 'small faint' }, ' ' + unitLabel())),
+                h('td', { class: 'num' }, fmtSats(v.amountSat), h('span', { class: 'small faint' }, ' sats')),
                 h('td', { class: 'num' + (due ? ' warn' : '') }, expiresOf(v)),
-                h('td', { class: 'num' }, xf == null ? '—' : fmtAmount(xf), xf == null ? null : h('span', { class: 'small faint' }, ' ' + unitLabel())),
+                h('td', { class: 'num' }, xf == null ? '—' : fmtSats(xf), xf == null ? null : h('span', { class: 'small faint' }, ' sats')),
                 h('td', { class: 'num' }, renewChip(f)));
             }))))),
       h('div', { class: 'card col', style: 'gap:8px' },
@@ -2188,8 +2188,8 @@ export function arkFeature(ctx) {
         h('button', { class: 'btn-primary btn-block', disabled: !!ui.arkBusy || !selCoins.length, onClick: renew },
           !selCoins.length ? t('arkCoinsRenewNone')
             : selCoins.length < spend.length
-              ? t('arkCoinsRenewSome', { n: selCoins.length, fee: selFee > 0 ? fmtAmount(selFee) + ' ' + unitLabel() : t('arkDepthFree') })
-              : selFee > 0 ? t('arkCoinsRenewNowFee', { fee: fmtAmount(selFee) + ' ' + unitLabel() }) : t('arkDepthRenewBtn'))),
+              ? t('arkCoinsRenewSome', { n: selCoins.length, fee: selFee > 0 ? fmtSats(selFee) + ' sats' : t('arkDepthFree') })
+              : selFee > 0 ? t('arkCoinsRenewNowFee', { fee: fmtSats(selFee) + ' sats' }) : t('arkDepthRenewBtn'))),
       h('button', { class: 'btn-ghost btn-block', onClick: back }, t('back')));
   }
 
@@ -3495,7 +3495,7 @@ export function arkFeature(ctx) {
       }
       if (arkRenewWarn && !wallet.watchOnly) lines.push({
         text: t('arkRenewWarn', {
-          amount: fmtAmount(arkRenewWarn.sat) + ' ' + unitLabel(),
+          amount: fmtSats(arkRenewWarn.sat) + ' sats', // coin sizes are sats, whatever the display unit
           date: new Date(arkRenewWarn.deadlineMs).toLocaleDateString(),
         }), err: true,
       });
@@ -3514,7 +3514,7 @@ export function arkFeature(ctx) {
         let expiredSat = 0;
         try { expiredSat = ark.balance().expiredSat || 0; } catch {}
         if (expiredSat > 0) lines.push({
-          text: t('arkExpiredNotice', { amount: fmtAmount(expiredSat) + ' ' + unitLabel() }), err: true, manage: true,
+          text: t('arkExpiredNotice', { amount: fmtSats(expiredSat) + ' sats' }), err: true, manage: true,
         });
       }
       const depthNotice = exitDepthNotice();

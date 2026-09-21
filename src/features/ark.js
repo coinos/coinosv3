@@ -2128,6 +2128,33 @@ export function arkFeature(ctx) {
     const tick = (checked, onChange, title) => h('input', {
       type: 'checkbox', checked, title, style: 'flex:0 0 auto;margin:0', onChange,
     });
+    // "Exit now" asks once, with the numbers on the table, before anything
+    // is published: an exit cannot be called back.
+    if (ui.arkExitConfirm) {
+      const savings = wallet.spendable || 0;
+      const short = savings < exitFee;
+      const row = (k, v, cls = '') => h('div', { class: 'row between' }, h('span', { class: 'small muted' }, k), h('span', { class: 'small' + (cls ? ' ' + cls : '') }, v));
+      return h('div', { class: 'col', style: 'gap:16px' },
+        h('div', { class: 'card col', style: 'gap:10px' },
+          h('h3', { style: 'margin:0' }, t('arkExitConfirmTitle')),
+          h('p', { class: 'small muted', style: 'margin:0' }, t('arkExitConfirmBody')),
+          h('div', { class: 'col', style: 'gap:4px' },
+            row(t('arkExitConfirmCoins'), String(spend.length)),
+            row(t('arkExitConfirmAmount'), fmtSats(totalSat) + ' sats'),
+            row(t('arkExitConfirmFee'), fmtSats(exitFee) + ' sats'),
+            row(t('arkExitConfirmSavings'), fmtSats(savings) + ' sats', short ? 'err' : '')),
+          short ? h('div', { class: 'notice err small' }, t('arkExitFeeShort', { need: fmtSats(exitFee), have: fmtSats(savings) })) : null,
+          h('p', { class: 'small muted', style: 'margin:0' }, t('arkExitConfirmWait')),
+          h('button', { class: 'btn-primary btn-block', disabled: !!ui.arkBusy || short || !spend.length, onClick: () => {
+            ui.arkExitConfirm = null;
+            doArkExit();
+            ui.arkCoinsSel = null;
+            back();
+            ui.tab = 'history'; // the exit lives as a pending record there
+            render();
+          } }, ui.arkBusy === 'exit' ? h('span', { class: 'spinner sm' }) : t('arkExitConfirmGo'))),
+        h('button', { class: 'btn-ghost btn-block', onClick: () => { ui.arkExitConfirm = null; render(); } }, t('cancel')));
+    }
     return h('div', { class: 'col', style: 'gap:16px' },
       h('div', { class: 'card col', style: 'gap:8px' },
         h('h3', { style: 'margin:0' }, t('arkCoinsTitle')),
@@ -2175,7 +2202,8 @@ export function arkFeature(ctx) {
       h('div', { class: 'card col', style: 'gap:8px' },
         h('h4', { style: 'margin:0' }, t('arkCoinsExitTitle')),
         h('p', { class: 'small muted', style: 'margin:0' },
-          t('arkCoinsExitDesc', { fee: fmtSats(exitFee), after: fmtSats(afterFee) }))),
+          t('arkCoinsExitDesc', { fee: fmtSats(exitFee), after: fmtSats(afterFee) })),
+        h('button', { class: 'btn-ghost btn-block', disabled: !!ui.arkBusy || !spend.length, onClick: () => { ui.arkExitConfirm = true; render(); } }, t('arkCoinsExitBtn'))),
       h('div', { class: 'card col', style: 'gap:8px' },
         h('h4', { style: 'margin:0' }, t('arkCoinsRenewTitle')),
         // the round cadence comes from the server (it has been an hour and

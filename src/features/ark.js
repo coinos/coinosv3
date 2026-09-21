@@ -2046,11 +2046,17 @@ export function arkFeature(ctx) {
   // its expiry and arkoor depth, what an uncooperative exit costs today, and
   // what a renewal costs and buys.
   function arkCoinsPage() {
+    // The notice that opens this page reads the persisted state; so must the
+    // page, or a tap before the manager has connected (the first seconds
+    // after boot) found no coins and closed itself — Manage needed two taps.
+    // The manager is dialled meanwhile; what needs it live waits for it.
     const mgr = ark;
-    const spend = ((mgr && mgr.state && mgr.state.vtxos) || []).filter((v) => v.state === 'spendable');
+    const st = (mgr && mgr.state) || arkStateNow();
+    const spend = ((st && st.vtxos) || []).filter((v) => v.state === 'spendable');
     const tip = (mgr && mgr._tipH) || 0;
     const back = () => { ui.arkCoinsPage = null; ui.arkCoinsSel = null; render(); };
     if (!spend.length) { ui.arkCoinsPage = null; return null; } // nothing left to manage
+    if (!mgr) connectArk().then(() => render()).catch(() => {});
     const totalSat = spend.reduce((n, v) => n + v.amountSat, 0);
     let exitFee = 0; try { exitFee = estimateExitFeeSat(mgr); } catch {}
     const feeRate = Math.max(1, (wallet.feeRates && wallet.feeRates.halfHourFee) || 2);
@@ -2071,15 +2077,15 @@ export function arkFeature(ctx) {
     const exitFeeOf = (v) => {
       try {
         let f = Math.ceil(150 * feeRate);
-        for (const vsize of exitTxVsizes(mgr._decoded(v), mgr.serverPub)) f += Math.ceil((vsize + 130) * feeRate);
+        if (mgr) for (const vsize of exitTxVsizes(mgr._decoded(v), mgr.serverPub)) f += Math.ceil((vsize + 130) * feeRate);
         return f;
       } catch { return null; }
     };
     // The server prices a renewal by how much lifetime each coin still
     // carries (its ppm bracket) — waiting IS cheaper, and inside the final
     // bracket it's free, where the wallet renews on its own anyway.
-    const table = ((mgr.info || {}).refreshFees || {}).ppmExpiryTable || [];
-    const roundMins = Math.max(1, Math.round(((mgr.info || {}).roundIntervalSecs || 120) / 60));
+    const table = (((mgr && mgr.info) || {}).refreshFees || {}).ppmExpiryTable || [];
+    const roundMins = Math.max(1, Math.round((((mgr && mgr.info) || {}).roundIntervalSecs || 120) / 60));
     const roundEvery = roundMins === 1 ? t('arkCoinsRoundEveryOne') : t('arkCoinsRoundEvery', { n: roundMins });
     const ppmFor = (blocks) => (table.filter((e) => e.thresholdBlocks <= blocks).pop()?.ppm) ?? 0;
     // A coin's SHARE of the renewal fee, fractional: the server totals the
@@ -2118,7 +2124,7 @@ export function arkFeature(ctx) {
     const selCoins = spend.filter((v) => sel.has(v.id));
     let selFee = 0; try { selFee = mgr.refreshFee(selCoins, tip); } catch {}
     const renew = () => {
-      if (!selCoins.length) return;
+      if (!selCoins.length || !mgr) return;
       // fire and let the round machinery carry it — rounds can be an hour out
       mgr.refresh(selCoins.map((v) => v.id)).catch((e) => toast(e.message));
       toast(t('arkDepthRenewed'));
@@ -2208,7 +2214,7 @@ export function arkFeature(ctx) {
           ...schedule.map((r) => h('div', { class: 'row between' },
             h('span', { class: 'small muted' }, r.label),
             h('span', { class: 'small' + (r.free ? ' faint' : '') }, r.cost)))) : null,
-        h('button', { class: 'btn-primary btn-block', disabled: !!ui.arkBusy || !selCoins.length, onClick: renew },
+        h('button', { class: 'btn-primary btn-block', disabled: !!ui.arkBusy || !selCoins.length || !mgr, onClick: renew },
           !selCoins.length ? t('arkCoinsRenewNone')
             : selCoins.length < spend.length
               ? t('arkCoinsRenewSome', { n: selCoins.length, fee: selFee > 0 ? fmtSats(selFee) + ' sats' : t('arkDepthFree') })
@@ -2217,7 +2223,7 @@ export function arkFeature(ctx) {
         h('h4', { style: 'margin:0' }, t('arkCoinsExitTitle')),
         h('p', { class: 'small muted', style: 'margin:0' },
           t('arkCoinsExitDesc', { fee: fmtSats(exitFee), after: fmtSats(afterFee) })),
-        h('button', { class: 'btn-ghost btn-block', disabled: !!ui.arkBusy || !spend.length, onClick: () => { ui.arkExitConfirm = true; render(); } }, t('arkCoinsExitBtn'))),
+        h('button', { class: 'btn-ghost btn-block', disabled: !!ui.arkBusy || !spend.length || !mgr, onClick: () => { ui.arkExitConfirm = true; render(); } }, t('arkCoinsExitBtn'))),
       h('button', { class: 'btn-ghost btn-block', onClick: back }, t('back')));
   }
 

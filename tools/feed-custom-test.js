@@ -23,7 +23,8 @@ const seeded = [signed('hello from the feed, about #bitcoin today', 300), signed
 const CURATOR_SK = generateSecretKey();
 const MEMBER = getPublicKey(generateSecretKey());
 const PACK = finalizeEvent({ kind: 39089, created_at: Math.floor(Date.now() / 1000) - 100, tags: [['d', 'test-pack'], ['title', 'Test pack'], ['p', MEMBER]], content: '' }, CURATOR_SK);
-const PACK_LINK = 'https://following.space/d/' + naddrEncode({ kind: 39089, pubkey: PACK.pubkey, identifier: 'test-pack', relays: [] });
+const PACK_LINK = 'https://following.space/d/test-pack?p=' + PACK.pubkey; // the form following.space shares
+const PACK_NADDR = naddrEncode({ kind: 39089, pubkey: PACK.pubkey, identifier: 'test-pack', relays: [] });
 
 const html = await buildHtml({ minify: true, pwa: false });
 const server = Bun.serve({ port: 5297, fetch: () => new Response(html, { headers: { 'content-type': 'text/html' } }) });
@@ -130,9 +131,16 @@ try {
   console.log('\n[a follow pack from following.space]');
   await page.click('.feed-chip.add'); await sleep(300);
   await type('input[placeholder="e.g. Bitcoin builders"]', 'Pack feed');
+  await type('input[placeholder="Search packs, or paste a following.space link…"]', 'tes');
+  check('a few letters of the title find the pack', await waitText('test pack', 8000) && await waitText('1 members', 2000));
+  await type('input[placeholder="Search packs, or paste a following.space link…"]', 'zzzz');
+  await sleep(900);
+  check('...and letters that match nothing find nothing', !(await page.evaluate(() => document.body.innerText)).includes('Test pack'));
+  await type('input[placeholder="Search packs, or paste a following.space link…"]', PACK_NADDR);
+  check('a bare naddr finds it', await waitText('test pack', 6000));
   await type('input[placeholder="Search packs, or paste a following.space link…"]', PACK_LINK);
-  const found = await waitText('test pack', 6000);
-  check('a pasted following.space link finds the pack', found && await waitText('1 members', 2000));
+  await sleep(900);
+  check('a pasted following.space link finds it', await waitText('test pack', 6000));
   await page.evaluate(() => [...document.querySelectorAll('.row')].find((r) => /Test pack/.test(r.textContent) && !r.querySelector('button')).click()); await sleep(300);
   check('...and adds it to the feed', await page.evaluate(() => [...document.querySelectorAll('.row')].some((r) => /Test pack/.test(r.textContent) && r.querySelector('button'))));
   await page.evaluate(() => { window.__reqs = []; });

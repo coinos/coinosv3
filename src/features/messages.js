@@ -3625,13 +3625,39 @@ export function messagesFeature(ctx) {
     return packMembers;
   };
   const packOf = (p) => packsNow()[packKey(p)] || null;
-  // A pasted following.space link, a bare naddr, or nostr:naddr — the pack it names.
+  // A pasted following.space link (/d/<id>?p=<pubkey>), a bare naddr, or
+  // nostr:naddr — the pack it names.
   function parsePackLink(input) {
-    const m = /naddr1[a-z0-9]+/i.exec(String(input || ''));
-    if (!m) return null;
-    const ref = parseNostrRef(m[0].toLowerCase());
-    if (!ref || ref.type !== 'addr' || ref.kind !== PACK_KIND) return null;
-    return { pk: ref.pk, d: ref.d, relays: ref.relays || [] };
+    const s = String(input || '').trim();
+    const m = /naddr1[a-z0-9]+/i.exec(s);
+    if (m) {
+      const ref = parseNostrRef(m[0].toLowerCase());
+      return ref && ref.type === 'addr' && ref.kind === PACK_KIND ? { pk: ref.pk, d: ref.d, relays: ref.relays || [] } : null;
+    }
+    const link = /\/d\/([^/?#\s]+)[^?\s]*\?(?:[^#\s]*&)?p=([0-9a-f]{64})/i.exec(s);
+    if (link) return { pk: link[2].toLowerCase(), d: decodeURIComponent(link[1]), relays: [] };
+    return null;
+  }
+  // Every pack the wide relays hold, once per session: the way to find one
+  // by a few letters of its title — NIP-50 search only knows the packs the
+  // search relay happens to carry, and most live on damus / nos.lol.
+  let packIndex = null;
+  function loadPackIndex() {
+    if (packIndex) return packIndex;
+    packIndex = (async () => {
+      const relays = [...new Set([...PACK_RELAYS, 'wss://relay.damus.io', 'wss://nos.lol'])];
+      const all = await Promise.all(relays.map((r) => queryOn([r], { kinds: [PACK_KIND], limit: 500 }, 6000).catch(() => [])));
+      const newest = new Map();
+      for (const ev of all.flat()) {
+        const p = packFromEvent(ev);
+        if (!p.pks.length) continue;
+        const cur = newest.get(packKey(p));
+        if (!cur || p.at > cur.at) newest.set(packKey(p), { ...p, desc: (ev.tags.find((x) => x[0] === 'description') || [])[1] || '' });
+      }
+      return [...newest.values()];
+    })();
+    packIndex.catch(() => { packIndex = null; });
+    return packIndex;
   }
   const packFromEvent = (ev) => ({
     pk: ev.pubkey, d: (ev.tags.find((x) => x[0] === 'd') || [])[1] || '',
@@ -5935,16 +5961,15 @@ export function messagesFeature(ctx) {
       const got = await fetchPack(link).catch(() => null);
       rows = got ? [{ ...link, title: got.title, n: got.pks.length }] : [];
     } else {
-      const evs = await queryOn(['wss://relay.nostr.band'], { kinds: [PACK_KIND], search: q, limit: 12 }, 4000).catch(() => []);
-      const seen = new Set();
-      for (const ev of (evs || []).sort((a, b) => b.created_at - a.created_at)) {
-        const p = packFromEvent(ev);
-        if (!p.pks.length || seen.has(packKey(p))) continue;
-        seen.add(packKey(p));
+      const words = q.toLowerCase().split(/\s+/).filter(Boolean);
+      const index = await loadPackIndex().catch(() => []);
+      const hits = index.filter((p) => { const hay = (p.title + ' ' + p.desc).toLowerCase(); return words.every((w) => hay.includes(w)); })
+        .sort((a, b) => b.pks.length - a.pks.length).slice(0, 12);
+      for (const p of hits) {
         packsNow()[packKey(p)] ||= { pks: p.pks, title: p.title, at: p.at };
         rows.push({ pk: p.pk, d: p.d, relays: [], title: p.title, n: p.pks.length });
       }
-      try { wallet.saveFeatureState(PACK_CACHE, packsNow()); } catch {}
+      if (hits.length) { try { wallet.saveFeatureState(PACK_CACHE, packsNow()); } catch {} }
     }
     if (seq !== packSearchSeq || !ui.feedEdit) return;
     ui.feedEdit.packRows = rows;

@@ -1104,7 +1104,7 @@ function createPane() {
           h('div', { class: 'w' }, h('span', { class: 'n' }, i + 1), h('span', { class: 't' }, w))
         )
       ),
-      h('div', { class: 'row gap6' }, copyBtn(ui.draftMnemonic, t('copyPhrase'))),
+      h('button', { class: 'btn-block', onClick: () => copy(ui.draftMnemonic) }, t('copyPhrase')),
       optionsPanel(),
       h(
         'button',

@@ -3609,6 +3609,80 @@ export function messagesFeature(ctx) {
     return st().feeds.find((f) => f.id === id) || adhocFeeds.get(id) || null;
   }
   const normTopic = (x) => String(x || '').trim().replace(/^#/, '').toLowerCase();
+  // ---- follow packs (NIP-51 kind 39089, what following.space publishes) ---
+  // A feed can name packs instead of (or as well as) people: the pack's
+  // current members are its authors, read from the pack event itself, so
+  // a curator adding someone reaches your feed without you doing anything.
+  // Members are cached on disk so a cold boot paints the feed at once, and
+  // refreshed from the relays when a feed that uses them is opened.
+  const PACK_KIND = 39089;
+  const PACK_CACHE = 'followPacks';
+  const PACK_RELAYS = [...new Set([...PROFILE_RELAYS, 'wss://relay.nostr.band'])];
+  const packKey = (p) => p.pk + ':' + p.d;
+  let packMembers = null; // key -> { pks, title, at }
+  const packsNow = () => {
+    if (!packMembers) { try { packMembers = wallet.loadFeatureState(PACK_CACHE, {}) || {}; } catch { packMembers = {}; } }
+    return packMembers;
+  };
+  const packOf = (p) => packsNow()[packKey(p)] || null;
+  // A pasted following.space link, a bare naddr, or nostr:naddr — the pack it names.
+  function parsePackLink(input) {
+    const m = /naddr1[a-z0-9]+/i.exec(String(input || ''));
+    if (!m) return null;
+    const ref = parseNostrRef(m[0].toLowerCase());
+    if (!ref || ref.type !== 'addr' || ref.kind !== PACK_KIND) return null;
+    return { pk: ref.pk, d: ref.d, relays: ref.relays || [] };
+  }
+  const packFromEvent = (ev) => ({
+    pk: ev.pubkey, d: (ev.tags.find((x) => x[0] === 'd') || [])[1] || '',
+    title: (ev.tags.find((x) => x[0] === 'title') || [])[1] || '',
+    pks: [...new Set(ev.tags.filter((x) => x[0] === 'p' && /^[0-9a-f]{64}$/i.test(x[1] || '')).map((x) => x[1].toLowerCase()))],
+    at: ev.created_at,
+  });
+  const packFetching = new Map();
+  async function fetchPack(p) {
+    const key = packKey(p);
+    if (packFetching.has(key)) return packFetching.get(key);
+    const job = (async () => {
+      const relays = [...new Set([...(p.relays || []), ...PACK_RELAYS])];
+      const evs = await queryOn(relays, { kinds: [PACK_KIND], authors: [p.pk], '#d': [p.d] }, 4500).catch(() => []);
+      const newest = (evs || []).sort((a, b) => b.created_at - a.created_at)[0];
+      if (!newest) return packOf(p);
+      const got = packFromEvent(newest);
+      const cur = packOf(p);
+      if (cur && cur.at >= got.at) return cur;
+      packsNow()[key] = { pks: got.pks, title: got.title, at: got.at };
+      try { wallet.saveFeatureState(PACK_CACHE, packsNow()); } catch {}
+      return packsNow()[key];
+    })().finally(() => packFetching.delete(key));
+    packFetching.set(key, job);
+    return job;
+  }
+  // Make sure a feed's packs are read (or re-read: once an hour is plenty
+  // for a curated list), and rebuild the feed when its authors grew.
+  const PACK_TTL = 60 * 60_000;
+  const packRefreshed = new Map(); // key -> ms
+  function resolvePacks(def) {
+    const packs = (def && def.packs) || [];
+    if (!packs.length) return;
+    const due = packs.filter((p) => !packOf(p) || Date.now() - (packRefreshed.get(packKey(p)) || 0) > PACK_TTL);
+    if (!due.length) return;
+    for (const p of due) packRefreshed.set(packKey(p), Date.now());
+    Promise.all(due.map((p) => fetchPack(p).catch(() => null))).then(() => {
+      const c = feedStates.get(def.id);
+      if (!c) return;
+      c.at = 0;
+      if (c === feed) refreshFeed({ live: false }, c); else feedStates.delete(def.id);
+      scheduleRepaint();
+    });
+  }
+  // The packs' members, from cache; asks the relays on the side when stale.
+  function packAuthors(def) {
+    const out = new Set();
+    for (const p of (def && def.packs) || []) for (const pk of (packOf(p) || {}).pks || []) out.add(pk);
+    resolvePacks(def);
+    return out;
+  }
   const feedTopics = (def = feedDef()) => [...new Set(((def && def.topics) || []).map(normTopic).filter(Boolean))].slice(0, 20);
   const feedHasQuery = (def = feedDef()) => !!def && (feedAuthors(def).length > 0 || feedTopics(def).length > 0);
   const feedCacheKey = (id) => (id === FOLLOWING ? FEED_CACHE : FEED_CACHE + ':' + id);
@@ -3643,6 +3717,7 @@ export function messagesFeature(ctx) {
     if (!def) return [];
     const set = new Set(def.follows ? followsNow().set : []);
     for (const pk of def.authors || []) if (pk) set.add(pk);
+    for (const pk of packAuthors(def)) set.add(pk);
     return [...set].slice(0, FEED_AUTHORS_MAX);
   };
 
@@ -5723,8 +5798,9 @@ export function messagesFeature(ctx) {
       ? ((f.authors || []).length ? t('feedSumFollowsPlus', { n: f.authors.length }) : t('feedSumFollows'))
       : (f.authors || []).length === 1 ? displayName(f.authors[0])
         : (f.authors || []).length ? t('feedSumPeople', { n: f.authors.length }) : '';
+    const packs = ((f.packs || []).map((p) => (packOf(p) || {}).title || p.title).filter(Boolean)).join(', ');
     const topics = feedTopics(f).map((x) => '#' + x).join(' ');
-    return [people, topics].filter(Boolean).join(' \u00b7 ') || t('feedNoQuery');
+    return [people, packs, topics].filter(Boolean).join(' \u00b7 ') || t('feedNoQuery');
   }
   // The row of feeds under the title: Following, then yours, then + for
   // a new one. A topic opened for the session sits at the end until saved.
@@ -5809,9 +5885,9 @@ export function messagesFeature(ctx) {
   // has the same feeds.
   function openFeedEditor(def) {
     ui.feedEdit = def
-      ? { id: def.id, name: def.name || '', follows: !!def.follows, authors: [...(def.authors || [])],
-          topics: feedTopics(def).map((x) => '#' + x).join(' '), q: '', rows: null, isNew: adhocFeeds.has(def.id) }
-      : { id: null, name: '', follows: false, authors: [], topics: '', q: '', rows: null, isNew: true };
+      ? { id: def.id, name: def.name || '', follows: !!def.follows, authors: [...(def.authors || [])], packs: [...(def.packs || [])],
+          topics: feedTopics(def).map((x) => '#' + x).join(' '), q: '', rows: null, pq: '', packRows: null, isNew: adhocFeeds.has(def.id) }
+      : { id: null, name: '', follows: false, authors: [], packs: [], topics: '', q: '', rows: null, pq: '', packRows: null, isNew: true };
     render();
   }
   const feedPeopleSearcher = makeSearcher((q, rows) => {
@@ -5823,12 +5899,12 @@ export function messagesFeature(ctx) {
     const e = ui.feedEdit;
     if (!e) return;
     const topics = [...new Set(e.topics.split(/[\s,]+/).map(normTopic).filter(Boolean))].slice(0, 20);
-    if (!e.follows && !e.authors.length && !topics.length) { toast(t('feedNoQuery')); return; }
+    if (!e.follows && !e.authors.length && !e.packs.length && !topics.length) { toast(t('feedNoQuery')); return; }
     const name = e.name.trim().slice(0, 40) || (topics.length ? '#' + topics[0] : t('feedNewName'));
     const s = st();
     const keep = e.id && !adhocFeeds.has(e.id) && s.feeds.some((f) => f.id === e.id);
     const id = keep ? e.id : 'f' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-    const def = { id, name, follows: e.follows, authors: e.authors.slice(0, FEED_AUTHORS_MAX), topics, at: Date.now() };
+    const def = { id, name, follows: e.follows, authors: e.authors.slice(0, FEED_AUTHORS_MAX), packs: e.packs.slice(0, 20), topics, at: Date.now() };
     if (keep) s.feeds = s.feeds.map((f) => (f.id === id ? { ...f, ...def } : f)); else s.feeds.push(def);
     save(s);
     if (e.id && adhocFeeds.has(e.id)) adhocFeeds.delete(e.id);
@@ -5845,8 +5921,43 @@ export function messagesFeature(ctx) {
     ui.feedEdit = null;
     if (curFeedId === id) switchFeed(FOLLOWING); else render();
   }
+  // Packs by title, NIP-50 search on a relay that indexes them; a pasted
+  // link or naddr is looked up directly.
+  let packSearchSeq = 0;
+  async function searchPacks(q) {
+    const e = ui.feedEdit;
+    const seq = ++packSearchSeq;
+    q = String(q || '').trim();
+    if (!e || q.length < 2) { if (e) e.packRows = null; render(); return; }
+    const link = parsePackLink(q);
+    let rows = [];
+    if (link) {
+      const got = await fetchPack(link).catch(() => null);
+      rows = got ? [{ ...link, title: got.title, n: got.pks.length }] : [];
+    } else {
+      const evs = await queryOn(['wss://relay.nostr.band'], { kinds: [PACK_KIND], search: q, limit: 12 }, 4000).catch(() => []);
+      const seen = new Set();
+      for (const ev of (evs || []).sort((a, b) => b.created_at - a.created_at)) {
+        const p = packFromEvent(ev);
+        if (!p.pks.length || seen.has(packKey(p))) continue;
+        seen.add(packKey(p));
+        packsNow()[packKey(p)] ||= { pks: p.pks, title: p.title, at: p.at };
+        rows.push({ pk: p.pk, d: p.d, relays: [], title: p.title, n: p.pks.length });
+      }
+      try { wallet.saveFeatureState(PACK_CACHE, packsNow()); } catch {}
+    }
+    if (seq !== packSearchSeq || !ui.feedEdit) return;
+    ui.feedEdit.packRows = rows;
+    render();
+  }
   function feedEditView() {
     const e = ui.feedEdit;
+    const packRow = (p, onTap, extra) => h('div', { class: 'row gap6', style: 'align-items:center' + (onTap ? ';cursor:pointer' : ''), onClick: onTap },
+      h('div', { class: 'chat-avatar fallback mini' }, '\u2605'),
+      h('div', { class: 'col grow', style: 'min-width:0' },
+        h('span', { style: 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap' }, (packOf(p) || {}).title || p.title || t('feedPackUntitled')),
+        h('span', { class: 'small muted' }, t('feedPackMembers', { n: (packOf(p) || {}).pks?.length ?? p.n ?? 0 }))),
+      extra || null);
     const person = (pk) => h('div', { class: 'row gap6', style: 'align-items:center' },
       avatar(pk, 'chat-avatar mini', false),
       h('span', { class: 'grow', style: 'min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' }, displayName(pk)),
@@ -5876,6 +5987,21 @@ export function messagesFeature(ctx) {
               e.authors.push(r.pk); e.q = ''; e.rows = null; render();
             }, (pk, node) => hook('wrapAvatar', pk, node)))
           : null),
+      h('div', { class: 'col', style: 'gap:8px' },
+        h('span', { class: 'small muted' }, t('feedPacks')),
+        ...e.packs.map((p) => packRow(p, null,
+          h('button', { class: 'btn-sm', type: 'button', 'aria-label': t('remove'), onClick: () => { e.packs = e.packs.filter((x) => packKey(x) !== packKey(p)); render(); } }, '\u00d7'))),
+        h('input', {
+          type: 'text', class: 'user-search-input', placeholder: t('feedAddPack'), value: e.pq,
+          autocapitalize: 'none', autocomplete: 'off', spellcheck: 'false',
+          onInput: (ev) => { e.pq = ev.target.value; clearTimeout(e.pt); e.pt = setTimeout(() => searchPacks(e.pq), 350); },
+        }),
+        h('div', { class: 'small faint' }, t('feedPacksHelp')),
+        ...(e.packRows || []).filter((r) => !e.packs.some((x) => packKey(x) === packKey(r))).map((r) => packRow(r, () => {
+          e.packs.push({ pk: r.pk, d: r.d, relays: r.relays || [], title: r.title || '' });
+          e.pq = ''; e.packRows = null; render();
+        })),
+        e.packRows && !e.packRows.length ? h('div', { class: 'small faint' }, t('searchNoResults')) : null),
       h('label', { class: 'col', style: 'gap:4px' },
         h('span', { class: 'small muted' }, t('feedTopics')),
         h('input', { type: 'text', value: e.topics, placeholder: t('feedTopicsHint'), autocapitalize: 'none', autocomplete: 'off', onInput: (ev) => { e.topics = ev.target.value; } }),
@@ -6263,7 +6389,7 @@ export function messagesFeature(ctx) {
         class: 'item chat-thread-row',
         onClick: () => { ui.msgView = 'feed'; switchFeed(f.id); },
       },
-      h('div', { class: 'chat-avatar fallback' }, feedTopics(f).length && !f.follows && !(f.authors || []).length ? '#' : '\u2605'),
+      h('div', { class: 'chat-avatar fallback' }, feedTopics(f).length && !f.follows && !(f.authors || []).length && !(f.packs || []).length ? '#' : '\u2605'),
       h('div', { class: 'col grow', style: 'min-width:0;gap:1px' },
         h('span', { class: 'chat-name' }, f.name),
         h('div', { class: 'muted small chat-preview' }, feedSummary(f))))),

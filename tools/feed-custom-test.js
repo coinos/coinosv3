@@ -9,6 +9,7 @@ import { generateMnemonic } from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english';
 import { cacheKeyFor } from '../src/wallet.js';
 import { generateSecretKey, getPublicKey, finalizeEvent } from 'nostr-tools/pure';
+import { naddrEncode } from 'nostr-tools/nip19';
 import { buildHtml } from '../build.js';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let ok = true;
@@ -18,13 +19,19 @@ const AUTHOR = getPublicKey(SK);
 const OTHER_SK = generateSecretKey();
 const signed = (content, ago, tags = [], sk = SK) => finalizeEvent({ kind: 1, created_at: Math.floor(Date.now() / 1000) - ago, tags, content }, sk);
 const seeded = [signed('hello from the feed, about #bitcoin today', 300), signed('plain post', 600)];
+// a follow pack (NIP-51 kind 39089) curated by someone else, with one member
+const CURATOR_SK = generateSecretKey();
+const MEMBER = getPublicKey(generateSecretKey());
+const PACK = finalizeEvent({ kind: 39089, created_at: Math.floor(Date.now() / 1000) - 100, tags: [['d', 'test-pack'], ['title', 'Test pack'], ['p', MEMBER]], content: '' }, CURATOR_SK);
+const PACK_LINK = 'https://following.space/d/' + naddrEncode({ kind: 39089, pubkey: PACK.pubkey, identifier: 'test-pack', relays: [] });
 
 const html = await buildHtml({ minify: true, pwa: false });
 const server = Bun.serve({ port: 5297, fetch: () => new Response(html, { headers: { 'content-type': 'text/html' } }) });
 const browser = await puppeteer.launch({ executablePath: '/usr/bin/google-chrome', headless: 'new', args: ['--no-sandbox'] });
 const page = await browser.newPage();
-await page.evaluateOnNewDocument(() => {
+await page.evaluateOnNewDocument((pack) => {
   window.__reqs = [];
+  window.__pack = pack;
   const subs = [];
   const Real = window.WebSocket;
   window.WebSocket = function (...a) {
@@ -34,6 +41,12 @@ await page.evaluateOnNewDocument(() => {
       try {
         const m = JSON.parse(data);
         if (m[0] === 'REQ' && m[2] && Array.isArray(m[2].kinds) && m[2].kinds.includes(1)) { window.__reqs.push(m[2]); subs.push([ws, m[1], m[2]]); }
+        if (m[0] === 'REQ' && m[2] && Array.isArray(m[2].kinds) && m[2].kinds.includes(39089) && (!m[2].authors || m[2].authors.includes(window.__pack.pubkey))) {
+          setTimeout(() => {
+            ws.dispatchEvent(new MessageEvent('message', { data: JSON.stringify(['EVENT', m[1], window.__pack]) }));
+            ws.dispatchEvent(new MessageEvent('message', { data: JSON.stringify(['EOSE', m[1]]) }));
+          }, 0);
+        }
       } catch {}
       return send(data);
     };
@@ -41,6 +54,7 @@ await page.evaluateOnNewDocument(() => {
   };
   window.WebSocket.prototype = Real.prototype;
   Object.assign(window.WebSocket, Real);
+  window.__origOpen = true;
   // hand a post to every open kind-1 subscription whose filter it matches
   window.__inject = (ev) => {
     let n = 0;
@@ -53,7 +67,7 @@ await page.evaluateOnNewDocument(() => {
     }
     return n;
   };
-});
+}, PACK);
 const errs = [];
 page.on('pageerror', (e) => errs.push(String(e)));
 const click = (t) => page.evaluate((x) => { const e = [...document.querySelectorAll('button')].find((n) => n.textContent.trim().toLowerCase().includes(x)); if (e) { e.click(); return true; } return false; }, t);
@@ -113,17 +127,32 @@ try {
   const treq = (await page.evaluate(() => window.__reqs)).filter((f) => f['#t'] && !f.authors).pop();
   check('...asked for by topic alone', !!treq && JSON.stringify(treq['#t']) === JSON.stringify(['bitcoin']), JSON.stringify(treq || null));
 
+  console.log('\n[a follow pack from following.space]');
+  await page.click('.feed-chip.add'); await sleep(300);
+  await type('input[placeholder="e.g. Bitcoin builders"]', 'Pack feed');
+  await type('input[placeholder="Search packs, or paste a following.space link…"]', PACK_LINK);
+  const found = await waitText('test pack', 6000);
+  check('a pasted following.space link finds the pack', found && await waitText('1 members', 2000));
+  await page.evaluate(() => [...document.querySelectorAll('.row')].find((r) => /Test pack/.test(r.textContent) && !r.querySelector('button')).click()); await sleep(300);
+  check('...and adds it to the feed', await page.evaluate(() => [...document.querySelectorAll('.row')].some((r) => /Test pack/.test(r.textContent) && r.querySelector('button'))));
+  await page.evaluate(() => { window.__reqs = []; });
+  await click('save'); await sleep(1500);
+  const anyMember = (await page.evaluate(() => window.__reqs)).some((f) => f.authors && f.authors.includes(MEMBER));
+  check('the feed asks relays for the pack\'s member', anyMember, JSON.stringify((await page.evaluate(() => window.__reqs)).map((f) => (f.authors || []).map((a) => a.slice(0, 8)))));
+
   console.log('\n[the feeds survive a reload; a feed can be deleted]');
   await page.reload({ waitUntil: 'domcontentloaded' });
   await waitText('receive', 20000);
   await page.evaluate(() => { const b = [...document.querySelectorAll('button')].find((e) => /message/i.test(e.getAttribute('aria-label') || '')); if (b) b.click(); }); await sleep(800);
   await page.evaluate(() => { const e = [...document.querySelectorAll('.item')].find((n) => /feed/i.test(n.textContent)); if (e) e.click(); }); await sleep(1200);
-  check('the saved feed is still there; the session topic is not', JSON.stringify(await chips()) === JSON.stringify(['*Following', 'Coin talk', '+']), JSON.stringify(await chips()));
+  check('the saved feeds are still there; the session topic is not', JSON.stringify(await chips()) === JSON.stringify(['*Following', 'Coin talk', 'Pack feed', '+']), JSON.stringify(await chips()));
+  check('the home list shows the pack feed with its pack', await page.evaluate(() => { const b = document.querySelector('.chat-back'); if (b) b.click(); return !!b; }) && await waitText('test pack', 3000));
+  await page.evaluate(() => { const e = [...document.querySelectorAll('.item')].find((n) => (n.querySelector('.chat-name') || {}).textContent === 'Feed'); if (e) e.click(); }); await sleep(800);
   await page.evaluate(() => [...document.querySelectorAll('.feed-chip')].find((c) => c.textContent.trim() === 'Coin talk').click()); await sleep(800);
   await page.evaluate(() => [...document.querySelectorAll('button')].find((b) => /edit feed/i.test(b.getAttribute('aria-label') || '')).click()); await sleep(400);
   check('the editor shows what was saved', await page.evaluate(() => document.querySelector('input[placeholder="#bitcoin #nostr"]').value === '#bitcoin #lightning' && document.querySelector('input[type=checkbox]').checked));
   await click('delete feed'); await sleep(1000);
-  check('deleting it lands back on Following', JSON.stringify(await chips()) === JSON.stringify(['*Following', '+']), JSON.stringify(await chips()));
+  check('deleting it lands back on Following', JSON.stringify(await chips()) === JSON.stringify(['*Following', 'Pack feed', '+']), JSON.stringify(await chips()));
   check('no page errors', errs.length === 0, errs.slice(0, 2).join(' | '));
 } finally { await browser.close(); server.stop(true); }
 console.log(ok ? '\n✅ feeds: Following is one of many' : '\n❌ failed');

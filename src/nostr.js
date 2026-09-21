@@ -253,6 +253,7 @@ export function parseNostrRef(input) {
     if (d.type === 'nprofile') return { type: 'pubkey', pk: d.data.pubkey, relays: d.data.relays || [] };
     if (d.type === 'note') return { type: 'event', id: d.data, relays: [] };
     if (d.type === 'nevent') return { type: 'event', id: d.data.id, relays: d.data.relays || [], author: d.data.author || null };
+    if (d.type === 'naddr') return { type: 'addr', kind: d.data.kind, pk: d.data.pubkey, d: d.data.identifier || '', relays: d.data.relays || [] };
   } catch {}
   return null;
 }

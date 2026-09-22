@@ -6840,7 +6840,14 @@ export function messagesFeature(ctx) {
           h('button', {
             class: 'btn-sm', title: t('msgInviteTitle'),
             onClick: () => { ui.msgInvitePanel = !ui.msgInvitePanel; render(); },
-          }, t('msgAddPerson')))),
+          }, t('msgAddPerson')),
+          // the door out — in the header where anyone looks for it, not in
+          // the invite panel; one tap arms it, the second leaves
+          jm.community_id === COMMUNITY.community_id ? null : h('button', {
+            class: 'btn-sm' + (ui.msgLeaveArm ? ' btn-danger' : ''), title: t('msgLeave'), 'aria-label': t('msgLeave'),
+            onClick: () => { if (ui.msgLeaveArm) leaveCommunity(room); else { ui.msgLeaveArm = true; render(); } },
+            html: ui.msgLeaveArm ? null : '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg>',
+          }, ui.msgLeaveArm ? t('msgLeaveConfirmShort') : null))),
       ui.msgInvitePanel ? invitePanel(room) : null,
       ui.msgMembers ? memberPanel(room, members) : null,
       h('div', {
@@ -6932,14 +6939,7 @@ export function messagesFeature(ctx) {
                 }, t('msgNewChannel'))))
         : null,
       // leaving discards the keys on this identity — two taps, default community exempt
-      builtin ? null : h('div', { class: 'row' },
-        h('button', {
-          class: 'btn-ghost btn-sm ' + (ui.msgLeaveArm ? 'btn-danger' : ''),
-          onClick: () => {
-            if (ui.msgLeaveArm) leaveCommunity(room);
-            else { ui.msgLeaveArm = true; render(); }
-          },
-        }, ui.msgLeaveArm ? t('msgLeaveConfirm') : t('msgLeave'))));
+      null);
   }
 
   // ---- dm thread ----------------------------------------------------------

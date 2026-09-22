@@ -507,6 +507,7 @@ const STR = {
     msgInviteSent: 'Invite sent',
     msgLeave: 'Leave community',
     msgLeaveConfirm: 'Really leave? Rejoining needs a new invite',
+    msgLeaveConfirmShort: 'Leave?',
     nostrSettings: 'Nostr',
     settingsWallet: 'Wallet',
     settingsPayments: 'Payments',

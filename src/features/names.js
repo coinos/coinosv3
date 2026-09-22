@@ -484,14 +484,11 @@ export function namesFeature(ctx) {
     // POS surfaces are MERCHANT tools: hidden for everyone else behind a
     // one-line toggle on the address card. The flag lives in the names
     // feature state, so it follows the account to every device via sync.
-    const merchant = !!st.merchant;
     return [
       card('owndomain', t('namesOwnDomain'), t('namesOwnDomainHow'),
         h('div', { class: 'addr-box break', style: 'font-size:11px' },
           `${st.name}.user._bitcoin-payment.yourdomain.com. CNAME ${st.name}.user._bitcoin-payment.${domain}.`)),
       card('ownnode', t('namesOwnNode'), t('namesOwnNodeMenuHow'), ownNodeSection()),
-      merchant ? posLinkCard(st) : null,
-      merchant ? posCard(st) : null,
       card('custom', t('namesCustom'), t('namesCustomHow'), claimForm(false)),
       card('names', t('namesTitle'), null,
         h('div', { class: 'addr-box break', style: 'font-size:14px' }, addr),
@@ -499,12 +496,16 @@ export function namesFeature(ctx) {
           copyBtn(addr, t('namesCopy')),
           h('button', { class: 'btn-ghost btn-sm', onClick: async () => {
             await release(); toast(t('namesReleased')); render();
-          } }, t('namesRelease'))),
-        h('button', {
-          class: 'linklike small', style: 'align-self:flex-start;margin-top:4px',
-          onClick: () => { save({ ...load(), merchant: !merchant }); render(); },
-        }, merchant ? t('namesMerchantHide') : t('namesMerchantShow'))),
+          } }, t('namesRelease')))),
     ].filter(Boolean);
+  }
+  // The terminal's cards live on the Point of sale settings page now — no
+  // show/hide toggle; a page of their own is the switch.
+  function posSettingsCardsForName() {
+    if (!available()) return [];
+    const st = load();
+    if (!st.name) return [];
+    return [posLinkCard(st), posCard(st)]; // the page reverses: tokens first, then the tap-to-pay link
   }
 
   // A coinos POS terminal (coinos-pos) takes payments to this name with a
@@ -945,6 +946,7 @@ export function namesFeature(ctx) {
       return null;
     },
     settingsCards() { return namesCards(); },
+    posSettingsCards() { return posSettingsCardsForName(); },
     // Settings → Nostr: the CLINK zap code (a nostr offer, so it lives with
     // the other nostr settings rather than under the payment address).
     nostrSettingsCards() {

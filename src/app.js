@@ -2503,7 +2503,7 @@ function settingsTab() {
     // matters if the phone is lost tonight
     case 'wallet': return page(a ? [recoveryCard(a), walletNameCard(a), pubkeyCard(a)] : []);
     case 'payments': return page(featureAll('settingsCards').reverse());
-    case 'pos': return page(featureAll('posSettingsCards'));
+    case 'pos': return page(featureAll('posSettingsCards').reverse()); // the till's own card first, then the terminal's
     case 'network': return page([networkCard(), explorerCard()]); // an old bookmark of the tile; the cards live under Advanced now
     case 'nostr': return nostrSettingsView();
     case 'notifications': return page(featureAll('notifySettingsCards').reverse());

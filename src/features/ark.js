@@ -2365,9 +2365,6 @@ export function arkFeature(ctx) {
       [t('arkCmpExit'), infos.map((i) => cell(i, (x) => gradedFee((x.offboardFees || {}).ppmExpiryTable, (x.offboardFees || {}).baseFeeSat)))],
       [t('arkCmpBoard'), infos.map((i) => cell(i, (x) => t('arkCmpBoardVal', { min: fmtSats(x.minBoardAmountSat || 0), n: x.requiredBoardConfirmations || 0 })))],
       [t('arkCmpMaxCoin'), infos.map((i) => cell(i, (x) => fmtSats(x.maxVtxoAmountSat || 0) + ' sats'))],
-      // a delegated refresh the server runs at a scheduled height: the wallet
-      // asks for it on any server, but only ours has been seen to honour it
-      [t('arkCmpBackstop'), cols.map((p) => t(p.id === 'coinos' ? 'arkCmpYes' : 'arkCmpUnverified'))],
     ];
     return h('div', { class: 'col', style: 'gap:6px' },
       h('table', { class: 'cmp-table' },

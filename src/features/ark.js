@@ -3495,6 +3495,24 @@ export function arkFeature(ctx) {
         if (foreignArkAddr(inv)) { ui.sendError = t('arkForeignServer'); render(); return true; }
         boardOwnAddress(inv, { connect: true }).catch(() => {});
       }
+      // A BIP-21 URI with an ark= instruction (Noah, Second's wallets, our
+      // own names): same server → pay over Ark, instant and free, with the
+      // URI's amount; another server → the on-chain address, and say why.
+      if (/^bitcoin:/i.test(inv) && arkAvailable() && !wallet.watchOnly) {
+        const dec = parseBip21Uri(inv);
+        const arkAddr = dec && dec.params && dec.params.ark;
+        if (arkAddr && isArkAddress(arkAddr)) {
+          if (foreignArkAddr(arkAddr)) { toast(t('arkForeignBip21'), 4000); return false; }
+          boardOwnAddress(arkAddr, { connect: true }).catch(() => {});
+          const s = ui.send;
+          s.recipients[0].address = arkAddr;
+          const btc = Number(dec.params.amount);
+          if (btc > 0) { s.recipients[0].amount = amountFill(Math.round(btc * 1e8)); s.max = false; }
+          ui.sendError = '';
+          render();
+          return true;
+        }
+      }
       // In a Spending wallet an on-chain address means "exit ark to there":
       // the offboard happens right in the send flow, no Move money ceremony.
       if (ctx.getAccount() === 'spending' && wallet.isOnchainAddress(inv) && arkAvailable()) {

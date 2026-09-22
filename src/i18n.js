@@ -1026,7 +1026,7 @@ const STR = {
     settingsNetworkDesc: 'Servers and explorers',
     settingsNostrDesc: 'Identity and connections',
     settingsNotifDesc: 'What buzzes this device',
-    settingsAdvancedDesc: 'Network, explorers, rarities and rescues',
+    settingsAdvancedDesc: 'Network, rarities, rescues',
     settingsPosDesc: 'Till mode, tips and the /pos link',
     unlockForLabel: 'Stay unlocked',
     unlockFor5m: '5 minutes',

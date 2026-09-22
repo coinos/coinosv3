@@ -2515,6 +2515,8 @@ function settingsTab() {
     payments: I('<path d="M13 2 4.5 13.5H11L9.5 22 18 10.5h-6.5z"/>'),
     network: I('<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 0 1 0 18M12 3a15 15 0 0 0 0 18"/>'),
     nostr: I('<circle cx="8" cy="15" r="4"/><path d="M10.9 12.1 20 3l1 1-2 2 2 2-2.5 2.5L16 8l-2.2 2.2"/>'),
+    // a till receipt: paper with a torn foot and two lines of figures
+    pos: I('<path d="M6 3h12v18l-2-1.5-2 1.5-2-1.5-2 1.5-2-1.5L6 21z"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="9" y1="12" x2="15" y2="12"/><line x1="12" y1="16" x2="15" y2="16"/>'),
     notifications: I('<path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/>'),
     advanced: I('<line x1="4" y1="8" x2="20" y2="8"/><line x1="4" y1="16" x2="20" y2="16"/><circle cx="9" cy="8" r="2.2" fill="var(--surface,#fff)"/><circle cx="15" cy="16" r="2.2" fill="var(--surface,#fff)"/>'),
   };

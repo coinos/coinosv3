@@ -39,7 +39,7 @@ await page.goto('http://localhost:5234/', { waitUntil: 'domcontentloaded' });
 await page.evaluate(() => localStorage.setItem('btc-wallet-network', 'regtest'));
 await page.reload({ waitUntil: 'domcontentloaded' }); await sleep(400);
 await click('button', 'Create a new wallet'); await sleep(300);
-await click('button', 'Import existing'); await sleep(300);
+await click('button', 'Have an existing seed'); await sleep(300);
 await page.waitForSelector('textarea'); await page.type('textarea', generateMnemonic(wordlist));
 await click('button', 'Open wallet'); await waitText('receive', 15000);
 await openMessages(); await sleep(800); await openCoinos();

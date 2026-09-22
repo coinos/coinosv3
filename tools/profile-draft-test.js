@@ -42,7 +42,7 @@ try {
   await page.evaluate(() => localStorage.setItem('btc-wallet-network', 'regtest'));
   await page.reload({ waitUntil: 'domcontentloaded' });
   await click('Create a new wallet');
-  await click('Import existing');
+  await click('Have an existing seed');
   await page.waitForSelector('textarea');
   const mnemonic = generateMnemonic(wordlist);
   await page.type('textarea', mnemonic);

@@ -67,7 +67,7 @@ try {
   console.log('\n[1] import + core wallet');
   await clickText('button', 'Create a new wallet'); // the front door gained a step
   await sleep(300);
-  await clickText('button', 'Import existing');
+  await clickText('button', 'Have an existing seed');
   await sleep(200);
   await page.type('textarea', generateMnemonic(wordlist));
   await clickText('button', 'Open wallet');

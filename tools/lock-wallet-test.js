@@ -46,7 +46,7 @@ try {
   await sleep(400);
   await click('button', 'Create a new wallet');
   await sleep(500);
-  await click('button', 'Import existing');
+  await click('button', 'Have an existing seed');
   await sleep(400);
   await page.waitForSelector('textarea');
   await page.type('textarea', generateMnemonic(wordlist));

@@ -31,7 +31,7 @@ try {
   await sleep(400);
   await click('button', 'Create a new wallet');
   await sleep(500);
-  await click('button', 'Import existing');
+  await click('button', 'Have an existing seed');
   await sleep(400);
   await page.waitForSelector('textarea');
   await page.type('textarea', generateMnemonic(wordlist));
@@ -96,7 +96,7 @@ try {
   const body2 = () => p2.evaluate(() => document.body.innerText);
   const waitText2 = async (x, ms = 20000) => { for (let i = 0; i < ms / 250; i++) { if ((await body2()).toLowerCase().includes(x.toLowerCase())) return true; await sleep(250); } return false; };
   const importWallet = async () => {
-    await click2('Import existing');
+    await click2('Have an existing seed');
     await sleep(400);
     await p2.waitForSelector('textarea');
     await p2.type('textarea', generateMnemonic(wordlist));

@@ -1447,8 +1447,8 @@ export function arkFeature(ctx) {
       m.type === 'refresh'
         ? h('div', { class: m.feeSat > 0 ? 'amount-neg' : 'small faint', style: 'font-size:20px' },
             m.feeSat > 0 ? '-' + fmtAmount(m.feeSat) + ' ' + unitLabel() : t('arkDepthFree'))
-        : h('div', { class: failed ? 'muted' : incoming ? 'amount-pos' : 'amount-neg', style: 'font-size:20px' },
-            (failed ? '' : incoming ? '+' : '-') + fmtAmount(m.amountSat, m.ts / 1000) + ' ' + unitLabel()),
+        : h('div', { class: failed ? 'muted' : incoming ? 'amount-pos' : 'amount-neg', style: 'font-size:20px;display:flex;align-items:baseline;gap:6px' },
+            (failed ? '' : incoming ? '+' : '-') + fmtAmount(m.amountSat, m.ts / 1000), unitTag()), // the unit toggles, as on the balance
       row(t('dateLabel'), new Date(m.ts).toLocaleString()),
       ctx.worthLine ? ctx.worthLine(m.amountSat, m.ts / 1000, row) : null,
       // a feature that knows more about this movement (the till: bill and tip)

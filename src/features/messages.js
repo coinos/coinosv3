@@ -3423,7 +3423,8 @@ export function messagesFeature(ctx) {
     '72bdbc57bdd6dfc4e62685051de8041d148c3c68fe42bf301f71aa6cf53e52fb', // coinos
   ];
   // The Bitcoin feed's follow pack (NIP-51 kind 39089): { pk, d, relays, title }.
-  // Until one is chosen the feed reads the #bitcoin topic instead.
+  // Until one is chosen there is no Bitcoin feed — a #bitcoin topic feed was
+  // too noisy to hand a newcomer.
   const STARTER_BITCOIN_PACK = null;
   async function seedNewIdentity({ onlyIfNoFollows = false } = {}) {
     const s = st();
@@ -3431,11 +3432,9 @@ export function messagesFeature(ctx) {
     s.seeded = Date.now();
     const at = Date.now();
     const feeds = [
-      STARTER_BITCOIN_PACK
-        ? { id: 'starter-bitcoin', name: 'Bitcoin', follows: false, authors: [], packs: [STARTER_BITCOIN_PACK], topics: [], at }
-        : { id: 'starter-bitcoin', name: 'Bitcoin', follows: false, authors: [], packs: [], topics: ['bitcoin'], at },
+      STARTER_BITCOIN_PACK ? { id: 'starter-bitcoin', name: 'Bitcoin', follows: false, authors: [], packs: [STARTER_BITCOIN_PACK], topics: [], at } : null,
       { id: 'starter-gardenstr', name: '#gardenstr', follows: false, authors: [], packs: [], topics: ['gardenstr'], at },
-    ];
+    ].filter(Boolean);
     for (const f of feeds) if (!s.feeds.some((x) => x.id === f.id)) s.feeds.push(f);
     save(s);
     if (onlyIfNoFollows) {

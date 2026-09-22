@@ -2584,9 +2584,10 @@ function advancedSettingsView() {
   return h(
     'div',
     { class: 'col', style: 'gap:16px' },
-    // which network and which explorer: changed once, if ever — advanced
+    // which network, which explorer, which Ark server: changed once, if ever
     networkCard(),
     explorerCard(),
+    ...featureAll('advancedSettingsCards'),
     wallet.watchOnly
       ? null
       : h(

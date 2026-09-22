@@ -947,6 +947,8 @@ export function namesFeature(ctx) {
     },
     settingsCards() { return namesCards(); },
     posSettingsCards() { return posSettingsCardsForName(); },
+    // the Ark server changed: the name's ark= instruction must follow
+    namesRefresh() { refresh().catch(() => {}); return true; },
     // Settings → Nostr: the CLINK zap code (a nostr offer, so it lives with
     // the other nostr settings rather than under the payment address).
     nostrSettingsCards() {

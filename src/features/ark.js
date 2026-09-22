@@ -10,12 +10,12 @@ import { ArkManager } from '../ark/manager.js';
 import { loadBg, saveBg, buildBg, disarmSiblingRecords } from '../nwc-bg.js';
 import { boardFee, p2trAddress } from '../ark/board.js';
 import { maybeBolt11, maybeLnInvoice, lnSendFee } from '../ark/lightning.js';
-import { decodeVtxo, getVtxoStatus, VTXO_STATE_SPENT, concatBytes, vtxoBytesFromStr, vtxoBytesToHex } from '../ark/proto.js';
+import { decodeVtxo, getVtxoStatus, VTXO_STATE_SPENT, concatBytes, vtxoBytesFromStr, vtxoBytesToHex, decodeAddress, arkIdFromServerPubkey } from '../ark/proto.js';
 import { arkStore } from '../ark/store.js';
 import { signedExitTxs, exitTxVsizes, buildBumpChild, buildExitClaim, submitPackage } from '../ark/exit.js';
 import { utxoId } from '../wallet.js';
 import {
-  getNetwork, setNetwork, getArkProviderId, getArkConfig,
+  getNetwork, setNetwork, getArkProviderId, getArkConfig, setArkProviderId, arkPresets, getArkCustom, setArkCustom,
 } from '../api.js';
 import { t } from '../i18n.js';
 import { resolveBip353, parsePaymentName, parseBip21 as parseBip21Uri } from '../bip353.js';
@@ -1635,7 +1635,7 @@ export function arkFeature(ctx) {
         const dec = parseBip21Uri(uri);
         if (!dec) continue;
         const arkAddr = dec.params && dec.params.ark;
-        if (arkAddr && isArkAddress(arkAddr)) {
+        if (arkAddr && isArkAddress(arkAddr) && !foreignArkAddr(arkAddr)) {
           Object.assign(z, { status: 'ready', address: arkAddr });
           if (z.autoSat) return auto();
           render();
@@ -1705,6 +1705,24 @@ export function arkFeature(ctx) {
       } }, t('back')));
   }
 
+  // An Ark address names its server (the first bytes are a hash of the
+  // server key). One on a different server than ours can't take an arkoor
+  // send — the pay ladder falls through to Lightning for such a person, and
+  // a pasted one is refused with the reason rather than a gRPC error.
+  function myArkId() {
+    try {
+      if (ark && ark.serverPub) return hex.encode(arkIdFromServerPubkey(ark.serverPub));
+      const st = arkStateNow();
+      if (st && st.serverPubkey) return hex.encode(arkIdFromServerPubkey(hex.decode(st.serverPubkey)));
+    } catch {}
+    return null;
+  }
+  function foreignArkAddr(addr) {
+    try {
+      const mine = myArkId();
+      return !!mine && decodeAddress(String(addr).trim()).arkId !== mine;
+    } catch { return false; }
+  }
   async function lookupArkZapTarget(pk) {
     const events = await wallet.nostrFetch({ kinds: [ARK_INFO_KIND], authors: [pk] }, 6000);
     const ev = (events || []).sort((a, b) => b.created_at - a.created_at)[0];
@@ -1713,6 +1731,7 @@ export function arkFeature(ctx) {
     const net = (ev.tags.find((t) => t[0] === 'network') || [])[1];
     if (!addr) return { status: 'noark' };
     if (net && net !== getNetwork()) return { status: 'wrongnet', net };
+    if (foreignArkAddr(addr)) return { status: 'noark', foreign: true }; // their server isn't ours: Lightning it is
     return { status: 'ready', address: addr };
   }
 
@@ -2265,6 +2284,53 @@ export function arkFeature(ctx) {
           t('arkCoinsExitDesc', { fee: fmtSats(exitFee), after: fmtSats(afterFee) })),
         h('button', { class: 'btn-ghost btn-block', disabled: !!ui.arkBusy || !spend.length || !mgr, onClick: () => { ui.arkExitConfirm = true; render(); } }, t('arkCoinsExitBtn'))),
       h('button', { class: 'btn-ghost btn-block', onClick: back }, t('back')));
+  }
+
+  // Settings → Advanced: which Ark server. The state is kept per server, so
+  // coins held with the old one aren't lost by switching — but they can't be
+  // spent from the new one; the card says what's held before it lets go.
+  function arkServerCard() {
+    if (wallet.watchOnly) return null;
+    const net = getNetwork();
+    const presets = arkPresets(net);
+    const cur = getArkProviderId(net);
+    const custom = ui.arkCustomDraft || (ui.arkCustomDraft = getArkCustom(net));
+    const held = arkBalance() ? (arkBalance().spendableSat || 0) + (arkBalance().pendingSat || 0) : 0;
+    const apply = (id) => {
+      if (id === cur && id !== 'custom') return;
+      if (id === 'custom' && !(custom.ark && custom.esplora)) { toast(t('arkServerCustomNeeded')); return; }
+      if (id === 'custom') setArkCustom(custom, net);
+      setArkProviderId(id, net);
+      ui.arkSwitchConfirm = null;
+      ui.arkRecvAddr = null; // the reusable address belongs to the old server
+      stopArk();
+      initArk();
+      // the payment name's ark= instruction and the nostr advert name the
+      // server's address: both follow the switch once the new one answers
+      connectArk().then((mgr) => { announceArkAddress(mgr); ctx.hook('namesRefresh'); }).catch(() => {});
+      toast(t('arkServerSwitched'));
+      render();
+    };
+    const pick = (id) => {
+      if (id === cur) return;
+      if (held > 0 && id !== 'custom') { ui.arkSwitchConfirm = id; render(); return; }
+      if (id === 'custom') { ui.arkSwitchConfirm = 'custom'; render(); return; }
+      apply(id);
+    };
+    const c = ui.arkSwitchConfirm;
+    return h('div', { class: 'card col', style: 'gap:8px' },
+      h('h3', {}, t('arkServerTitle')),
+      h('p', { class: 'small muted', style: 'margin:0' }, t('arkServerDesc')),
+      h('select', { onChange: (e) => pick(e.target.value) },
+        ...presets.map((p) => h('option', { value: p.id, selected: p.id === (c || cur) }, p.label))),
+      (c === 'custom' || cur === 'custom') ? h('div', { class: 'col', style: 'gap:6px' },
+        h('input', { type: 'text', placeholder: t('arkServerCustomUrl'), value: custom.ark, autocapitalize: 'none', onInput: (e) => { custom.ark = e.target.value; } }),
+        h('input', { type: 'text', placeholder: t('arkServerCustomEsplora'), value: custom.esplora, autocapitalize: 'none', onInput: (e) => { custom.esplora = e.target.value; } })) : null,
+      c ? h('div', { class: 'col', style: 'gap:8px' },
+        held > 0 ? h('div', { class: 'notice info small' }, t('arkServerSwitchWarn', { amount: fmtSats(held) })) : null,
+        h('div', { class: 'row gap6' },
+          h('button', { class: 'btn-primary grow', onClick: () => apply(c) }, t('arkServerSwitchGo')),
+          h('button', { class: 'btn-ghost grow', onClick: () => { ui.arkSwitchConfirm = null; render(); } }, t('cancel')))) : null);
   }
 
   function autoWithdrawCard() {
@@ -3278,6 +3344,7 @@ export function arkFeature(ctx) {
     // Max for any Lightning amount form: spendable minus estimated fees.
     lnMaxSendSat() { return lnMaxSat(); },
     settingsCards() { return [autoWithdrawCard()]; },
+    advancedSettingsCards() { return [arkServerCard()].filter(Boolean); },
     // a wallet signing out takes its ark state with it, wherever it lives
     wipeCache(prefixes) { for (const p of prefixes) wallet._arkStore.removePrefix(p); },
     // The onboarding wizard's top-up step borrows the board form wholesale.
@@ -3371,7 +3438,10 @@ export function arkFeature(ctx) {
       // A raw paste of our own ark address means the same thing — start the
       // check now (the manager may need to connect); if it's ours the board
       // panel replaces the filled form a beat later.
-      if (isArkAddress(inv) && arkAvailable()) boardOwnAddress(inv, { connect: true }).catch(() => {});
+      if (isArkAddress(inv) && arkAvailable()) {
+        if (foreignArkAddr(inv)) { ui.sendError = t('arkForeignServer'); render(); return true; }
+        boardOwnAddress(inv, { connect: true }).catch(() => {});
+      }
       // In a Spending wallet an on-chain address means "exit ark to there":
       // the offboard happens right in the send flow, no Move money ceremony.
       if (ctx.getAccount() === 'spending' && wallet.isOnchainAddress(inv) && arkAvailable()) {

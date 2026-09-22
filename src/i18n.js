@@ -856,6 +856,7 @@ const STR = {
     arkCmpBackstop: 'Renews for you while the app is closed',
     arkCmpYes: 'yes',
     arkCmpNo: 'no',
+    arkCmpUnverified: 'not verified there',
     arkCmpFree: 'free',
     arkCmpFreeNear: 'free within {span} of expiry',
     arkCmpMin: 'min {n} sats',

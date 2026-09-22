@@ -5099,20 +5099,51 @@ export function messagesFeature(ctx) {
     c = { status: 'loading', rootId, root: seed.id === rootId ? seed : null, replies: seed.id === rootId ? [] : [seed] };
     threadCache.set(rootId, c);
     (async () => {
-      // the conversation's home relays are the root author's (NIP-10 outbox);
-      // the seed's author is the best guess until the root is known
-      const relays = await notesRelays((c.root || seed).pubkey);
+      // Where a thread lives: the reply's author, the people it tags (the
+      // root's author is usually first among them), the relay hints on its
+      // e tags, and ours. The reply author's relays alone missed roots
+      // written elsewhere — the thread then opened without its first post.
+      const relaysFor = async (ev) => {
+        const hints = ev.tags.filter((x) => x[0] === 'e' && /^wss?:\/\//i.test(x[2] || '')).map((x) => x[2]);
+        const people = [ev.pubkey, ...ev.tags.filter((x) => x[0] === 'p').map((x) => x[1]).slice(0, 3)];
+        const sets = await Promise.all(people.map((pk) => notesRelays(pk).catch(() => [])));
+        return [...new Set([...hints, ...sets.flat(), ...NOTE_RELAYS])].slice(0, 12);
+      };
+      let relays = await relaysFor(c.root || seed);
       const [roots, replies] = await Promise.all([
         c.root ? Promise.resolve([]) : queryOn(relays, { kinds: [1], ids: [rootId] }, 4000),
         queryOn(relays, { kinds: [1], '#e': [rootId], limit: 80 }, 4500),
       ]);
       if (!c.root) c.root = (roots || [])[0] || null;
-      const seen = new Set([rootId]);
-      c.replies = [...c.replies, ...(replies || [])]
-        .filter((e) => !seen.has(e.id) && seen.add(e.id))
+      let all = [...c.replies, ...(replies || [])];
+      // A client that tags only the note it answered leaves the root
+      // unnamed: what we resolved as the root is itself a reply. Climb —
+      // fetch ITS root and re-root the thread there — a few hops at most.
+      let top = c.root, topId = rootId;
+      for (let hop = 0; top && hop < 4; hop++) {
+        const up = rootIdOf(top);
+        if (up === top.id) break;
+        relays = [...new Set([...relays, ...(await relaysFor(top))])].slice(0, 14);
+        const [ups, more] = await Promise.all([
+          queryOn(relays, { kinds: [1], ids: [up] }, 4000),
+          queryOn(relays, { kinds: [1], '#e': [up], limit: 80 }, 4500),
+        ]);
+        const upNote = (ups || [])[0];
+        if (!upNote) break;
+        all = [...all, top, ...(more || [])];
+        top = upNote; topId = up;
+      }
+      if (topId !== rootId) {
+        c.root = top; c.rootId = topId;
+        threadCache.set(topId, c);
+        if (ui.noteThread && ui.noteThread.rootId === rootId) ui.noteThread.rootId = topId;
+      }
+      const seen = new Set([c.rootId]);
+      c.replies = all
+        .filter((e) => e && e.id !== c.rootId && !seen.has(e.id) && seen.add(e.id))
         .sort((a, b) => a.created_at - b.created_at);
       c.status = 'ready';
-      if (ui.noteThread && ui.noteThread.rootId === rootId) {
+      if (ui.noteThread && ui.noteThread.rootId === c.rootId) {
         render();
         // The inline reply box may have MOVED on this render (it slots under
         // the focused note once that note exists) — a focus taken before the
@@ -5126,7 +5157,7 @@ export function messagesFeature(ctx) {
       }
     })().catch(() => {
       c.status = 'ready';
-      if (ui.noteThread && ui.noteThread.rootId === rootId) render();
+      if (ui.noteThread && ui.noteThread.rootId === c.rootId) render();
     });
     return c;
   }

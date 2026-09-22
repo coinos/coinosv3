@@ -1408,10 +1408,12 @@ export class ArkManager {
   // calls, once per connect.
   async rescanLnReceives(depth = 6) {
     const have = new Set((this.state.actions || []).filter((a) => a.type === 'ln-recv').map((a) => a.paymentHash));
-    const start = Math.max(0, (this.state.nextLnRecvIndex || 0) - 2);
+    // from index zero: another device of this wallet (same seed, same
+    // derivation) may have minted at a LOWER index than this one's counter
+    const end = (this.state.nextLnRecvIndex || 0) + depth;
     const minCltvDelta = (this.info.vtxoExitDelta || 0) + (this.info.htlcExpiryDelta || 6) + 12 + 18 + 2;
     let found = 0;
-    for (let idx = start; idx < start + depth + 2; idx++) {
+    for (let idx = 0; idx < end; idx++) {
       const paymentHash = sha256(this._lnPreimage(idx));
       const hashHex = hex.encode(paymentHash);
       if (have.has(hashHex)) continue;

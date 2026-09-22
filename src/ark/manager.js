@@ -397,6 +397,12 @@ export class ArkManager {
   // Read new mailbox messages, fully validate incoming vtxos, then push any
   // in-flight actions forward.
   async sync() {
+    // once per connect: receives issued in this wallet's name that the
+    // state doesn't know about (see rescanLnReceives)
+    if (!this._lnRescanned) {
+      this._lnRescanned = true;
+      try { if (await this.rescanLnReceives()) await this._save(); } catch (e) { this._lnRescanned = false; }
+    }
     const baselining = !!this.state.baselinePending;
     // keep the cached tip fresh: balance() and input selection judge coin
     // expiry against it synchronously, and a stale tip hides dead coins
@@ -1394,6 +1400,40 @@ export class ArkManager {
 
   // Cancel an unpaid invoice. Only valid before HTLCs are granted; the server
   // cancel is best-effort (an abandoned hold invoice expires server-side).
+  // Receives the wallet has no record of. Preimages come from a counter, so
+  // the server can be asked about the next few indices: an invoice minted by
+  // a background answerer whose record was then overwritten (the NWC pouch is
+  // rewritten by the app's mirror), or by another device, or lost with a
+  // restored state, is found here and claimed like any other. A few gRPC
+  // calls, once per connect.
+  async rescanLnReceives(depth = 6) {
+    const have = new Set((this.state.actions || []).filter((a) => a.type === 'ln-recv').map((a) => a.paymentHash));
+    const start = Math.max(0, (this.state.nextLnRecvIndex || 0) - 2);
+    const minCltvDelta = (this.info.vtxoExitDelta || 0) + (this.info.htlcExpiryDelta || 6) + 12 + 18 + 2;
+    let found = 0;
+    for (let idx = start; idx < start + depth + 2; idx++) {
+      const paymentHash = sha256(this._lnPreimage(idx));
+      const hashHex = hex.encode(paymentHash);
+      if (have.has(hashHex)) continue;
+      let st;
+      try { st = await checkLightningReceive(this.arkUrl, paymentHash); } catch { continue; } // unknown hash: nothing issued here
+      if (!st || st.status === 'canceled') continue;
+      let expiresAt = null;
+      try { if (st.invoice) expiresAt = decodeBolt11(st.invoice).expiresAt; } catch {}
+      if (st.status === 'created' && expiresAt && Date.now() > expiresAt + 60_000) continue; // issued, never paid, long dead
+      const action = {
+        id: `lnrecv-${Date.now()}-${idx}`, type: 'ln-recv', step: 'awaiting',
+        paymentHash: hashHex, preimageIndex: idx, keyIndex: this.state.nextKeyIndex++,
+        amountSat: st.amountSat || 0, minCltvDelta, invoice: st.invoice || null, expiresAt, rescued: true,
+      };
+      this.state.actions.push(action);
+      if (idx >= (this.state.nextLnRecvIndex || 0)) this.state.nextLnRecvIndex = idx + 1;
+      found++;
+    }
+    if (found) this._save();
+    return found;
+  }
+
   async cancelLnInvoice(id) {
     const a = this.lnAction(id);
     if (!a || a.type !== 'ln-recv') throw new Error('unknown invoice');

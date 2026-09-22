@@ -2503,7 +2503,8 @@ function settingsTab() {
     // matters if the phone is lost tonight
     case 'wallet': return page(a ? [recoveryCard(a), walletNameCard(a), pubkeyCard(a)] : []);
     case 'payments': return page(featureAll('settingsCards').reverse());
-    case 'network': return page([networkCard(), explorerCard()]);
+    case 'pos': return page(featureAll('posSettingsCards'));
+    case 'network': return page([networkCard(), explorerCard()]); // an old bookmark of the tile; the cards live under Advanced now
     case 'nostr': return nostrSettingsView();
     case 'notifications': return page(featureAll('notifySettingsCards').reverse());
     case 'advanced': return advancedSettingsView();
@@ -2536,7 +2537,7 @@ function settingsTab() {
     grid([
       tile('wallet', t('settingsWallet'), t('settingsWalletDesc')),
       tile('payments', t('settingsPayments'), t('settingsPaymentsDesc')),
-      tile('network', t('settingsNetwork'), t('settingsNetworkDesc')),
+      tile('pos', t('posTitle'), t('settingsPosDesc')),
       tile('nostr', t('nostrSettings'), t('settingsNostrDesc')),
       tile('notifications', t('settingsNotifications'), t('settingsNotifDesc')),
       tile('advanced', t('advancedSettings'), t('settingsAdvancedDesc')),
@@ -2581,6 +2582,9 @@ function advancedSettingsView() {
   return h(
     'div',
     { class: 'col', style: 'gap:16px' },
+    // which network and which explorer: changed once, if ever — advanced
+    networkCard(),
+    explorerCard(),
     wallet.watchOnly
       ? null
       : h(

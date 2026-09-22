@@ -327,8 +327,8 @@ export function posFeature(ctx) {
       if (ui.screen !== 'wallet' || !ui.pos) return null;
       return posScreen();
     },
-    // Settings → Payments: the door, the mode, and where to bookmark.
-    settingsCards() {
+    // Settings → Point of sale: the door, the mode, and where to bookmark.
+    posSettingsCards() {
       const url = (typeof location !== 'undefined' ? location.origin : 'https://v3.coinos.io') + '/pos';
       return [h('div', { class: 'card col', style: 'gap:10px' },
         h('h3', {}, t('posTitle')),

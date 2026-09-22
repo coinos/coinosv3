@@ -417,6 +417,7 @@ export function arkFeature(ctx) {
     // the next connect's first tick re-decides for the wallet now open.
     arkRenewWarn = null;
     arkAutoRefreshAt = 0;
+    rescuedServers = false;
   }
 
   function arkAvailable() {
@@ -443,7 +444,7 @@ export function arkFeature(ctx) {
       store.open().then(() => { ctx.forgetAmountAnim && ctx.forgetAmountAnim(); render(); initArk(); }).catch(() => {});
       return;
     }
-    if (arkAvailable() && arkWanted()) { lastAutoInit = Date.now(); connectArk().catch(() => {}); }
+    if (arkAvailable() && arkWanted()) { lastAutoInit = Date.now(); connectArk().then(() => rescueOtherServers()).catch(() => {}); }
   }
 
   // Automatic re-inits (a synced snapshot arriving) must not restart a
@@ -452,6 +453,42 @@ export function arkFeature(ctx) {
   // card's "connecting" indicator flickers on every snapshot. User-driven
   // calls to initArk() stay immediate.
   let lastAutoInit = 0;
+  // A payment can land with a server this wallet is NOT connected to: an
+  // invoice minted for its coinos name by the background answerer before a
+  // switch, or by another device still on the old server. Once per session,
+  // every other server this wallet holds state with gets a short visit — its
+  // own manager, a receive rescan, a sync to claim — and a toast says what
+  // arrived and where. The coins stay with that server until a switch back.
+  let rescuedServers = false;
+  async function rescueOtherServers() {
+    if (rescuedServers || wallet.watchOnly) return;
+    rescuedServers = true;
+    const cur = getArkConfig();
+    if (!cur) return;
+    for (const p of arkPresets(getNetwork())) {
+      if (!p.ark || p.ark === cur.ark || p.id === 'custom' || p.id === 'off') continue;
+      if (!wallet.loadArkState(p.ark)) continue; // never used that server
+      try {
+        const mgr = new ArkManager({
+          account: wallet.account(),
+          storage: {
+            load: () => wallet.loadArkState(p.ark),
+            adopt: (serverPubkey) => wallet.adoptArkState(serverPubkey, p.ark),
+            save: (s) => { wallet.saveArkState(mergeArkStates(s, wallet.loadArkState(p.ark)), p.ark); },
+          },
+          arkUrl: p.ark, esploraUrl: p.esplora, network: getNetwork(),
+        });
+        await mgr.init();
+        const done = () => (mgr.state.movements || []).filter((m) => m.type === 'ln-receive' && m.status === 'complete');
+        const before = done().length;
+        await mgr.sync(); // rescans receives and drives the claims
+        await new Promise((r) => setTimeout(r, 2500));
+        await mgr.sync(); // a claim takes more than one step
+        const got = done().slice(before).reduce((n, m) => n + (m.amountSat || 0), 0);
+        if (got > 0) toast(t('arkOtherServerReceipt', { amount: fmtSats(got), server: p.label.replace(/ \(.*\)$/, '') }), 9000);
+      } catch (e) { console.warn('ark: rescue on ' + p.ark + ' failed', e); }
+    }
+  }
   function maybeInitArk() {
     if (ark || arkConnectPromise) return;
     if (Date.now() - lastAutoInit < 20000) return;

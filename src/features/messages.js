@@ -7063,9 +7063,14 @@ export function messagesFeature(ctx) {
   let notif = null;      // { status, items }
   let notifAt = 0, notifUnsub = null;
   const notifSeen = () => st().notifSeen || 0;
+  // Notifications are about the IDENTITY, not the wallet: the stored list
+  // remembers whose it is, and another identity on the same wallet starts
+  // empty instead of reading the previous one's.
+  const identityPk = () => (hook('nostrLoginIdentity') || {}).pubkey || (wallet.nostr && wallet.nostr.pk) || null;
   function notifNow() {
     if (!notif) {
-      const stored = st().notifs || [];
+      const s = st();
+      const stored = (!s.notifsPk || s.notifsPk === identityPk()) ? (s.notifs || []) : [];
       notif = { status: stored.length ? 'ready' : 'loading', items: stored };
       refreshNotifs();
     }
@@ -7116,7 +7121,7 @@ export function messagesFeature(ctx) {
     c.items = kept.slice(0, NOTIF_KEEP);
     // the rows already say who; a reply row also wants its reader-facing text,
     // which it carries — the events themselves are not kept
-    const s2 = st(); s2.notifs = c.items; save(s2);
+    const s2 = st(); s2.notifs = c.items; s2.notifsPk = identityPk(); save(s2);
     // a reply is a note we can open straight away; keep it in hand
     for (const ev of evs) if (ev.kind === 1) notifNotes.set(ev.id, ev);
     return true;

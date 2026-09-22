@@ -860,6 +860,7 @@ const STR = {
     arkCmpMin: 'min {n} sats',
     arkCmpNote: 'Fees graded by expiry cost more the earlier a coin is renewed or exited. Figures come from each server’s own published info, read just now. Either server pays Lightning invoices and takes Lightning payments to your coinos name.',
     arkServerSwitched: 'Ark server switched',
+    arkOtherServerReceipt: '{amount} sats arrived with {server}. Switch to that server in Settings → Advanced to spend them.',
     arkForeignBip21: 'Their Ark address is on a different Ark server — paying the on-chain address instead.',
     arkForeignServer: 'That Ark address belongs to a different Ark server, so it can’t be paid from here directly. Ask for a Lightning invoice, or pay their coinos name or npub — those fall back to Lightning by themselves.',
     arkLnFromSavingsTitle: 'Lightning pays from Spending',

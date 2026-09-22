@@ -231,10 +231,17 @@ const clinkDest = (rec) => (rec?.noffer
 // An invoice a CLINK service hands back is only usable if it demands exactly
 // the sats owed on the right network — paying (or relaying) one on trust
 // would let a hostile service name any amount.
+// An invoice a payer can actually pay: the right amount, the right network,
+// and not about to expire — an Ark server answers a payment hash it already
+// holds with THAT invoice, and a wallet whose receive counter slipped once
+// handed back a days-old one; the payer saw "invoice expired".
 function usableInvoice(pr, sat, network = null) {
   try {
     const dec = decodeBolt11(pr);
-    return dec.amountMsat === BigInt(sat) * 1000n && (!network || dec.network === network);
+    if (dec.amountMsat !== BigInt(sat) * 1000n) return false;
+    if (network && dec.network !== network) return false;
+    if (dec.expiresAt && dec.expiresAt < Date.now() + 60_000) return false;
+    return true;
   } catch { return false; }
 }
 
@@ -1356,13 +1363,24 @@ Bun.serve({
       // 1. the recipient's own wallet or node service, if it is listening
       const clink = clinkDest(rec);
       if (clink) {
-        const pr = await requestInvoiceFromWallet(clink, { amountSat: sat, description: comment, zap });
         // staging wallets mint signet invoices — only mainnet is checked
-        if (pr && usableInvoice(pr, sat, domain === 'staging.coinos.io' ? null : 'mainnet')) {
-          log(`lnurl ${key}: recipient minted ${sat} sat`);
-          return json({ pr, routes: [] });
+        const net = domain === 'staging.coinos.io' ? null : 'mainnet';
+        // asked twice: a wallet that handed back a stale invoice (its Ark
+        // server re-serving an old payment hash) usually gets it right on
+        // the next index
+        for (let attempt = 0; attempt < 2; attempt++) {
+          const pr = await requestInvoiceFromWallet(clink, { amountSat: sat, description: comment, zap });
+          if (!pr) break;
+          if (usableInvoice(pr, sat, net)) {
+            let hash = '', exp = '';
+            try { const d = decodeBolt11(pr); hash = String(d.paymentHash || '').slice(0, 12); exp = d.expiresAt ? new Date(d.expiresAt).toISOString().slice(0, 16) : ''; } catch {}
+            log(`lnurl ${key}: recipient minted ${sat} sat (hash ${hash}, expires ${exp})`);
+            return json({ pr, routes: [] });
+          }
+          let why = 'unusable';
+          try { const d = decodeBolt11(pr); if (d.expiresAt && d.expiresAt < Date.now() + 60_000) why = 'expired ' + new Date(d.expiresAt).toISOString().slice(0, 16); } catch {}
+          log(`lnurl ${key}: recipient returned an ${why} invoice${attempt ? ' again — minting instead' : ' — asking again'}`);
         }
-        if (pr) log(`lnurl ${key}: recipient returned an unusable invoice — minting instead`);
       }
       // Staging names are mutinynet wallets: only their own wallet can mint a
       // right-network invoice. Minting on our mainnet node would take real

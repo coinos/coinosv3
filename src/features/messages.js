@@ -5345,7 +5345,32 @@ export function messagesFeature(ctx) {
       kids.push(h('div', { class: 'small faint', style: 'padding:10px 0' },
         c.status === 'loading' ? '…' : t('threadRootMissing')));
     }
-    for (const ev of c.replies) { kids.push(noteSep(), row(ev)); place(ev); }
+    // Replies as a tree, not one flat line by time: each note's answers sit
+    // under it, a little indented, oldest first — except your own, which go
+    // first among a note's answers, so what you just wrote shows right
+    // under the post instead of at the bottom of a long thread.
+    const parentOf = (ev) => {
+      const es = ev.tags.filter((x) => x[0] === 'e');
+      const marked = es.find((x) => x[3] === 'reply');
+      return (marked || es[es.length - 1] || [])[1] || c.rootId;
+    };
+    const ids = new Set([c.rootId, ...c.replies.map((e) => e.id)]);
+    const children = new Map();
+    for (const ev of c.replies) {
+      const pid = ids.has(parentOf(ev)) ? parentOf(ev) : c.rootId; // an orphan hangs off the root
+      if (!children.has(pid)) children.set(pid, []);
+      children.get(pid).push(ev);
+    }
+    const walk = (pid, depth) => {
+      const list = (children.get(pid) || []).sort((a, b) => (isMe(b.pubkey) - isMe(a.pubkey)) || (a.created_at - b.created_at));
+      for (const ev of list) {
+        const indent = Math.min(depth, 3) * 14;
+        kids.push(noteSep(), indent ? h('div', { style: 'margin-left:' + indent + 'px' }, row(ev)) : row(ev));
+        place(ev);
+        walk(ev.id, depth + 1);
+      }
+    };
+    walk(c.rootId, 0);
     if (c.status === 'loading') kids.push(h('div', { class: 'row', style: 'justify-content:center;padding:12px' }, h('span', { class: 'spinner sm' })));
     else if (!c.replies.length) kids.push(h('div', { class: 'small faint', style: 'text-align:center;padding:10px 0' }, t('threadNoReplies')));
     if (!boxPlaced) kids.push(replyBox());

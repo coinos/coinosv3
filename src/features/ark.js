@@ -10,7 +10,7 @@ import { ArkManager } from '../ark/manager.js';
 import { loadBg, saveBg, buildBg, disarmSiblingRecords } from '../nwc-bg.js';
 import { boardFee, p2trAddress } from '../ark/board.js';
 import { maybeBolt11, maybeLnInvoice, lnSendFee } from '../ark/lightning.js';
-import { decodeVtxo, getVtxoStatus, VTXO_STATE_SPENT, concatBytes, vtxoBytesFromStr, vtxoBytesToHex, decodeAddress, arkIdFromServerPubkey } from '../ark/proto.js';
+import { decodeVtxo, getVtxoStatus, VTXO_STATE_SPENT, concatBytes, vtxoBytesFromStr, vtxoBytesToHex, decodeAddress, arkIdFromServerPubkey, getArkInfo } from '../ark/proto.js';
 import { arkStore } from '../ark/store.js';
 import { signedExitTxs, exitTxVsizes, buildBumpChild, buildExitClaim, submitPackage } from '../ark/exit.js';
 import { utxoId } from '../wallet.js';
@@ -2286,6 +2286,57 @@ export function arkFeature(ctx) {
       h('button', { class: 'btn-ghost btn-block', onClick: back }, t('back')));
   }
 
+  // What each server charges and promises, from its own published info —
+  // laid side by side under the switcher so the choice is an informed one.
+  const serverInfos = new Map(); // url -> info | null (failed) | undefined (loading)
+  function serverInfo(url) {
+    if (!url) return null;
+    if (serverInfos.has(url)) return serverInfos.get(url);
+    serverInfos.set(url, undefined);
+    getArkInfo(url).then((i) => { serverInfos.set(url, i); render(); }).catch(() => { serverInfos.set(url, null); render(); });
+    return undefined;
+  }
+  const pct = (ppm) => (ppm / 10000).toLocaleString(undefined, { maximumFractionDigits: 3 }) + '%';
+  const blocksSpan = (b) => (b >= 144 ? Math.round(b / 144) + 'd' : Math.max(1, Math.round(b / 6)) + 'h');
+  // an expiry-graded fee: free within N of expiry, else a range
+  const gradedFee = (tbl, base = 0, min = 0) => {
+    const rows = [...(tbl || [])].sort((a, b) => a.thresholdBlocks - b.thresholdBlocks);
+    const paid = rows.filter((r) => r.ppm > 0);
+    const parts = [];
+    if (base) parts.push(fmtSats(base) + ' sats');
+    if (!paid.length) parts.push(t('arkCmpFree'));
+    else {
+      const lo = Math.min(...paid.map((r) => r.ppm)), hi = Math.max(...paid.map((r) => r.ppm));
+      const freeUnder = rows[0].ppm === 0 && paid[0] ? paid[0].thresholdBlocks : 0;
+      parts.push((lo === hi ? pct(lo) : pct(lo) + '–' + pct(hi)) + (freeUnder ? ' · ' + t('arkCmpFreeNear', { span: blocksSpan(freeUnder) }) : ''));
+    }
+    if (min) parts.push(t('arkCmpMin', { n: fmtSats(min) }));
+    return parts.join(', ');
+  };
+  function arkServerCompare(presets) {
+    const cols = presets.filter((p) => p.ark && p.id !== 'custom');
+    if (cols.length < 2) return null;
+    const infos = cols.map((p) => serverInfo(p.ark));
+    const cell = (i, f) => (i === undefined ? '…' : i === null ? '—' : f(i));
+    const rows = [
+      [t('arkCmpRunBy'), cols.map((p) => t(p.id === 'coinos' ? 'arkCmpRunByCoinos' : p.id === 'second' ? 'arkCmpRunBySecond' : 'arkCmpRunByOther'))],
+      [t('arkCmpLifetime'), infos.map((i) => cell(i, (x) => blocksSpan(x.vtxoExpiryDelta || 0)))],
+      [t('arkCmpRounds'), infos.map((i) => cell(i, (x) => t('arkCmpEvery', { n: Math.max(1, Math.round((x.roundIntervalSecs || 0) / 60)) })))],
+      [t('arkCmpRenew'), infos.map((i) => cell(i, (x) => gradedFee((x.refreshFees || {}).ppmExpiryTable, (x.refreshFees || {}).baseFeeSat)))],
+      [t('arkCmpLnSend'), infos.map((i) => cell(i, (x) => gradedFee((x.lnSendFees || {}).ppmExpiryTable, (x.lnSendFees || {}).baseFeeSat, (x.lnSendFees || {}).minFeeSat)))],
+      [t('arkCmpLnRecv'), infos.map((i) => cell(i, (x) => ((x.lnReceiveFees || {}).ppm || (x.lnReceiveFees || {}).baseFeeSat) ? gradedFee([{ thresholdBlocks: 0, ppm: x.lnReceiveFees.ppm || 0 }], x.lnReceiveFees.baseFeeSat) : t('arkCmpFree')))],
+      [t('arkCmpExit'), infos.map((i) => cell(i, (x) => gradedFee((x.offboardFees || {}).ppmExpiryTable, (x.offboardFees || {}).baseFeeSat)))],
+      [t('arkCmpBoard'), infos.map((i) => cell(i, (x) => t('arkCmpBoardVal', { min: fmtSats(x.minBoardAmountSat || 0), n: x.requiredBoardConfirmations || 0 })))],
+      [t('arkCmpMaxCoin'), infos.map((i) => cell(i, (x) => fmtSats(x.maxVtxoAmountSat || 0) + ' sats'))],
+      [t('arkCmpBackstop'), cols.map((p) => t(p.id === 'coinos' ? 'arkCmpYes' : 'arkCmpNo'))],
+    ];
+    return h('div', { class: 'col', style: 'gap:6px' },
+      h('table', { class: 'cmp-table' },
+        h('thead', {}, h('tr', {}, h('th', {}), ...cols.map((p) => h('th', {}, p.label.replace(/ \(.*\)$/, ''))))),
+        h('tbody', {}, ...rows.map(([k, vals]) => h('tr', {}, h('td', { class: 'k' }, k), ...vals.map((v) => h('td', {}, v)))))),
+      h('div', { class: 'small faint' }, t('arkCmpNote')));
+  }
+
   // Settings → Advanced: which Ark server. The state is kept per server, so
   // coins held with the old one aren't lost by switching — but they can't be
   // spent from the new one; the card says what's held before it lets go.
@@ -2323,6 +2374,8 @@ export function arkFeature(ctx) {
       h('p', { class: 'small muted', style: 'margin:0' }, t('arkServerDesc')),
       h('select', { onChange: (e) => pick(e.target.value) },
         ...presets.map((p) => h('option', { value: p.id, selected: p.id === (c || cur) }, p.label))),
+      h('button', { class: 'linklike small', style: 'align-self:flex-start', onClick: () => { ui.arkCmpOpen = !ui.arkCmpOpen; render(); } }, ui.arkCmpOpen ? t('arkCmpHide') : t('arkCmpShow')),
+      ui.arkCmpOpen ? arkServerCompare(presets) : null,
       (c === 'custom' || cur === 'custom') ? h('div', { class: 'col', style: 'gap:6px' },
         h('input', { type: 'text', placeholder: t('arkServerCustomUrl'), value: custom.ark, autocapitalize: 'none', onInput: (e) => { custom.ark = e.target.value; } }),
         h('input', { type: 'text', placeholder: t('arkServerCustomEsplora'), value: custom.esplora, autocapitalize: 'none', onInput: (e) => { custom.esplora = e.target.value; } })) : null,

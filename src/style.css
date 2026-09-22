@@ -601,6 +601,12 @@ hr.divider { margin: 16px 0; }
    post's full width so each is a comfortable target, quiet until one carries
    a count or you've used it. */
 .note-acts { margin-top: 8px; justify-content: space-between; gap: 4px; max-width: 340px; }
+/* server comparison table (Settings → Advanced → Ark server) */
+.cmp-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.cmp-table th { text-align: left; font-weight: 600; padding: 4px 6px; border-bottom: 1px solid var(--line); }
+.cmp-table td { padding: 5px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.cmp-table td.k { color: var(--muted); width: 38%; }
+.cmp-table tr:last-child td { border-bottom: 0; }
 /* point of sale */
 .input-group input.pos-amount, input.pos-amount { font-size: 40px; font-weight: 700; text-align: right; letter-spacing: -.5px; padding: 8px 12px; height: auto; line-height: 1.2; }
 .pos-big { font-size: 34px; font-weight: 700; line-height: 1.1; letter-spacing: -.5px; }

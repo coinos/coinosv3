@@ -511,7 +511,7 @@ export function namesFeature(ctx) {
   // A coinos POS terminal (coinos-pos) takes payments to this name with a
   // bearer token the registrar mints for the owner: the terminal can ring up
   // sales and see them settle, never spend. Shown once, never stored — the
-  // token goes straight into the terminal's config at coinos.io/pos.
+  // token goes straight into the terminal's config at coinos.io/flash.
   function posCard(st) {
     const tok = ui.posToken;
     const body = () => ({ name: st.name, domain: st.domain || DOMAIN() });

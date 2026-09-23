@@ -1784,7 +1784,8 @@ export function messagesFeature(ctx) {
   if (urlNote) {
     try { history.replaceState(null, '', '/'); } catch {}
     ui.pubProf = true;
-    setTimeout(() => { openNoteRef(urlNote).catch(() => {}); }, 0);
+    // a reload of a thread the history restores by itself needs no fetch
+    setTimeout(() => { if (ui.noteThread && ui.noteThread.focusId === urlNote.id) return; openNoteRef(urlNote).catch(() => {}); }, 0);
   }
 
   // Resolve and open right away — not in init(), which only runs once a
@@ -3688,7 +3689,7 @@ export function messagesFeature(ctx) {
   const PACK_KIND = 39089;
   const PACK_CACHE = 'followPacks';
   const PACK_RELAYS = [...new Set([...PROFILE_RELAYS, 'wss://relay.nostr.band'])];
-  const packKey = (p) => p.pk + ':' + p.d;
+  const packKey = (p) => p.pk + ':' + p.d + (p.kind && p.kind !== PACK_KIND ? ':' + p.kind : '');
   let packMembers = null; // key -> { pks, title, at }
   const packsNow = () => {
     if (!packMembers) { try { packMembers = wallet.loadFeatureState(PACK_CACHE, {}) || {}; } catch { packMembers = {}; } }
@@ -3704,7 +3705,11 @@ export function messagesFeature(ctx) {
     const m = /naddr1[a-z0-9]+/i.exec(s);
     if (!m) return null;
     const ref = parseNostrRef(m[0].toLowerCase());
-    return ref && ref.type === 'addr' && ref.kind === PACK_KIND ? { pk: ref.pk, d: ref.d, relays: ref.relays || [] } : null;
+    if (!ref || ref.type !== 'addr') return null;
+    if (ref.kind === PACK_KIND) return { pk: ref.pk, d: ref.d, relays: ref.relays || [] };
+    // someone's follow set (kind 30000) is a pack by another name
+    if (ref.kind === LIST_KIND) return { pk: ref.pk, d: ref.d, relays: ref.relays || [], kind: LIST_KIND };
+    return null;
   }
   // Every pack the wide relays hold, once per session: the way to find one
   // by a few letters of its title — NIP-50 search only knows the packs the
@@ -3739,7 +3744,7 @@ export function messagesFeature(ctx) {
     if (packFetching.has(key)) return packFetching.get(key);
     const job = (async () => {
       const relays = [...new Set([...(p.relays || []), ...PACK_RELAYS])];
-      const evs = await queryOn(relays, { kinds: [PACK_KIND], authors: [p.pk], '#d': [p.d] }, 4500).catch(() => []);
+      const evs = await queryOn(relays, { kinds: [p.kind || PACK_KIND], authors: [p.pk], '#d': [p.d] }, 4500).catch(() => []);
       const newest = (evs || []).sort((a, b) => b.created_at - a.created_at)[0];
       if (!newest) return packOf(p);
       const got = packFromEvent(newest);
@@ -3788,6 +3793,197 @@ export function messagesFeature(ctx) {
   // hashtag has no author whose outbox we could read
   const TOPIC_RELAYS = [...new Set([...NOTE_RELAYS, 'wss://relay.damus.io', 'wss://relay.primal.net', 'wss://nos.lol'])];
 
+  // ---- lists (NIP-51 follow sets, kind 30000) ------------------------------
+  // A feed of hand-picked people IS a nostr list. Saved here it is published
+  // under your key as a follow set, so Coracle, Nostria, Amethyst and the
+  // rest show the same list; a list made in one of them turns up here as a
+  // feed. The relays' copy wins when it is newer than ours (edited over
+  // there); ours goes out on top of whatever they hold, carrying the
+  // encrypted content other clients keep their private members in — those
+  // are read (nip44 to yourself) and followed, never rewritten.
+  const LIST_KIND = 30000;
+  const LIST_SYNC_MS = 10 * 60_000;
+  let listsAt = 0;
+  let listsJob = null;
+  const dTagOf = (ev) => (ev.tags.find((x) => x[0] === 'd') || [])[1];
+  const listTopics = (ev) => [...new Set(ev.tags.filter((x) => x[0] === 't' && x[1]).map((x) => normTopic(x[1])).filter(Boolean))].slice(0, 20);
+  async function privateMembers(ev) {
+    if (!ev.content) return [];
+    const c = (await selfCryptors()).find((x) => x.pk === ev.pubkey);
+    if (!c) return [];
+    try {
+      const tags = JSON.parse(await c.dec(ev.content));
+      return Array.isArray(tags) ? [...new Set(pTags(tags).map((x) => x[1].toLowerCase()))] : [];
+    } catch { return []; } // nip04 from an older client, or not ours to read
+  }
+  // Your lists as the relays hold them, folded into the feeds: a new list
+  // becomes a feed, a newer copy of a known one brings its members over.
+  function syncFollowSets({ force = false } = {}) {
+    const me = mePk();
+    if (!me) return Promise.resolve();
+    if (listsJob) return listsJob;
+    if (!force && Date.now() - listsAt < LIST_SYNC_MS) return Promise.resolve();
+    listsAt = Date.now();
+    listsJob = (async () => {
+      const mine = await Promise.resolve(relaysOf(me)).catch(() => []);
+      const relays = [...new Set([...zapRelays(), ...(mine || []), ...PACK_RELAYS])];
+      let evs;
+      try { evs = await queryOn(relays, { kinds: [LIST_KIND], authors: [me] }, 5000); } catch { listsAt = 0; return; }
+      const newest = new Map();
+      for (const ev of evs || []) {
+        const d = dTagOf(ev);
+        if (d == null) continue;
+        const cur = newest.get(d);
+        if (!cur || ev.created_at > cur.created_at) newest.set(d, ev);
+      }
+      const s = st();
+      let changed = false;
+      for (const [d, ev] of newest) {
+        const gone = (s.listsGone || {})[d];
+        if (gone && ev.created_at <= gone) continue; // deleted here; a relay still serving it
+        const cur = s.feeds.find((f) => f.d === d);
+        if (cur && (cur.listAt || 0) >= ev.created_at) continue;
+        const got = packFromEvent(ev);
+        const priv = await privateMembers(ev);
+        const pub = got.pks.filter((pk) => !priv.includes(pk));
+        const topics = listTopics(ev);
+        if (!cur && !pub.length && !priv.length && !topics.length) continue; // an empty list is not a feed
+        const patch = { name: got.title || (cur && cur.name) || d, authors: pub.slice(0, FEED_AUTHORS_MAX), priv, topics, d, listAt: ev.created_at, listContent: ev.content || '', at: Date.now() };
+        if (cur) Object.assign(cur, patch);
+        else s.feeds.push({ id: 'list:' + d, follows: false, packs: [], ...patch });
+        feedStates.delete(cur ? cur.id : 'list:' + d); // its query changed
+        changed = true;
+      }
+      if (changed) { save(s); scheduleRepaint(); }
+    })().finally(() => { listsJob = null; });
+    return listsJob;
+  }
+  // Publish a feed as a follow set: its people as public p tags (a list's
+  // private members stay in the content, untouched), its topics as t tags.
+  async function publishFollowSet(def) {
+    const id = await requireIdentity();
+    const d = def.d || def.id;
+    const tags = [['d', d], ['title', def.name || d],
+      ...(def.authors || []).map((pk) => ['p', pk]),
+      ...feedTopics(def).map((x) => ['t', x])];
+    const created_at = Math.max(Math.floor(Date.now() / 1000), (def.listAt || 0) + 1);
+    const partial = { kind: LIST_KIND, content: def.listContent || '', created_at, tags };
+    const evt = id.signer instanceof Uint8Array ? finalizeEvent(partial, id.signer) : await id.signer.signEvent(partial);
+    const ok = await publishOn(zapRelays(), evt);
+    if (!ok) throw new Error(t('msgSendFailed'));
+    const s = st();
+    const cur = s.feeds.find((f) => f.id === def.id);
+    if (cur) { cur.d = d; cur.listAt = created_at; save(s); }
+    return d;
+  }
+  // NIP-09: ask the relays to drop the list — and remember that we did, so
+  // a relay that keeps it anyway doesn't bring it back as a feed.
+  async function deleteFollowSet(def) {
+    if (!def || !def.d) return;
+    const s = st();
+    const created_at = Math.floor(Date.now() / 1000);
+    const gone = Object.entries(s.listsGone || {}).sort((a, b) => b[1] - a[1]).slice(0, 99);
+    s.listsGone = Object.fromEntries([[def.d, created_at], ...gone]);
+    save(s);
+    const id = await requireIdentity();
+    const partial = { kind: 5, content: '', created_at, tags: [['a', LIST_KIND + ':' + id.pubkey + ':' + def.d], ['k', String(LIST_KIND)]] };
+    const evt = id.signer instanceof Uint8Array ? finalizeEvent(partial, id.signer) : await id.signer.signEvent(partial);
+    await publishOn(zapRelays(), evt);
+  }
+  // Someone's lists — follow sets and packs — for their profile page; the
+  // members are cached as packs, so a tapped list opens as a feed at once.
+  const profileLists = new Map(); // pk -> { at, status, items: [{ pk, d, kind, title, n }] }
+  const LISTS_TTL = 60 * 60_000;
+  function listsFor(pk) {
+    let c = profileLists.get(pk);
+    if (c && Date.now() - c.at < LISTS_TTL) return c;
+    c = { at: Date.now(), status: 'loading', items: c ? c.items : [] };
+    profileLists.set(pk, c);
+    (async () => {
+      const own = await Promise.resolve(relaysOf(pk)).catch(() => []);
+      const relays = [...new Set([...PACK_RELAYS, ...(own || [])])];
+      const evs = await queryOn(relays, { kinds: [LIST_KIND, PACK_KIND], authors: [pk] }, 5000).catch(() => []);
+      const newest = new Map();
+      for (const ev of evs || []) {
+        const p = { ...packFromEvent(ev), kind: ev.kind };
+        const key = packKey(p);
+        const cur = newest.get(key);
+        if (!cur || p.at > cur.at) newest.set(key, p);
+      }
+      const items = [...newest.values()].filter((p) => p.pks.length).sort((a, b) => b.at - a.at);
+      for (const p of items) {
+        const cur = packOf(p);
+        if (!cur || cur.at < p.at) packsNow()[packKey(p)] = { pks: p.pks, title: p.title, at: p.at };
+      }
+      if (items.length) { try { wallet.saveFeatureState(PACK_CACHE, packsNow()); } catch {} }
+      c.items = items.map((p) => ({ pk: p.pk, d: p.d, kind: p.kind, title: p.title || p.d, n: p.pks.length }));
+      c.status = 'ready';
+      scheduleRepaint();
+    })().catch(() => { c.status = 'ready'; });
+    return c;
+  }
+  // Open someone's list as a feed: yours is the saved feed it already is;
+  // anyone else's a session feed built on it as a pack, savable from there.
+  function openListFeed(p) {
+    const own = p.pk === mePk() ? st().feeds.find((f) => f.d === p.d) : null;
+    const id = own ? own.id : 'list:' + packKey(p);
+    if (!own) adhocFeeds.set(id, { id, name: p.title || p.d, packs: [{ pk: p.pk, d: p.d, kind: p.kind === PACK_KIND ? undefined : p.kind, relays: [], title: p.title || '' }] });
+    ui.userSearch = null; ui.profilePk = null; ui.noteThread = null; ui.feedEdit = null; ui.profOverThread = false;
+    ui.chatOpen = true; ui.msgView = 'feed';
+    switchFeed(id);
+  }
+  // Which of your feeds someone is in — and a tap to put them in another.
+  function listPickSheet() {
+    if (!ui.listPick) return null;
+    const pk = ui.listPick;
+    const close = () => { ui.listPick = null; render(); };
+    const feeds = st().feeds;
+    const toggle = (f) => {
+      const s = st();
+      const def = s.feeds.find((x) => x.id === f.id);
+      if (!def || (def.priv || []).includes(pk)) return;
+      const had = (def.authors || []).includes(pk);
+      def.authors = had ? def.authors.filter((x) => x !== pk) : [...(def.authors || []), pk].slice(0, FEED_AUTHORS_MAX);
+      def.at = Date.now();
+      save(s);
+      feedStates.delete(def.id);
+      render();
+      if (def.d) publishFollowSet(def).catch((e) => { if (!(e instanceof NoIdentity)) toast(e.message || String(e)); });
+    };
+    return h('div', {
+      class: 'confirm-pop-backdrop',
+      onClick: (e) => { if (e.target === e.currentTarget) close(); },
+    },
+      h('div', { class: 'card col confirm-pop list-pick', style: 'gap:8px' },
+        h('div', { class: 'row gap6', style: 'align-items:center' },
+          avatar(pk, 'chat-avatar', false),
+          h('div', { class: 'col', style: 'min-width:0' },
+            h('div', { class: 'chat-name' }, displayName(pk)),
+            h('div', { class: 'small muted' }, t('listPickTitle')))),
+        feeds.length ? null : h('div', { class: 'small faint' }, t('listPickEmpty')),
+        ...feeds.map((f) => {
+          const on = (f.authors || []).includes(pk) || (f.priv || []).includes(pk);
+          return h('button', {
+            class: 'btn-block list-pick-row' + (on ? ' on' : ''), style: 'text-align:left', type: 'button',
+            'aria-pressed': on ? 'true' : 'false',
+            onClick: () => toggle(f),
+          }, (on ? '\u2611' : '\u2610') + '  ' + f.name);
+        }),
+        h('button', {
+          class: 'btn-block', style: 'text-align:left', type: 'button',
+          onClick: () => {
+            ui.listPick = null;
+            // the editor lives on the feed screen; the profile gives way to it
+            ui.profilePk = null; ui.profOverThread = false; ui.noteThread = null; ui.userSearch = null;
+            ui.chatOpen = true; ui.msgView = 'feed';
+            openFeedEditor(null);
+            ui.feedEdit.authors = [pk];
+            render();
+          },
+        }, '+  ' + t('listNew')),
+        h('button', { class: 'btn-ghost btn-block', onClick: close }, t('back'))));
+  }
+
   // A reply, as against a post that merely POINTS at another one. NIP-10
   // marks a reply's e tags 'root' or 'reply'; a quote's are 'mention', and
   // NIP-18 quotes carry a q tag instead. Treating every e tag as a reply hid
@@ -3811,6 +4007,7 @@ export function messagesFeature(ctx) {
     if (!def) return [];
     const set = new Set(def.follows ? followsNow().set : []);
     for (const pk of def.authors || []) if (pk) set.add(pk);
+    for (const pk of def.priv || []) if (pk) set.add(pk); // a list's private members
     for (const pk of packAuthors(def)) set.add(pk);
     return [...set].slice(0, FEED_AUTHORS_MAX);
   };
@@ -4868,6 +5065,7 @@ export function messagesFeature(ctx) {
     }
   }
 
+  const noteLink = (ev) => location.origin + '/' + (neventOf(ev.id, ev.pubkey) || ev.id);
   // The ellipsis sheet: the actions that don't earn a button of their own.
   function noteSheet() {
     if (!ui.noteSheet) return null;
@@ -4891,6 +5089,15 @@ export function messagesFeature(ctx) {
         item('⧉', t('copy'), async () => {
           try { await navigator.clipboard.writeText('nostr:' + (neventOf(ev.id, ev.pubkey) || ev.id)); toast(t('copied')); } catch {}
         }),
+        // the post's own address here — the same path the bar shows while
+        // its thread is open, and what njump-style links resolve to
+        item('\u{1F517}', t('postCopyLink'), async () => {
+          try { await navigator.clipboard.writeText(noteLink(ev)); toast(t('copied')); } catch {}
+        }),
+        typeof navigator !== 'undefined' && navigator.share
+          ? item('\u2197', t('postShare'), () => { navigator.share({ url: noteLink(ev) }).catch(() => {}); })
+          : null,
+        mine || !myPubkeys().length ? null : item('\u2630', t('listAddTo'), () => { ui.listPick = ev.pubkey; render(); }),
         mine ? null : item('\u{1F507}', isMuted(ev.pubkey) ? t('postUnmute') : t('postMute'), () => toggleMute(ev.pubkey).catch(() => {})),
         mine || isMuted(ev.pubkey) ? null : item('⛔', t('postBlock'), () => toggleMute(ev.pubkey, { block: true }).catch(() => {}), true),
         h('button', { class: 'btn-ghost btn-block', onClick: close }, t('back'))));
@@ -5395,7 +5602,8 @@ export function messagesFeature(ctx) {
       // the public no-wallet surface drops the action row)
       ctx.brandHeader(!ui.pubProf && wallet.loaded),
       h('div', { class: 'card col', style: 'gap:0;padding:2px 14px' }, ...kids),
-      h('button', { class: 'btn-ghost btn-block', onClick: () => { ui.noteThread = null; render(); } }, t('back')));
+      h('button', { class: 'btn-ghost btn-block', onClick: () => { ui.noteThread = null; render(); } }, t('back')),
+      ...noteOverlays());
   }
 
   async function publishProfileFields(fields, opts = {}) {
@@ -5812,7 +6020,24 @@ export function messagesFeature(ctx) {
                 h('button', {
                   class: (isFollowing(pk) ? 'btn-ghost ' : '') + 'grow', disabled: followsPub,
                   onClick: () => toggleFollow(pk),
-                }, isFollowing(pk) ? t('feedFollowing') : t('feedFollow')))),
+                }, isFollowing(pk) ? t('feedFollowing') : t('feedFollow')),
+                // ...or into one of your lists (a feed of people)
+                myPubkeys().length ? h('button', {
+                  class: 'btn-ghost', style: 'flex-shrink:0', title: t('listAddTo'), 'aria-label': t('listAddTo'),
+                  onClick: () => { ui.listPick = pk; render(); },
+                }, '\u2630') : null)),
+      // The lists they curate (follow sets and packs): each opens as a feed.
+      (() => {
+        const c = listsFor(pk);
+        if (!c.items.length) return null;
+        return h('div', { class: 'col', style: 'gap:6px' },
+          h('div', { class: 'small muted', style: 'padding:0 2px' }, t('profLists')),
+          h('div', { class: 'row feed-chips prof-lists' },
+            ...c.items.map((p) => h('button', {
+              class: 'feed-chip', type: 'button', title: t('feedListPeople', { n: p.n }),
+              onClick: () => openListFeed(p),
+            }, p.title, ' ', h('span', { class: 'faint' }, String(p.n))))));
+      })(),
       // Their public notes: the PAGE scrolls (no inner scrollbox), older
       // pages stream in as you near the bottom (the init() scroll listener →
       // loadOlderNotes), and on phones the feed goes full-bleed — edge to
@@ -5841,7 +6066,8 @@ export function messagesFeature(ctx) {
       })(),
       h('button', { class: 'btn-ghost btn-block', onClick: () => { ui.profilePk = null; ui.profOverThread = false; ui.pubProf = null; ui.profEdit = null; ui.profEditFilled = false; ui.profCompose = null; render(); } }, t('back')),
       mine ? logoutPop() : null,
-      mine ? switchPop() : null);
+      mine ? switchPop() : null,
+      ...noteOverlays());
   }
 
   const backBtn = (onClick) => h('button', { class: 'iconbtn chat-back', onClick }, '‹');
@@ -5948,10 +6174,11 @@ export function messagesFeature(ctx) {
   // ---- the feed view --------------------------------------------------------
   // One line saying what a feed is made of: who, and on what.
   function feedSummary(f) {
+    const n = (f.authors || []).length + (f.priv || []).length;
     const people = f.follows
-      ? ((f.authors || []).length ? t('feedSumFollowsPlus', { n: f.authors.length }) : t('feedSumFollows'))
-      : (f.authors || []).length === 1 ? displayName(f.authors[0])
-        : (f.authors || []).length ? t('feedSumPeople', { n: f.authors.length }) : '';
+      ? (n ? t('feedSumFollowsPlus', { n }) : t('feedSumFollows'))
+      : n === 1 ? displayName((f.authors || [])[0] || f.priv[0])
+        : n ? t('feedSumPeople', { n }) : '';
     const packs = ((f.packs || []).map((p) => (packOf(p) || {}).title || p.title).filter(Boolean)).join(', ');
     const topics = feedTopics(f).map((x) => '#' + x).join(' ');
     return [people, packs, topics].filter(Boolean).join(' \u00b7 ') || t('feedNoQuery');
@@ -5969,7 +6196,12 @@ export function messagesFeature(ctx) {
       }, f.name)),
       h('button', { class: 'feed-chip add', type: 'button', title: t('feedNew'), 'aria-label': t('feedNew'), onClick: () => openFeedEditor(null) }, '+'));
   }
+  // The sheets a post (or a person) can open: the ⋯ menu, the reaction
+  // picker, the list picker. Every screen that shows a post draws them —
+  // the thread and profile pages once left the ⋯ tap doing nothing.
+  const noteOverlays = () => [noteSheet(), reactPicker(), listPickSheet()];
   function feedView() {
+    syncFollowSets().catch(() => {}); // throttled inside
     const c = feedNow();
     const def = feedDef();
     const authors = feedAuthors(def);
@@ -6027,8 +6259,7 @@ export function messagesFeature(ctx) {
         c.loadingMore
           ? h('div', { class: 'row gap6', style: 'justify-content:center;padding:4px 0' }, h('span', { class: 'spinner sm' }))
           : null,
-        noteSheet(),
-        reactPicker());
+        ...noteOverlays());
   }
 
 
@@ -6038,10 +6269,14 @@ export function messagesFeature(ctx) {
   // alone is the whole of it. Saved into the synced state, so every device
   // has the same feeds.
   function openFeedEditor(def) {
+    syncFollowSets().catch(() => {});
+    // a new feed of people is a list from the start; a feed made before
+    // lists existed stays private until its owner says otherwise
+    const isNew = !def || adhocFeeds.has(def.id);
     ui.feedEdit = def
-      ? { id: def.id, name: def.name || '', follows: !!def.follows, authors: [...(def.authors || [])], packs: [...(def.packs || [])],
-          topics: feedTopics(def).map((x) => '#' + x).join(' '), q: '', rows: null, pq: '', packRows: null, isNew: adhocFeeds.has(def.id) }
-      : { id: null, name: '', follows: false, authors: [], packs: [], topics: '', q: '', rows: null, pq: '', packRows: null, isNew: true };
+      ? { id: def.id, name: def.name || '', follows: !!def.follows, authors: [...(def.authors || [])], priv: [...(def.priv || [])], packs: [...(def.packs || [])],
+          topics: feedTopics(def).map((x) => '#' + x).join(' '), q: '', rows: null, pq: '', packRows: null, isNew, d: def.d || null, publish: isNew || !!def.d }
+      : { id: null, name: '', follows: false, authors: [], priv: [], packs: [], topics: '', q: '', rows: null, pq: '', packRows: null, isNew: true, d: null, publish: true };
     render();
   }
   const feedPeopleSearcher = makeSearcher((q, rows) => {
@@ -6059,17 +6294,32 @@ export function messagesFeature(ctx) {
     const keep = e.id && !adhocFeeds.has(e.id) && s.feeds.some((f) => f.id === e.id);
     const id = keep ? e.id : 'f' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
     const def = { id, name, follows: e.follows, authors: e.authors.slice(0, FEED_AUTHORS_MAX), packs: e.packs.slice(0, 20), topics, at: Date.now() };
+    const prev = keep ? s.feeds.find((f) => f.id === id) : null;
+    // d, listAt, listContent and priv ride along from the previous copy
     if (keep) s.feeds = s.feeds.map((f) => (f.id === id ? { ...f, ...def } : f)); else s.feeds.push(def);
     save(s);
     if (e.id && adhocFeeds.has(e.id)) adhocFeeds.delete(e.id);
     feedStates.delete(id); // its query changed: rebuild from scratch
     ui.feedEdit = null;
     switchFeed(id);
+    // the list side: a feed of people goes out as a follow set (or, unticked,
+    // comes off the relays)
+    const saved = s.feeds.find((f) => f.id === id);
+    const isList = !!e.publish && (def.authors.length > 0 || (saved.priv || []).length > 0);
+    if (isList) publishFollowSet(saved).then(() => render()).catch((err) => { if (!(err instanceof NoIdentity)) toast(err.message || String(err)); });
+    else if (prev && prev.d) {
+      // ours first: the deletion re-reads the state to note the list as gone
+      delete saved.d; delete saved.listAt; delete saved.listContent; saved.priv = [];
+      save(s);
+      deleteFollowSet(prev).catch(() => {});
+    }
   }
   function deleteFeed(id) {
     const s = st();
+    const def = s.feeds.find((f) => f.id === id);
     s.feeds = s.feeds.filter((f) => f.id !== id);
     save(s);
+    if (def && def.d) deleteFollowSet(def).catch(() => {}); // after ours: it re-reads the state
     feedStates.delete(id);
     try { wallet.saveFeatureState(feedCacheKey(id), []); } catch {}
     ui.feedEdit = null;
@@ -6129,6 +6379,11 @@ export function messagesFeature(ctx) {
           h('input', { type: 'checkbox', checked: e.follows, style: 'width:18px;height:18px;accent-color:var(--accent);margin:0', onChange: (ev) => { e.follows = ev.target.checked; render(); } }),
           h('span', {}, t('feedFollowsToggle'))),
         ...e.authors.map(person),
+        // a list's private members, kept where they were made
+        ...(e.priv || []).map((pk) => h('div', { class: 'row gap6', style: 'align-items:center', title: t('feedPrivateMember') },
+          avatar(pk, 'chat-avatar mini', false),
+          h('span', { class: 'grow', style: 'min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' }, displayName(pk)),
+          h('span', { class: 'faint', 'aria-label': t('feedPrivateMember') }, '\u{1F512}'))),
         h('input', {
           type: 'text', class: 'user-search-input', placeholder: t('feedAddPerson'), value: e.q,
           autocapitalize: 'none', autocomplete: 'off', spellcheck: 'false',
@@ -6151,7 +6406,7 @@ export function messagesFeature(ctx) {
         }),
         h('div', { class: 'small faint' }, t('feedPacksHelp')),
         ...(e.packRows || []).filter((r) => !e.packs.some((x) => packKey(x) === packKey(r))).map((r) => packRow(r, () => {
-          e.packs.push({ pk: r.pk, d: r.d, relays: r.relays || [], title: r.title || '' });
+          e.packs.push({ pk: r.pk, d: r.d, relays: r.relays || [], title: r.title || '', ...(r.kind && r.kind !== PACK_KIND ? { kind: r.kind } : {}) });
           e.pq = ''; e.packRows = null; render();
         })),
         e.packRows && !e.packRows.length ? h('div', { class: 'small faint' }, t('searchNoResults')) : null),
@@ -6159,6 +6414,14 @@ export function messagesFeature(ctx) {
         h('span', { class: 'small muted' }, t('feedTopics')),
         h('input', { type: 'text', value: e.topics, placeholder: t('feedTopicsHint'), autocapitalize: 'none', autocomplete: 'off', onInput: (ev) => { e.topics = ev.target.value; } }),
         h('div', { class: 'small faint' }, t('feedTopicsHelp'))),
+      // a feed of people is a nostr list (NIP-51 follow set) unless told not to be
+      e.authors.length || (e.priv || []).length || e.d
+        ? h('div', { class: 'col', style: 'gap:4px' },
+            h('label', { class: 'row gap6', style: 'align-items:center;cursor:pointer' },
+              h('input', { type: 'checkbox', class: 'feed-list-toggle', checked: !!e.publish, style: 'width:18px;height:18px;accent-color:var(--accent);margin:0', onChange: (ev) => { e.publish = ev.target.checked; } }),
+              h('span', {}, t('feedShareList'))),
+            h('div', { class: 'small faint' }, t('feedShareListHelp')))
+        : null,
       h('button', { class: 'btn-primary btn-block', onClick: saveFeedEditor }, t('save')),
       e.id && !e.isNew ? h('button', { class: 'btn-ghost btn-block', onClick: () => deleteFeed(e.id) }, t('feedDelete')) : null);
   }
@@ -6323,7 +6586,14 @@ export function messagesFeature(ctx) {
   // the newest messages vanish under the fold. Follow the bottom edge through
   // every viewport change (keyboard, rotation, browser chrome) — unless the
   // user has deliberately scrolled up, which msgStick already remembers.
-  const onViewportResize = () => { if (ui.chatOpen) stickToBottom(); };
+  const onViewportResize = () => {
+    // Mobile keyboards can resize only the visual viewport, leaving dvh
+    // unchanged. Size the conversation to the space above the keyboard.
+    const viewport = window.visualViewport;
+    const height = viewport && viewport.scale === 1 ? viewport.height : window.innerHeight;
+    document.documentElement.style.setProperty('--chat-viewport-height', `${height}px`);
+    if (ui.chatOpen) stickToBottom();
+  };
 
   // A remote signer that a reload dropped: say so where the typing happens,
   // rather than letting someone write a message and only then be told. The
@@ -6456,6 +6726,7 @@ export function messagesFeature(ctx) {
   // ---- home ---------------------------------------------------------------
 
   function homeView() {
+    if (myPubkeys().length) syncFollowSets().catch(() => {}); // lists made elsewhere join the feeds (throttled inside)
     startDMs();
     // Threads you've since replied to should stop being strangers to the
     // worker; throttled inside, so this is cheap on every render.
@@ -7261,8 +7532,7 @@ export function messagesFeature(ctx) {
         : !items.length
           ? h('div', { class: 'small faint', style: 'text-align:center;padding:12px 0' }, t('alertsEmpty'))
           : h('div', { class: 'card col notes-feed', style: 'gap:0' }, ...rows),
-      noteSheet(),
-      reactPicker());
+      ...noteOverlays());
   }
 
   // ---- feature ------------------------------------------------------------
@@ -7484,9 +7754,11 @@ export function messagesFeature(ctx) {
       ui.pubProf = null; // a wallet is open now — its chrome owns the profile
       window.addEventListener('resize', onViewportResize);
       window.visualViewport?.addEventListener('resize', onViewportResize);
+      onViewportResize();
       allUnsubs.push(() => {
         window.removeEventListener('resize', onViewportResize);
         window.visualViewport?.removeEventListener('resize', onViewportResize);
+        document.documentElement.style.removeProperty('--chat-viewport-height');
       });
       startDMs();
       // Communities are built from CACHE ONLY at boot (subscribe:false) — the

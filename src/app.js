@@ -7,7 +7,7 @@
 import { Wallet, newMnemonic, isValidMnemonic, accountXpubFor, cacheKeyFor, utxoId, parseExtendedKey, xpubToZpub, encryptVault, decryptVault } from './wallet.js';
 import { qrSvg } from './qr.js';
 import { makeSearcher, resultRows, searchable, punkUrl, warmSearch } from './recipient-search.js';
-import { npubOf, seedPubkey } from './nostr.js';
+import { npubOf, seedPubkey, neventOf } from './nostr.js';
 import { nip98Header } from './nip98.js';
 import { NOSTR_MARK } from './features/nostrlogin.js';
 import { scanQr } from './scan.js';
@@ -704,6 +704,26 @@ let navStack = []; // in-memory mirror of the history entries (to detect an in-a
 let navIndex = -1;
 let restoringHistory = false; // true while applying a popstate (suppresses pushing)
 
+// The address bar names what is on screen when that thing has a nostr
+// address of its own: a thread is /nevent1… (the post or reply it opened
+// on), a profile /npub1…. So the link in the bar is the link to the post —
+// copy it, send it, reload it — the same paths the deep links already open.
+// Every other screen keeps whatever path it had (the till at /pos, the
+// plain app at /); only a path we set ourselves is taken back to /.
+const OWN_PATH = /^\/(nevent|note|npub)1[a-z0-9]+\/?$/i;
+function navUrl(snap) {
+  try {
+    const th = snap.noteThread;
+    if (snap.profilePk && (snap.profOverThread || !th)) return '/' + npubOf(snap.profilePk);
+    if (th && th.focusId) {
+      const author = th.seed && th.seed.id === th.focusId ? th.seed.pubkey : undefined;
+      const enc = neventOf(th.focusId, author);
+      if (enc) return '/' + enc;
+    }
+    return OWN_PATH.test(location.pathname) ? '/' : undefined;
+  } catch { return undefined; }
+}
+
 function syncHistory() {
   if (restoringHistory) return;
   try {
@@ -713,9 +733,21 @@ function syncHistory() {
       // Typing changes the draft, not the page. Replace the current entry
       // instead of making Back walk through every version of the form.
       if (JSON.stringify(snap) !== JSON.stringify(navStack[navIndex])) {
-        history.replaceState({ nav: snap, i: navIndex }, '');
+        history.replaceState({ nav: snap, i: navIndex }, '', navUrl(snap));
         navStack[navIndex] = snap;
       }
+      return;
+    }
+    // The renders between a reload and the restore of where it was (the
+    // unlock screen, a deep-linked profile over it, the wallet opening) are
+    // one slot, not a trail: pushing them put two or three dead entries
+    // between the restored screen and the one before it, so Back after a
+    // reload went nowhere useful.
+    if (bootPending && navIndex >= 0) {
+      navStack = navStack.slice(0, navIndex + 1);
+      navStack[navIndex] = snap;
+      history.replaceState({ nav: snap, i: navIndex }, '', navUrl(snap));
+      if (ui.screen === 'wallet') bootPending = false;
       return;
     }
     // Every screen change is a new history entry. (We deliberately don't try to
@@ -726,8 +758,8 @@ function syncHistory() {
     navStack.push(snap);
     navIndex++;
     const entry = { nav: snap, i: navIndex };
-    if (navIndex === 0) history.replaceState(entry, '');
-    else history.pushState(entry, '');
+    if (navIndex === 0) history.replaceState(entry, '', navUrl(snap));
+    else history.pushState(entry, '', navUrl(snap));
   } catch {} // history API failures must never break a render
 }
 
@@ -736,15 +768,20 @@ function syncHistory() {
 // render runs syncHistory and replaceStates a blank snapshot over it — so
 // the pre-reload nav is captured HERE, at script load, before any render.
 const BOOT_NAV = (() => { try { return (history.state && history.state.nav) || null; } catch { return null; } })();
+// ...and until it is restored (or the wallet is simply open, or a few
+// seconds pass on the unlock screen), boot renders share one history slot.
+let bootPending = !!BOOT_NAV;
+if (bootPending) setTimeout(() => { bootPending = false; }, 5000);
 function restoreNavFromHistory() {
   try {
     const nav = BOOT_NAV;
     if (!nav || ui.screen !== 'wallet') return;
+    bootPending = false;
     for (const f of NAV_FIELDS) if (f in nav) ui[f] = f === 'profEdit' && nav[f] ? structuredClone(nav[f]) : nav[f];
     ui.lightbox = null; nav.lightbox = null; // an object URL doesn't survive a reload
     navStack = [nav];
     navIndex = 0;
-    history.replaceState({ nav, i: 0 }, ''); // undo any boot-render clobber
+    history.replaceState({ nav, i: 0 }, '', navUrl(nav)); // undo any boot-render clobber (and the boot's path tidy)
     render();
   } catch {}
 }

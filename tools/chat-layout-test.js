@@ -35,7 +35,7 @@ const composerFits = () => page.evaluate(() => {
 });
 
 try {
-  for (const vp of [{ width: 1280, height: 800, name: 'laptop' }, { width: 390, height: 844, name: 'phone' }, { width: 1024, height: 600, name: 'short laptop' }]) {
+  for (const vp of [{ width: 1280, height: 800, name: 'laptop' }, { width: 390, height: 844, name: 'phone' }, { width: 1024, height: 600, name: 'short laptop' }, { width: 390, height: 400, name: 'phone with keyboard' }, { width: 844, height: 390, name: 'landscape phone' }]) {
     console.log(`\n[${vp.name} ${vp.width}x${vp.height}]`);
     await page.setViewport({ width: vp.width, height: vp.height });
     if (vp.name === 'laptop') {
@@ -83,14 +83,40 @@ try {
     r = await composerFits();
     check('...and with the member list open as well', r.fits, `bottom ${r.bottom} of ${r.vh}`);
 
-    // NB not asserting the page never scrolls: the footer legitimately sits
-    // below the fold. What matters is that the composer doesn't.
+    const frame = await page.evaluate(() => {
+      const footer = document.querySelector('.footer');
+      const head = document.querySelector('.chat-head').getBoundingClientRect();
+      return {
+        footerHidden: !footer || getComputedStyle(footer).display === 'none',
+        pageFits: document.documentElement.scrollHeight <= innerHeight,
+        headerFits: head.top >= 0 && head.bottom <= innerHeight,
+      };
+    });
+    check('footer hidden, header visible, and no page scrolling', frame.footerHidden && frame.pageFits && frame.headerFits, JSON.stringify(frame));
 
     // put it back for the next viewport
     await page.evaluate(() => { const e = [...document.querySelectorAll('.chat-head .col')].find((n) => n.className.includes('clickable')); if (e) e.click(); });
     await sleep(300);
     await page.evaluate(() => { const b = [...document.querySelectorAll('.chat-head button')].find((e) => /add person/i.test(e.textContent)); if (b) b.click(); });
     await sleep(300);
+
+    const pinned = await page.evaluate(() => {
+      const log = document.querySelector('.chat-log');
+      const head = document.querySelector('.chat-head');
+      const compose = document.querySelector('.chat-compose');
+      const headTop = head.getBoundingClientRect().top;
+      const composeTop = compose.getBoundingClientRect().top;
+      const backlog = document.createElement('div');
+      backlog.style.cssText = 'height:3000px;flex-shrink:0';
+      log.append(backlog);
+      log.scrollTop = log.scrollHeight;
+      const result = log.scrollTop > 0 && head.getBoundingClientRect().top === headTop
+        && compose.getBoundingClientRect().top === composeTop
+        && document.documentElement.scrollHeight <= innerHeight;
+      backlog.remove();
+      return result;
+    });
+    check('a long message history scrolls with the name and composer pinned', pinned);
   }
   await page.setViewport({ width: 1280, height: 800 });
   await sleep(500);
@@ -134,6 +160,28 @@ try {
   check('and the naming field puts itself away', !two.field);
   const r2 = await composerFits();
   check('composer still on screen', r2.fits, `bottom ${r2.bottom} of ${r2.vh}`);
+
+  console.log('\n[direct messages]');
+  await page.click('.chat-back');
+  await sleep(500);
+  check('footer returns when the conversation closes', await page.$eval('.footer', (el) => getComputedStyle(el).display !== 'none'));
+  await click('button', 'New message');
+  await setInput('input[placeholder*="npub" i]', '79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798');
+  await click('button', 'Open');
+  await page.waitForSelector('.chat-compose');
+  await page.setViewport({ width: 390, height: 844 });
+  await sleep(500);
+  const dm = await composerFits();
+  check('DM composer fits and footer is hidden', dm.fits && await page.$eval('.footer', (el) => getComputedStyle(el).display === 'none'));
+  const keyboard = await page.evaluate(() => {
+    Object.defineProperty(window.visualViewport, 'height', { configurable: true, value: 400 });
+    window.visualViewport.dispatchEvent(new Event('resize'));
+    const bottom = document.querySelector('.chat-compose').getBoundingClientRect().bottom;
+    delete window.visualViewport.height;
+    window.visualViewport.dispatchEvent(new Event('resize'));
+    return bottom <= 400;
+  });
+  check('DM composer follows a keyboard that only resizes the visual viewport', keyboard);
 } catch (e) {
   check('run completed', false, e.message);
 } finally {

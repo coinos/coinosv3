@@ -2149,10 +2149,16 @@ export function arkFeature(ctx) {
     const mgr = ark;
     const st = (mgr && mgr.state) || arkStateNow();
     const spend = ((st && st.vtxos) || []).filter((v) => v.state === 'spendable');
+    const pendingSat = (arkBalance() || {}).pendingSat || 0;
     const tip = (mgr && mgr._tipH) || 0;
     const back = () => { ui.arkCoinsPage = null; ui.arkCoinsSel = null; render(); };
-    if (!spend.length) { ui.arkCoinsPage = null; return null; } // nothing left to manage
+    if (!spend.length && !pendingSat) { ui.arkCoinsPage = null; return null; } // nothing left to manage
     if (!mgr) connectArk().then(() => render()).catch(() => {});
+    if (!spend.length) return h('div', { class: 'col', style: 'gap:16px' },
+      h('div', { class: 'card col', style: 'gap:8px' },
+        h('h3', {}, t('arkCoinsTitle')),
+        h('div', { class: 'small muted' }, t('pending'), ': ', fmtSats(pendingSat), ' sats')),
+      h('button', { class: 'btn-ghost btn-block', onClick: back }, t('back')));
     const totalSat = spend.reduce((n, v) => n + v.amountSat, 0);
     let exitFee = 0; try { exitFee = estimateExitFeeSat(mgr); } catch {}
     const feeRate = Math.max(1, (wallet.feeRates && wallet.feeRates.halfHourFee) || 2);
@@ -3800,15 +3806,16 @@ export function arkFeature(ctx) {
         }
       }
       const manageBtn = () => h('button', { class: 'linklike small', style: 'align-self:flex-end', onClick: () => { ui.arkCoinsPage = true; render(); } }, t('arkDepthBtn'));
-      // Nothing to warn about: the coins page is still a tap away — its
-      // renewal schedule and exit cost are worth a look even when all is well.
+      // Management follows the Spending balance, independently of notices
+      // or renewal eligibility. Keep expired coins reachable as well.
+      const balance = arkBalance();
+      const coins = (arkStateNow()?.vtxos || []).some((v) => v.state === 'spendable');
+      const hasBalance = balance && balance.spendableSat + balance.pendingSat > 0;
+      const manage = hasBalance || coins || lines.some((l) => l.manage) ? manageBtn() : null;
       if (!lines.length) {
-        const st = arkStateNow();
-        const coins = st ? (st.vtxos || []).some((v) => v.state === 'spendable') : false;
-        return coins ? [h('div', { class: 'small muted', style: 'margin:10px 0 0;text-align:center' }, manageBtn())] : [];
+        return manage ? [h('div', { class: 'small muted', style: 'margin:10px 0 0;text-align:center' }, manage)] : [];
       }
       const err = lines.some((l) => l.err);
-      const manage = lines.some((l) => l.manage) ? manageBtn() : null;
       // one plain advisory keeps its quiet centred line; anything more, or
       // anything urgent, is a card
       if (!err && lines.length === 1) {

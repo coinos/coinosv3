@@ -117,12 +117,14 @@ try {
   check('...and goes onto the published mute list', after.muted.some((tg) => tg[1] === AUTHOR), JSON.stringify(after.muted).slice(0, 50));
   // An image in a DM opens the same way a post's does — both bubbles render
   // their text through the same function, so this is a check that they keep
-  // doing so.
+  // doing so. From someone else: the author was just muted, and a muted
+  // person's conversation stays off the list.
+  const PEER = 'b'.repeat(64);
   await page.evaluate(([k, peer]) => {
     const st = JSON.parse(localStorage.getItem(k + ':messages') || '{}');
     st.dms = { [peer]: [{ id: '2'.repeat(64), from: peer, text: 'look http://localhost:5258/pic.png', t: Math.floor(Date.now() / 1000) }] };
     localStorage.setItem(k + ':messages', JSON.stringify(st));
-  }, [base, AUTHOR]);
+  }, [base, PEER]);
   await page.reload({ waitUntil: 'domcontentloaded' });
   await waitText('receive', 20000);
   await page.evaluate(() => { const b = [...document.querySelectorAll('button')].find((e) => /message/i.test(e.getAttribute('aria-label') || '')); if (b) b.click(); });

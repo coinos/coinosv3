@@ -1959,6 +1959,7 @@ export function messagesFeature(ctx) {
         pubkey: id.pubkey,
         sk: id.signer instanceof Uint8Array ? bytesToHex(id.signer) : null,
         follows, known, names, hasList: !!newest, updated: Date.now(),
+        muted: [...mutesNow().set], // no buzz from a muted sender either
       });
     } catch { inboxAt = 0; }
   }
@@ -4170,7 +4171,8 @@ export function messagesFeature(ctx) {
   const feedStaged = new Set();
   async function mergeFeed(evs, opts = {}, c = feedNow()) {
     const known = new Set([...c.notes, ...(c.catchup || [])].map((e) => e.id));
-    const add = (evs || []).filter((e) => e.kind === 1 && !isReply(e) && !isMuted(e.pubkey)
+    for (const e of evs || []) noteForSpam(e);
+    const add = (evs || []).filter((e) => e.kind === 1 && !isReply(e) && !hidden(e)
       && !known.has(e.id) && !feedStaged.has(e.id) && known.add(e.id) && feedStaged.add(e.id));
     if (!add.length) return false;
     await notesReady(add);
@@ -4486,6 +4488,7 @@ export function messagesFeature(ctx) {
         h('span', { class: 'small faint' }, t('noteRefNotFound')));
     }
     const ev = c.ev;
+    if (hidden(ev)) return h('div', { class: 'quote-card' }, h('span', { class: 'small faint' }, t('quoteHidden')));
     return h('div', {
       class: 'quote-card clickable',
       onClick: (e) => { e.stopPropagation(); openNoteThread(ev); },
@@ -5002,21 +5005,39 @@ export function messagesFeature(ctx) {
   // list, so it follows you to other clients. Blocking is the same list plus
   // an unfollow — the stronger, more deliberate door.
   const MUTES = 'mutes';
-  let mutes = null; // { set, tags, content, at }
+  let mutes = null; // { set, words, hashtags, threads, tags, priv, content, at }
   let mutesAt = 0;
+  // Everything a mute list holds (NIP-51): people, words, hashtags, whole
+  // threads — public tags and the private half (nip44 to yourself) alike.
+  const muteSets = (tags) => ({
+    set: new Set(pTags(tags).map((x) => x[1])),
+    words: [...new Set(tags.filter((x) => x[0] === 'word' && x[1]).map((x) => String(x[1]).toLowerCase().trim()).filter(Boolean))],
+    hashtags: new Set(tags.filter((x) => x[0] === 't' && x[1]).map((x) => normTopic(x[1])).filter(Boolean)),
+    threads: new Set(tags.filter((x) => x[0] === 'e' && /^[0-9a-f]{64}$/.test(x[1] || '')).map((x) => x[1])),
+  });
+  const withSets = (m) => ({ ...m, priv: m.priv || [], ...muteSets([...(m.tags || []), ...(m.priv || [])]) });
   function mutesNow() {
     if (!mutes) {
       let st2 = null;
       try { st2 = wallet.loadFeatureState(MUTES, null); } catch {}
-      const tags = (st2 && st2.tags) || [];
-      mutes = { set: new Set(pTags(tags).map((x) => x[1])), tags, content: (st2 && st2.c) || '', at: (st2 && st2.at) || 0 };
+      mutes = withSets({ tags: (st2 && st2.tags) || [], priv: (st2 && st2.priv) || [], content: (st2 && st2.c) || '', at: (st2 && st2.at) || 0 });
     }
     return mutes;
   }
   const isMuted = (pk) => mutesNow().set.has(pk);
   function saveMutes(m) {
-    mutes = m;
-    try { wallet.saveFeatureState(MUTES, { tags: m.tags, c: m.content, at: m.at }); } catch {}
+    mutes = withSets(m);
+    try { wallet.saveFeatureState(MUTES, { tags: mutes.tags, priv: mutes.priv, c: mutes.content, at: mutes.at }); } catch {}
+  }
+  // The private half of a list: nip44 to yourself, a JSON array of tags.
+  async function privateTagsOf(ev) {
+    if (!ev || !ev.content) return [];
+    const c = (await selfCryptors()).find((x) => x.pk === ev.pubkey);
+    if (!c) return [];
+    try {
+      const tags = JSON.parse(await c.dec(ev.content));
+      return Array.isArray(tags) ? tags.filter((x) => Array.isArray(x) && x[0] && x[1]) : [];
+    } catch { return []; } // nip04 from an older client, or not ours to read
   }
   async function syncMutes({ force = false } = {}) {
     const me = mePk();
@@ -5028,41 +5049,298 @@ export function messagesFeature(ctx) {
       const newest = (evs || []).sort((a, b) => b.created_at - a.created_at)[0];
       const cur = mutesNow();
       if (newest && newest.created_at > cur.at) {
-        saveMutes({ set: new Set(pTags(newest.tags).map((x) => x[1])), tags: newest.tags || [], content: newest.content || '', at: newest.created_at });
+        saveMutes({ tags: newest.tags || [], priv: await privateTagsOf(newest), content: newest.content || '', at: newest.created_at });
         scheduleRepaint();
       }
     } catch { mutesAt = 0; }
     return mutesNow();
   }
-  // Same care as the follow list: publish onto the freshest copy the relays
-  // will give us, preserving anything in it we didn't write (the encrypted
-  // content other clients keep their private mutes in, above all).
-  async function toggleMute(pk, { block = false } = {}) {
+  // Same care as the follow list: a change is applied to the freshest copy
+  // the relays will give us (the note in toggleFollow), never to our own
+  // optimistic paint. The private half is re-encrypted only when the change
+  // touched it and we hold the key; otherwise it rides along untouched.
+  async function updateMutes(change) {
     const id = await requireIdentity();
-    if (pk === id.pubkey) return;
     const before = mutesNow();
-    saveMutes({ ...before, set: new Set(before.set.has(pk) ? [...before.set].filter((x) => x !== pk) : [...before.set, pk]) });
+    const paint = change(before);
+    if (!paint) return;
+    saveMutes({ ...before, ...paint });
     render();
     try {
       await syncMutes({ force: true });
-      const fetched = mutesNow(); // see the note in toggleFollow
+      const fetched = mutesNow();
       const base = fetched.at > before.at ? fetched : before;
-      const had = base.set.has(pk);
-      const tags = had ? base.tags.filter((x) => !(x[0] === 'p' && x[1] === pk)) : [...base.tags, ['p', pk]];
+      const next = change(base) || {};
+      const tags = next.tags || base.tags;
+      const priv = next.priv || base.priv || [];
+      let content = base.content || '';
+      if (next.priv && JSON.stringify(next.priv) !== JSON.stringify(base.priv || [])) {
+        const c = (await selfCryptors()).find((x) => x.pk === id.pubkey);
+        if (c) content = priv.length ? await c.enc(JSON.stringify(priv)) : '';
+      }
       const created_at = Math.max(Math.floor(Date.now() / 1000), base.at + 1);
-      const partial = { kind: 10000, content: base.content || '', created_at, tags };
+      const partial = { kind: 10000, content, created_at, tags };
       const evt = id.signer instanceof Uint8Array ? finalizeEvent(partial, id.signer) : await id.signer.signEvent(partial);
       const ok = await publishOn(zapRelays(), evt);
       if (!ok) throw new Error(t('msgSendFailed'));
-      saveMutes({ set: new Set(pTags(tags).map((x) => x[1])), tags, content: base.content || '', at: created_at });
-      if (block && !had && isFollowing(pk)) await toggleFollow(pk);
-      toast(had ? t('postUnmuted') : block ? t('postBlocked') : t('postMuted'));
+      saveMutes({ tags, priv, content, at: created_at });
       render();
     } catch (e) {
       saveMutes(before);
       if (!(e instanceof NoIdentity)) toast(e.message || String(e));
       render();
+      throw e;
     }
+  }
+  const tagIn = (tags, k, v) => (tags || []).some((x) => x[0] === k && x[1] === v);
+  const tagOut = (tags, k, v) => (tags || []).filter((x) => !(x[0] === k && x[1] === v));
+  // One entry in or out (want: true/false, or null to flip), both halves.
+  const muteToggle = (k, v, want = null) => (m) => {
+    const has = tagIn(m.tags, k, v) || tagIn(m.priv, k, v);
+    const on = want == null ? !has : want;
+    if (on === has) return null;
+    return on ? { tags: [...m.tags, [k, v]] } : { tags: tagOut(m.tags, k, v), priv: tagOut(m.priv, k, v) };
+  };
+  async function toggleMute(pk, { block = false } = {}) {
+    const id = await requireIdentity();
+    if (pk === id.pubkey) return;
+    const had = isMuted(pk);
+    try {
+      await updateMutes(muteToggle('p', pk));
+      if (block && !had && isFollowing(pk)) await toggleFollow(pk);
+      toast(had ? t('postUnmuted') : block ? t('postBlocked') : t('postMuted'));
+    } catch {}
+  }
+  const toggleMuteThread = (rootId) => updateMutes(muteToggle('e', rootId)).catch(() => {});
+  const toggleMuteWord = (word, want = null) => updateMutes(muteToggle('word', String(word || '').trim().toLowerCase(), want)).catch(() => {});
+  const toggleMuteTag = (tag, want = null) => updateMutes(muteToggle('t', normTopic(tag), want)).catch(() => {});
+
+  // ---- moderation: one door for everything that shows a post --------------
+  // hiddenWhy(ev) says why a post is not shown (or null); hiddenPk(pk) the
+  // same for a person (their zaps, reactions, DMs, chat). Every list in this
+  // file asks here: the feed, threads, notifications, the who-reacted panel,
+  // rooms, DMs, quote cards. Two rules are Amethyst's, and are what makes
+  // its feeds feel clean: repeated content from strangers is spam, and a
+  // post your follows reported is folded (not hidden) behind who said so.
+  const modOn = (k) => (st().mod || {})[k] !== false;
+  const setMod = (k, v) => { const s = st(); (s.mod ||= {})[k] = v; save(s); render(); };
+  // A post of 60+ characters seen again under another id is a duplicate;
+  // five duplicates and the author is hidden for the session. Short posts
+  // ("GM") and nostr:-mention commands are exempt. Session memory only.
+  const spamSeen = new Map(); // content+tags -> first id
+  const spamDup = new Set(); // ids that were repeats
+  const spamBy = new Map(); // pk -> Set of repeated ids
+  function noteForSpam(ev) {
+    if (!ev || ev.kind !== 1 || !ev.id || ev.pending) return;
+    const c = String(ev.content || '');
+    if (c.length < 60) return;
+    if (c.length < 180 && c.startsWith('nostr:')) return;
+    const key = c + '\u0000' + JSON.stringify(ev.tags || []);
+    const first = spamSeen.get(key);
+    if (!first) {
+      spamSeen.set(key, ev.id);
+      if (spamSeen.size > 3000) spamSeen.delete(spamSeen.keys().next().value);
+      return;
+    }
+    if (first === ev.id) return;
+    spamDup.add(ev.id);
+    const s = spamBy.get(ev.pubkey) || spamBy.set(ev.pubkey, new Set()).get(ev.pubkey);
+    s.add(first); s.add(ev.id);
+  }
+  const SPAM_DUPES = 5;
+  const isSpammer = (pk) => modOn('spam') && (spamBy.get(pk) || { size: 0 }).size >= SPAM_DUPES && !isFollowing(pk) && !isMe(pk);
+  const HASHTAG_MAX = 10;
+  const hashtagSpam = (ev) => ev.kind === 1 && modOn('spam') && !isFollowing(ev.pubkey)
+    && ((ev.tags || []).filter((x) => x[0] === 't').length > HASHTAG_MAX
+      || (String(ev.content || '').match(/(^|\s)#[\p{L}\p{N}_]{2,}/gu) || []).length > HASHTAG_MAX);
+  function hiddenWhy(ev) {
+    if (!ev || !ev.pubkey || isMe(ev.pubkey)) return null;
+    const m = mutesNow();
+    if (m.set.has(ev.pubkey)) return 'muted';
+    if (ev.kind === 1) {
+      if (m.threads.size && m.threads.has(rootIdOf(ev))) return 'thread';
+      const text = String(ev.content || '').toLowerCase();
+      if (m.words.length && m.words.some((w) => text.includes(w))) return 'word';
+      if (m.hashtags.size) {
+        if ((ev.tags || []).some((x) => x[0] === 't' && m.hashtags.has(normTopic(x[1])))) return 'hashtag';
+        for (const mm of text.matchAll(/#([\p{L}\p{N}_]+)/gu)) if (m.hashtags.has(normTopic(mm[1]))) return 'hashtag';
+      }
+    }
+    if (reportsNow().mine.has(ev.id)) return 'reported';
+    if (!isFollowing(ev.pubkey)) {
+      if (isSpammer(ev.pubkey) || (modOn('spam') && spamDup.has(ev.id))) return 'spam';
+      if (hashtagSpam(ev)) return 'hashtags';
+    }
+    return null;
+  }
+  const hidden = (ev) => !!hiddenWhy(ev);
+  const hiddenPk = (pk) => !!pk && !isMe(pk) && (isMuted(pk) || isSpammer(pk) || reportsNow().mine.has(pk));
+  const visiblePks = (pks) => [...(pks || [])].filter((pk) => !hiddenPk(pk));
+
+  // ---- reports (NIP-56 kind 1984) from the people you follow --------------
+  // The web-of-trust piece — not a score from a provider, just your follows'
+  // own flags, read from their outbox relays and ours once every half hour,
+  // indexed by post and by person. A post (or its author) flagged by anyone
+  // you follow is folded; anything you flagged yourself is hidden.
+  const REPORTS = 'reports';
+  let reportsCache = null; // { ev: Map id -> Set reporter, pk: Map pk -> Set reporter, mine: Set, at }
+  let reportsAt = 0;
+  function reportsNow() {
+    if (!reportsCache) {
+      let s = null;
+      try { s = wallet.loadFeatureState(REPORTS, null); } catch {}
+      const toMap = (o) => new Map(Object.entries(o || {}).map(([k, v]) => [k, new Set(v)]));
+      reportsCache = { ev: toMap(s && s.ev), pk: toMap(s && s.pk), mine: new Set((s && s.mine) || []), at: (s && s.at) || 0 };
+    }
+    return reportsCache;
+  }
+  function saveReports() {
+    const r = reportsNow();
+    const toObj = (m) => Object.fromEntries([...m.entries()].slice(-1500).map(([k, v]) => [k, [...v].slice(0, 50)]));
+    try { wallet.saveFeatureState(REPORTS, { ev: toObj(r.ev), pk: toObj(r.pk), mine: [...r.mine].slice(-500), at: r.at }); } catch {}
+  }
+  function noteReport(ev) {
+    const r = reportsNow();
+    const mine = myPubkeys().includes(ev.pubkey);
+    const hex = (v) => /^[0-9a-f]{64}$/.test(v || '');
+    let es = 0;
+    for (const x of ev.tags || []) {
+      if (x[0] !== 'e' || !hex(x[1])) continue;
+      es++;
+      (r.ev.get(x[1]) || r.ev.set(x[1], new Set()).get(x[1])).add(ev.pubkey);
+      if (mine) r.mine.add(x[1]);
+    }
+    for (const x of ev.tags || []) {
+      // a PERSON is reported when the p tag carries a reason, or when the
+      // report names no post at all; a post report's p tag merely credits
+      // the author and is not held against them
+      if (x[0] !== 'p' || !hex(x[1]) || x[1] === ev.pubkey || (es && !x[2])) continue;
+      (r.pk.get(x[1]) || r.pk.set(x[1], new Set()).get(x[1])).add(ev.pubkey);
+      if (mine) r.mine.add(x[1]);
+    }
+  }
+  const REPORTS_MS = 30 * 60_000;
+  async function syncReports({ force = false } = {}) {
+    if (!modOn('reports') || !myPubkeys().length) return;
+    if (!force && Date.now() - reportsAt < REPORTS_MS) return;
+    reportsAt = Date.now();
+    const authors = [...new Set([...myPubkeys(), ...followsNow().set])].slice(0, FEED_AUTHORS_MAX);
+    const from = new Set(authors);
+    try {
+      await fetchRelayLists(authors);
+      const plan = outboxPlan(authors);
+      const got = await Promise.all(plan.flatMap(({ relays, authors: a }) => {
+        const chunks = [];
+        for (let i = 0; i < a.length; i += REQ_AUTHORS) chunks.push(a.slice(i, i + REQ_AUTHORS));
+        return chunks.map((chunk) => queryOn(relays, { kinds: [1984], authors: chunk, limit: 500 }, 5000).catch(() => []));
+      }));
+      for (const ev of got.flat()) if (ev && ev.kind === 1984 && from.has(ev.pubkey)) noteReport(ev);
+      reportsNow().at = Date.now();
+      saveReports();
+      scheduleRepaint();
+    } catch { reportsAt = 0; }
+  }
+  // Who among your follows flagged this post or its author.
+  function reportsOn(ev) {
+    if (!ev || !ev.id || !modOn('reports') || isMe(ev.pubkey)) return null;
+    const r = reportsNow();
+    const f = followsNow().set;
+    const by = new Set();
+    for (const pk of r.ev.get(ev.id) || []) if (f.has(pk) && pk !== ev.pubkey) by.add(pk);
+    for (const pk of r.pk.get(ev.pubkey) || []) if (f.has(pk) && pk !== ev.pubkey) by.add(pk);
+    return by.size ? [...by] : null;
+  }
+  // A flagged post, folded: who flagged it, and a tap to see it anyway.
+  function foldedRow(ev, by) {
+    for (const pk of by.slice(0, 3)) profileOf(pk);
+    const who = by.length === 1 ? t('foldReported1', { name: displayName(by[0]) }) : t('foldReportedN', { n: by.length });
+    return h('div', { class: 'row note-folded', style: 'gap:10px;align-items:center;padding:10px 0;opacity:.75' },
+      avatar(ev.pubkey, 'chat-avatar note-avatar', false),
+      h('div', { class: 'grow small muted', style: 'min-width:0' }, '\u26a0 ' + who),
+      h('button', {
+        class: 'btn-sm', type: 'button', style: 'flex-shrink:0',
+        onClick: (e) => { e.stopPropagation(); (ui.revealed ||= new Set()).add(ev.id); render(); },
+      }, t('foldShow')));
+  }
+  // Publish a report (NIP-56): the post with a reason, its author credited.
+  async function reportNote(ev, type) {
+    const id = await requireIdentity();
+    const partial = { kind: 1984, content: '', created_at: Math.floor(Date.now() / 1000), tags: [['e', ev.id, type], ['p', ev.pubkey]] };
+    const evt = id.signer instanceof Uint8Array ? finalizeEvent(partial, id.signer) : await id.signer.signEvent(partial);
+    const ok = await publishOn(zapRelays(), evt);
+    if (!ok) throw new Error(t('msgSendFailed'));
+    noteReport(evt);
+    saveReports();
+    toast(t('reportSent'));
+    render();
+  }
+  function reportSheet() {
+    if (!ui.reportPick) return null;
+    const ev = ui.reportPick;
+    const close = () => { ui.reportPick = null; render(); };
+    const reason = (type, label) => h('button', {
+      class: 'btn-block report-reason', style: 'text-align:left', type: 'button', 'data-reason': type,
+      onClick: () => { close(); reportNote(ev, type).catch((e) => { if (!(e instanceof NoIdentity)) toast(e.message || String(e)); }); },
+    }, label);
+    return h('div', { class: 'confirm-pop-backdrop', onClick: (e) => { if (e.target === e.currentTarget) close(); } },
+      h('div', { class: 'card col confirm-pop report-pick', style: 'gap:8px' },
+        h('div', { class: 'chat-name' }, t('reportTitle')),
+        h('div', { class: 'small muted' }, t('reportHelp')),
+        reason('spam', t('reportSpam')),
+        reason('impersonation', t('reportImpersonation')),
+        reason('nudity', t('reportNudity')),
+        reason('profanity', t('reportProfanity')),
+        reason('illegal', t('reportIllegal')),
+        reason('malware', t('reportMalware')),
+        reason('other', t('reportOther')),
+        h('button', { class: 'btn-ghost btn-block', onClick: close }, t('back'))));
+  }
+  // Settings → Nostr: the mute list laid out, and the two spam rules.
+  function moderationCard() {
+    const m = mutesNow();
+    const e = ui.modEdit || (ui.modEdit = { word: '' });
+    const people = [...m.set];
+    for (const pk of people.slice(0, 30)) profileOf(pk);
+    const add = () => {
+      const w = e.word.trim();
+      if (!w) return;
+      e.word = '';
+      if (w.startsWith('#')) toggleMuteTag(w, true); else toggleMuteWord(w, true);
+    };
+    const chip = (label, onX) => h('span', { class: 'feed-chip on mod-chip', style: 'display:inline-flex;align-items:center;gap:6px' },
+      label, h('button', { class: 'linklike', type: 'button', 'aria-label': t('remove'), style: 'padding:0 2px', onClick: onX }, '\u00d7'));
+    const toggle = (k, label, help) => h('div', { class: 'col', style: 'gap:4px' },
+      h('label', { class: 'row gap6', style: 'align-items:center;cursor:pointer' },
+        h('input', { type: 'checkbox', class: 'mod-' + k, checked: modOn(k), style: 'width:18px;height:18px;accent-color:var(--accent);margin:0', onChange: (ev) => setMod(k, ev.target.checked) }),
+        h('span', {}, label)),
+      h('div', { class: 'small faint' }, help));
+    return h('div', { class: 'card col mod-card', style: 'gap:10px' },
+      h('h3', {}, t('modTitle')),
+      h('p', { class: 'small muted', style: 'margin:0' }, t('modDesc')),
+      h('div', { class: 'small muted' }, t('modPeople')),
+      people.length
+        ? h('div', { class: 'col', style: 'gap:6px' }, ...people.slice(0, 50).map((pk) => h('div', { class: 'row gap6 mod-person', style: 'align-items:center' },
+            avatar(pk, 'chat-avatar mini', false),
+            h('span', { class: 'grow', style: 'min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' }, displayName(pk)),
+            h('button', { class: 'btn-sm', type: 'button', onClick: () => toggleMute(pk) }, t('postUnmute')))))
+        : h('div', { class: 'small faint' }, t('modNoPeople')),
+      h('div', { class: 'small muted' }, t('modWords')),
+      m.words.length || m.hashtags.size
+        ? h('div', { class: 'row wrap', style: 'gap:6px' },
+            ...m.words.map((w) => chip(w, () => toggleMuteWord(w, false))),
+            ...[...m.hashtags].map((x) => chip('#' + x, () => toggleMuteTag(x, false))))
+        : null,
+      h('div', { class: 'row gap6' },
+        h('input', {
+          type: 'text', class: 'grow mod-word', placeholder: t('modWordHint'), value: e.word,
+          autocapitalize: 'none', autocomplete: 'off', spellcheck: 'false',
+          onInput: (ev) => { e.word = ev.target.value; },
+          onKeydown: (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); add(); } },
+        }),
+        h('button', { class: 'btn-sm', type: 'button', onClick: add }, t('modAdd'))),
+      m.threads.size ? h('div', { class: 'small faint' }, t('modThreads', { n: m.threads.size })) : null,
+      toggle('spam', t('modSpamToggle'), t('modSpamHelp')),
+      toggle('reports', t('modReportsToggle'), t('modReportsHelp')));
   }
 
   const noteLink = (ev) => location.origin + '/' + (neventOf(ev.id, ev.pubkey) || ev.id);
@@ -5098,6 +5376,8 @@ export function messagesFeature(ctx) {
           ? item('\u2197', t('postShare'), () => { navigator.share({ url: noteLink(ev) }).catch(() => {}); })
           : null,
         mine || !myPubkeys().length ? null : item('\u2630', t('listAddTo'), () => { ui.listPick = ev.pubkey; render(); }),
+        mine ? null : item('\u{1F6A9}', t('postReport'), () => { ui.reportPick = ev; render(); }),
+        item('\u{1F515}', mutesNow().threads.has(rootIdOf(ev)) ? t('postUnmuteThread') : t('postMuteThread'), () => toggleMuteThread(rootIdOf(ev))),
         mine ? null : item('\u{1F507}', isMuted(ev.pubkey) ? t('postUnmute') : t('postMute'), () => toggleMute(ev.pubkey).catch(() => {})),
         mine || isMuted(ev.pubkey) ? null : item('⛔', t('postBlock'), () => toggleMute(ev.pubkey, { block: true }).catch(() => {}), true),
         h('button', { class: 'btn-ghost btn-block', onClick: close }, t('back'))));
@@ -5120,8 +5400,8 @@ export function messagesFeature(ctx) {
     if (canZap && zapSoundOn()) warmZapSound(); // the clip is decoded before the first tap
     const mineReact = myReactOn(ev.id);
     const rm = reacts.get(ev.id);
-    const likeN = rm ? [...rm.values()].reduce((n, { who }) => n + who.size, 0) : 0;
-    const boostN = (boosts.get(ev.id) || new Set()).size;
+    const likeN = rm ? [...rm.values()].reduce((n, { who }) => n + visiblePks(who).length, 0) : 0;
+    const boostN = visiblePks(boosts.get(ev.id) || new Set()).length;
     const btn = (icon, label, count, on, onClick, cls = '', extra = null) => h('button', {
       class: 'note-act' + (on ? ' on' : '') + (cls ? ' ' + cls : ''), title: label, 'aria-label': label,
       'aria-disabled': onClick ? undefined : 'true',
@@ -5180,15 +5460,15 @@ export function messagesFeature(ctx) {
   const toggleWho = (id) => { if (whoOpenIds.has(id)) whoOpenIds.delete(id); else whoOpenIds.add(id); render(); };
   function whoCount(id) {
     const rm = reacts.get(id);
-    let n = rm ? [...rm.values()].reduce((k, { who }) => k + who.size, 0) : 0;
-    n += (boosts.get(id) || new Set()).size;
-    n += (zapWho.get(id) || new Map()).size;
+    let n = rm ? [...rm.values()].reduce((k, { who }) => k + visiblePks(who).length, 0) : 0;
+    n += visiblePks(boosts.get(id) || new Set()).length;
+    n += [...(zapWho.get(id) || new Map()).values()].filter((z) => !hiddenPk(z.pk)).length;
     return n;
   }
   function whoPanel(ev) {
-    const rm = reacts.get(ev.id) || new Map();
-    const bs = boosts.get(ev.id) || new Set();
-    const zs = [...(zapWho.get(ev.id) || new Map()).values()].sort((a, b) => b.sats - a.sats || b.ts - a.ts);
+    const rm = new Map([...(reacts.get(ev.id) || new Map())].map(([k, r]) => [k, { ...r, who: new Set(visiblePks(r.who)) }]).filter(([, r]) => r.who.size));
+    const bs = new Set(visiblePks(boosts.get(ev.id) || new Set()));
+    const zs = [...(zapWho.get(ev.id) || new Map()).values()].filter((z) => !hiddenPk(z.pk)).sort((a, b) => b.sats - a.sats || b.ts - a.ts);
     const person = (pk, extra) => h('button', {
       class: 'note-who-person',
       onClick: (e) => { e.stopPropagation(); openProfile(pk); },
@@ -5244,6 +5524,9 @@ export function messagesFeature(ctx) {
     // an optimistic post mid-publish: visible but not yet a real event —
     // dimmed, and no thread/reply/zap until its signed self takes over
     const pending = !!ev.pending;
+    // flagged by people you follow: folded behind a line that says who
+    const flagged = !pending && !(ui.revealed && ui.revealed.has(ev.id)) ? reportsOn(ev) : null;
+    if (flagged) return foldedRow(ev, flagged);
     const openable = open && !pending;
     if (!pending) watchZaps([ev.id]);
     return h('div', {
@@ -5345,6 +5628,7 @@ export function messagesFeature(ctx) {
         threadCache.set(topId, c);
         if (ui.noteThread && ui.noteThread.rootId === rootId) ui.noteThread.rootId = topId;
       }
+      for (const e of all) noteForSpam(e);
       const seen = new Set([c.rootId]);
       c.replies = all
         .filter((e) => e && e.id !== c.rootId && !seen.has(e.id) && seen.add(e.id))
@@ -5571,6 +5855,7 @@ export function messagesFeature(ctx) {
     const walk = (pid, depth) => {
       const list = (children.get(pid) || []).sort((a, b) => (isMe(b.pubkey) - isMe(a.pubkey)) || (a.created_at - b.created_at));
       for (const ev of list) {
+        if (hidden(ev)) { walk(ev.id, depth); continue; } // its answers keep their place
         const indent = Math.min(depth, 3) * 14;
         kids.push(noteSep(), indent ? h('div', { style: 'margin-left:' + indent + 'px' }, row(ev)) : row(ev));
         place(ev);
@@ -6038,6 +6323,12 @@ export function messagesFeature(ctx) {
               onClick: () => openListFeed(p),
             }, p.title, ' ', h('span', { class: 'faint' }, String(p.n))))));
       })(),
+      // muted: say so, with the way back, where their posts still show
+      !mine && isMuted(pk)
+        ? h('div', { class: 'row gap6 small muted prof-muted', style: 'align-items:center' },
+            h('span', { class: 'grow' }, t('profMutedBanner')),
+            h('button', { class: 'btn-sm', type: 'button', onClick: () => toggleMute(pk) }, t('postUnmute')))
+        : null,
       // Their public notes: the PAGE scrolls (no inner scrollbox), older
       // pages stream in as you near the bottom (the init() scroll listener →
       // loadOlderNotes), and on phones the feed goes full-bleed — edge to
@@ -6199,14 +6490,15 @@ export function messagesFeature(ctx) {
   // The sheets a post (or a person) can open: the ⋯ menu, the reaction
   // picker, the list picker. Every screen that shows a post draws them —
   // the thread and profile pages once left the ⋯ tap doing nothing.
-  const noteOverlays = () => [noteSheet(), reactPicker(), listPickSheet()];
+  const noteOverlays = () => [noteSheet(), reactPicker(), listPickSheet(), reportSheet()];
   function feedView() {
     syncFollowSets().catch(() => {}); // throttled inside
+    syncReports().catch(() => {}); // likewise
     const c = feedNow();
     const def = feedDef();
     const authors = feedAuthors(def);
     const hasQuery = feedHasQuery(def);
-    const visible = c.notes.filter((ev) => !isMuted(ev.pubkey));
+    const visible = c.notes.filter((ev) => !hidden(ev));
     // Every child keyed by its post, hairlines included, so the morph
     // reconciles the list by post: a new one at the top is inserted as its
     // own node (and can open itself up), the rest keep theirs.
@@ -6727,6 +7019,7 @@ export function messagesFeature(ctx) {
 
   function homeView() {
     if (myPubkeys().length) syncFollowSets().catch(() => {}); // lists made elsewhere join the feeds (throttled inside)
+    syncReports().catch(() => {}); // your follows' flags (throttled inside)
     startDMs();
     // Threads you've since replied to should stop being strangers to the
     // worker; throttled inside, so this is cheap on every render.
@@ -6740,7 +7033,7 @@ export function messagesFeature(ctx) {
         const last = [...m.values()].sort((a, b) => a.rumor.created_at - b.rumor.created_at).at(-1);
         return { peer, last, unread: dmUnread(peer, m) };
       })
-      .filter((x) => x.last)
+      .filter((x) => x.last && !isMuted(x.peer))
       .sort((a, b) => b.last.rumor.created_at - a.last.rumor.created_at);
 
     // Being here answers the header dot — including anything that lands while
@@ -6993,6 +7286,7 @@ export function messagesFeature(ctx) {
     const msgs = [...(room.byChannel.get(chId)?.values() || [])]
       .filter((m) => !room.deletes.has(m.rumor.id))
       .filter((m) => !(room.folded && room.folded.banned.has(m.author)))
+      .filter((m) => !hiddenPk(m.author)) // muted here, or a spammer
       .sort((a, b) => eventMs(a.rumor) - eventMs(b.rumor));
     markRead(chRead(chId), newestFrom(msgs, (m) => !my.includes(m.author)));
     if (!msgs.length)
@@ -7377,7 +7671,9 @@ export function messagesFeature(ctx) {
   function mergeNotifs(evs) {
     const c = notifNow();
     const known = new Set(c.items.map((x) => x.id));
-    const add = (evs || []).map(notifItem).filter((x) => x && !known.has(x.id) && known.add(x.id));
+    for (const ev of evs || []) noteForSpam(ev);
+    const add = (evs || []).map((ev) => (ev.kind === 1 && hidden(ev) ? null : notifItem(ev)))
+      .filter((x) => x && !hiddenPk(x.actor) && !known.has(x.id) && known.add(x.id));
     if (!add.length) return false;
     // One zap, two receipts: a coinos zap publishes its own (9737) beside the
     // LNURL server's (9735). The same person, post and amount within a few
@@ -7420,7 +7716,7 @@ export function messagesFeature(ctx) {
       (ev) => { if (mergeNotifs([ev])) scheduleRepaint(); });
   }
   function stopNotifWatch() { if (notifUnsub) { try { notifUnsub(); } catch {} notifUnsub = null; } }
-  const notifUnread = () => notifNow().items.filter((x) => x.ts > notifSeen()).length;
+  const notifUnread = () => notifNow().items.filter((x) => x.ts > notifSeen() && !hiddenPk(x.actor)).length;
   function markNotifsSeen() {
     const newest = Math.max(0, ...notifNow().items.map((x) => x.ts));
     if (newest > notifSeen()) { const s2 = st(); s2.notifSeen = newest; save(s2); }
@@ -7521,7 +7817,7 @@ export function messagesFeature(ctx) {
   function notifView() {
     const c = notifNow();
     markNotifsSeen(); // anything that lands while you look is seen too
-    const items = c.items;
+    const items = c.items.filter((x) => !hiddenPk(x.actor)); // a mute made later applies to what was kept
     const rows = items.flatMap((x, i) => [i ? noteSep() : null, notifRow(x)]);
     return h('div', { class: 'card col chat-page', style: 'gap:10px' },
       h('div', { class: 'row gap6', style: 'align-items:center' },
@@ -7548,6 +7844,7 @@ export function messagesFeature(ctx) {
 
   return {
     id: 'messages',
+    nostrSettingsCards() { return [moderationCard()]; },
     // The app came back after being backgrounded. A phone freezes a hidden
     // tab: the relay sockets are cut and every post made in the meantime is
     // simply missing, which is why the feed used to sit there looking stale

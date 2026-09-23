@@ -90,6 +90,7 @@ export async function classifyDm(wrap, inboxes) {
       author,
       mine: author === rec.pubkey,
       followed: (rec.follows || []).includes(author),
+      muted: (rec.muted || []).includes(author),
       // Someone you're already talking to is not a stranger, whether or not
       // you ever followed them.
       known: (rec.known || []).includes(author),
@@ -110,6 +111,7 @@ export async function classifyDm(wrap, inboxes) {
 export function shouldNotifyDm(verdict) {
   if (!verdict) return true;
   if (verdict.mine) return false;
+  if (verdict.muted) return false; // muted in the app: no buzz either
   if (verdict.followed || verdict.known) return true;
   return !verdict.hasList;
 }

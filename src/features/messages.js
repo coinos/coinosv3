@@ -1811,7 +1811,13 @@ export function messagesFeature(ctx) {
     const ref = m ? parseNostrRef(m[1].toLowerCase()) : null;
     return ref && ref.type === 'event' ? ref : null;
   })();
-  if (urlNote) {
+  // The app's history already holds this exact thread on a reload. Leave its
+  // state and URL intact so wallet restore can paint the header and thread
+  // together; the public deep-link path is only for a NEW visit.
+  const restoringUrlThread = (() => {
+    try { return !!urlNote && history.state?.nav?.noteThread?.focusId === urlNote.id; } catch { return false; }
+  })();
+  if (urlNote && !restoringUrlThread) {
     try { history.replaceState(null, '', '/'); } catch {}
     ui.pubProf = true;
     // a reload of a thread the history restores by itself needs no fetch
@@ -5731,6 +5737,16 @@ export function messagesFeature(ctx) {
   const noteSep = () => h('div', { style: 'height:1px;background:var(--border,rgba(128,128,128,.18));margin:0 -14px' });
   function renderThreadStable() {
     if (!ui.noteThread || ui.noteThread.scrollPending || typeof document === 'undefined') { render(); return; }
+    // At the very top the HEADER is the anchor. Pinning the first post instead
+    // turns a late header/control row into an unwanted downward scroll.
+    if (window.scrollY <= 1) {
+      render();
+      if (window.scrollY) window.scrollTo(0, 0);
+      requestAnimationFrame(() => {
+        if (ui.noteThread && window.scrollY <= 80) window.scrollTo(0, 0);
+      });
+      return;
+    }
     const rows = [...document.querySelectorAll('.thread-page [data-zap-post]')];
     const anchor = rows.find((el) => el.getAttribute('data-focus-note') === '1'
       && el.getBoundingClientRect().top >= 0 && el.getBoundingClientRect().top < innerHeight)

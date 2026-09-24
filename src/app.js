@@ -607,7 +607,7 @@ function renderInner() {
               // Get started here is what flashed the sign-in page over a
               // wallet that was about to restore. Every other screen is a
               // deliberate choice and still paints; this one waits.
-              ? h('div', { class: 'col', style: 'gap:16px' }, brandHeader(false))
+            ? h('div', { class: 'col', style: 'gap:16px' }, BOOT_NAV ? null : brandHeader(false))
               : shouldOnboard() ? onboardScreen() : unlockScreen());
   // Navigation animates; background repaints must not. The key is every
   // ui field that decides which page is on screen.
@@ -5579,7 +5579,7 @@ const INTENT_URI = (() => {
   } catch { return null; }
 })();
 const FEATURES = buildFeatures(ctx);
-// Deferred features (gifts, NWC, hats) hold placeholder slots in FEATURES —
+// Deferred features (gifts, NWC, POS) hold placeholder slots in FEATURES —
 // hook precedence is position — and arrive as separate chunks right after
 // boot, filled in place. If a wallet opened before they landed, each newcomer
 // gets the init() it missed; if the wallet locked again, it doesn't.

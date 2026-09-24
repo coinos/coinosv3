@@ -66,15 +66,19 @@ try {
   await page.evaluate(({ rootId, replyId, author }) => {
     const root = { id: rootId, pubkey: author, kind: 1, content: 'Cached thread root', tags: [], created_at: 1 };
     const reply = { ...root, id: replyId, content: 'Cached thread reply', tags: [['e', rootId, '', 'root']], created_at: 2 };
-    localStorage.setItem('btc-wallet-note-threads', JSON.stringify([{ rootId, root, replies: [reply], profiles: {}, counts: {} }]));
+    const replies = [reply, ...Array.from({ length: 24 }, (_, i) => ({ ...reply,
+      id: (i + 20).toString(16).padStart(64, '0'), content: 'Another cached reply '.repeat(8), created_at: i + 3 }))];
+    localStorage.setItem('btc-wallet-note-threads', JSON.stringify([{ rootId, root, replies, profiles: {}, counts: {} }]));
     const nav = { ...history.state.nav, screen: 'wallet', noteThread: { rootId, focusId: replyId, seed: reply } };
     history.replaceState({ nav, i: 0 }, '', location.href);
   }, { rootId, replyId, author });
   await page.evaluateOnNewDocument(() => {
-    window.__threadBoot = { homeFrames: 0, animatedFrames: 0, threadAt: null };
+    window.__threadBoot = { homeFrames: 0, partialHeaderFrames: 0, animatedFrames: 0, maxScroll: 0, threadAt: null };
     const tick = () => {
       const state = window.__threadBoot;
+      state.maxScroll = Math.max(state.maxScroll, window.scrollY);
       if (document.querySelector('.balance')) state.homeFrames++;
+      if (document.querySelector('.brand') && !document.querySelector('.header-avatar')) state.partialHeaderFrames++;
       const thread = document.querySelector('.thread-page');
       if (thread?.classList.contains('anim-page')) state.animatedFrames++;
       if (thread) state.threadAt ??= Math.round(performance.now());
@@ -83,10 +87,15 @@ try {
     requestAnimationFrame(tick);
   });
   await page.reload({ waitUntil: 'domcontentloaded' });
+  await sleep(250);
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.reload({ waitUntil: 'domcontentloaded' });
   await sleep(1200);
   const thread = await page.evaluate(() => window.__threadBoot);
-  const steady = thread.threadAt != null && !thread.homeFrames && !thread.animatedFrames;
-  console.log(` ${steady ? '✓' : '✗'} thread reload: ${thread.homeFrames} home frames, ${thread.animatedFrames} page animation frames`);
+  const atTop = await page.evaluate(() => window.scrollY === 0);
+  const steady = thread.threadAt != null && !thread.homeFrames && !thread.partialHeaderFrames && !thread.animatedFrames
+    && !thread.maxScroll && atTop;
+  console.log(` ${steady ? '✓' : '✗'} rapid second thread reload: ${thread.homeFrames} home frames, ${thread.partialHeaderFrames} partial-header frames, ${thread.animatedFrames} page animation frames, max scroll ${thread.maxScroll}px`);
   if (!steady) ok = false;
 } finally { await browser.close(); server.stop(true); }
 console.log(ok ? '\n✅ no sign-in flash' : '\n❌ the sign-in page flashed');

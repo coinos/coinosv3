@@ -22,9 +22,11 @@ function render() {
   if (!feature) return;
   document.querySelector('#app').replaceChildren(feature.screenView() || feature.row(author, reply, 'Someone'));
 }
-feature = messagesFeature({ h, wallet, ui, render, toast() {}, brandHeader: () => null,
+feature = messagesFeature({ h, wallet, ui, render, toast() {}, brandHeader: () => window.test?.showNav
+  ? h('div', { style: 'height:60px' }) : null,
   hook: k => k === 'nostrLoginIdentity' ? { pubkey: mine, signer } : null });
-window.test = { ui, reply, other, root, render, waiting,
+window.test = { ui, reply, other, root, render, waiting, showNav: false,
+  stable: () => feature.testStable(),
   seedFace: () => createThreadStore().save({ root, replies: [reply] }, reply.id, {
     [author]: { name: 'Nostrich', picture: 'https://example.com/nostrich.webp', eventAt: 10, t: Date.now(),
       thumbFor: 'https://example.com/nostrich.webp', thumb: 'data:image/png;base64,iVBORw0KGgo=', thumbPx: 144 },
@@ -46,7 +48,7 @@ const bundle = await Bun.build({ entrypoints: ['thread-test-entry'], target: 'br
   build.onResolve({ filter: /^thread-test-entry$/ }, () => ({ path: 'entry', namespace: 'thread-test' }));
   build.onLoad({ filter: /.*/, namespace: 'thread-test' }, () => ({ contents: entry, loader: 'js', resolveDir: process.cwd() }));
   build.onLoad({ filter: /src\/features\/messages\.js$/ }, async ({ path }) => ({ loader: 'js', contents: (await Bun.file(path).text())
-    .replace("id: 'messages',", "id: 'messages', row: noteRow, actions: noteActions,") }));
+    .replace("id: 'messages',", "id: 'messages', row: noteRow, actions: noteActions, testStable: renderThreadStable,") }));
   build.onLoad({ filter: /src\/nostr\.js$/ }, async ({ path }) => ({ loader: 'js', contents: (await Bun.file(path).text())
     .replace('export async function queryOn(relays, filter, maxWait = 1500) {', 'export async function queryOn(relays, filter, maxWait = 1500) { return window.query(filter);')
     .replace('export async function publishOn(relays, evt) {', 'export async function publishOn(relays, evt) { window.sent.push(evt); return true;')
@@ -114,6 +116,15 @@ try {
     const buttons = row?.querySelectorAll('.note-acts > button');
     return buttons?.[1].textContent === '7' && buttons?.[3].textContent === '29' && buttons?.[4].textContent === '210';
   }));
+  await page.evaluate(() => {
+    document.querySelector('#outside').style.height = '2000px';
+    window.scrollTo(0, 0);
+    test.showNav = true;
+    test.stable();
+  });
+  await new Promise((r) => setTimeout(r, 80));
+  check('adding header controls while at the top does not scroll to the first post',
+    await page.evaluate(() => window.scrollY === 0));
   assert.deepEqual(errors, []);
   console.log('✓ no browser errors');
 } finally { await browser.close(); server.stop(true); }

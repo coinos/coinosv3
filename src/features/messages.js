@@ -29,7 +29,9 @@ import {
   packAddr, packNaddr, parsePackRef, parsePackAddr, parseEmojiSet,
 } from '../emoji.js';
 import { saveInbox } from '../dm-inbox.js';
-import { makeSearcher, resultRows, fallbackAvatar, warmSearch, punkImageUrl } from '../recipient-search.js';
+import { mergeFeedWindow } from '../feed-window.js';
+import { createThreadStore } from '../thread-cache.js';
+import { makeSearcher, resultRows, fallbackAvatar, warmSearch, punkImageUrl, punkSmallUrl } from '../recipient-search.js';
 import { getNetwork } from '../api.js';
 import { decodeBolt11 } from '../ark/lightning.js';
 import { hexToBytes, bytesToHex } from '@noble/hashes/utils';
@@ -263,7 +265,7 @@ export function messagesFeature(ctx) {
     } catch { emojiSyncAt = 0; }
   }
   const emojiImg = (code, url, cls = 'cemoji') =>
-    h('img', { class: cls, src: url, alt: ':' + code + ':', title: ':' + code + ':', loading: 'lazy' });
+    feedPaint && !feedMedia(url) ? ':' + code + ':' : h('img', { class: cls, src: url, alt: ':' + code + ':', title: ':' + code + ':', loading: 'lazy' });
   // A reaction's content as shown on its chip: the picture for a :code: we
   // know (its own tag taught it to us), the text otherwise.
   function reactNode(emoji) {
@@ -610,7 +612,7 @@ export function messagesFeature(ctx) {
   // Pull the picture bytes into the HTTP cache the moment we learn the URL —
   // an avatar div then paints instantly instead of holding its quiet circle
   // while the image downloads.
-  const preloadPicture = (p) => { try { if (p && p.picture) new Image().src = p.picture; } catch {} };
+  const preloadPicture = (p) => { try { if (p?.picture) new Image().src = localPunk(p.picture) || (p.thumbFor === p.picture && p.thumb) || p.picture; } catch {} };
 
   // A profile picture is whatever its owner uploaded, and that is very often
   // the full-size original: among the faces this wallet had cached, one was a
@@ -648,6 +650,7 @@ export function messagesFeature(ctx) {
   // Those failures must not suppress the corrected fetch/blob path.
   const THUMB_VERSION = 1;
   const thumbing = new Set();
+  const thumbQueue = new Map();
   function makeThumb(pk, p) {
     if (!p || !p.picture || typeof document === 'undefined') return;
     // thumbPx: a thumbnail made when the circles were smaller is too soft for
@@ -660,7 +663,8 @@ export function messagesFeature(ctx) {
     // won't have us is asked about twice a month rather than every boot.
     if (p.thumbFailVersion === THUMB_VERSION && p.thumbFail === p.picture
       && Date.now() - (p.thumbFailAt || 0) < Math.min(THUMB_RETRY * 2 ** ((p.thumbFails || 1) - 1), THUMB_RETRY_MAX)) return;
-    if (thumbing.has(pk) || (thumbing.size >= 3 && !isMe(pk))) return; // a few at a time — our own face never waits
+    if (thumbing.has(pk)) return;
+    if (thumbing.size >= 3 && !isMe(pk)) { thumbQueue.set(pk, p); return; }
     // Making the thumbnail costs one more fetch of the original today to
     // save every fetch after it — but not on a connection someone is
     // nursing. Data Saver keeps today's behaviour.
@@ -677,6 +681,13 @@ export function messagesFeature(ctx) {
       profiles.set(pk, entry);
       persistProfile(pk, entry);
       if (patch.thumb) scheduleRepaint();
+      // Every warmed face gets a turn; the old concurrency guard silently
+      // discarded everyone after the first three in a batch.
+      for (const [nextPk, next] of thumbQueue) {
+        if (thumbing.size >= 3) break;
+        thumbQueue.delete(nextPk);
+        makeThumb(nextPk, profiles.get(nextPk) || next);
+      }
     };
     const failed = () => done({ thumbFail: url, thumbFailAt: Date.now(), thumbFailVersion: THUMB_VERSION,
       thumbFails: (p.thumbFailVersion === THUMB_VERSION && p.thumbFail === url ? p.thumbFails || 0 : 0) + 1 });
@@ -720,7 +731,24 @@ export function messagesFeature(ctx) {
   // the ten minutes that's right for someone who genuinely has no profile.
   const EMPTY_RETRY = 10 * 60_000;
   const emptyRetry = (p) => Math.min(15_000 * Math.pow(2, Math.max(0, (p && p.miss) || 1) - 1), EMPTY_RETRY);
+  // A feed row keeps the presentation it had when admitted. Background
+  // profile/quote refreshes must not rewrite text or replace faces mid-read.
+  let feedPaint = null;
   function profileOf(pk) {
+    if (!feedPaint) return liveProfileOf(pk);
+    if (!feedPaint.profiles.has(pk)) {
+      const p = { ...(liveProfileOf(pk) || {}) };
+      let url = avatarUrl(p, pk);
+      if (!feedMedia(url) && feedMedia(p.picture)) url = p.picture;
+      if (!feedMedia(url)) p.picture = null;
+      else p.picture = url;
+      delete p.thumb;
+      delete p.loading;
+      feedPaint.profiles.set(pk, p);
+    }
+    return feedPaint.profiles.get(pk);
+  }
+  function liveProfileOf(pk) {
     warmProfiles();
     const cur = profiles.get(pk);
     if (cur !== undefined && (cur === null
@@ -2742,12 +2770,15 @@ export function messagesFeature(ctx) {
   // ---- views --------------------------------------------------------------
 
   const timeLabel = (tms) => {
+    if (feedPaint?.time.has(tms)) return feedPaint.time.get(tms);
     const d = new Date(tms);
     const today = new Date().toDateString() === d.toDateString();
-    return today
+    const label = today
       ? d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
       : d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) +
         ' ' + d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+    feedPaint?.time.set(tms, label);
+    return label;
   };
 
   // Which bytes a face paints from, in order of preference:
@@ -2778,7 +2809,9 @@ export function messagesFeature(ctx) {
     // `loading` is different and still gets the quiet circle: a name lookup
     // is in flight for that specific person, so a picture is expected and
     // punk art must not flash in front of it.
-    const node = p && p.loading && !p.picture
+    const node = feedPaint && !p.picture
+      ? h('div', { class: cls + ' fallback' }, (p.name || npubOf(pk) || '??').slice(0, 2))
+      : p && p.loading && !p.picture
       ? h('div', { class: cls + ' fallback loading' })
       : p === null
         ? fallbackAvatar(h, pk, null, cls)
@@ -2794,7 +2827,7 @@ export function messagesFeature(ctx) {
         ? h('div', { class: cls + ' ava-img', style: 'background-image:' + avatarBg(p, cls.includes('profile-avatar')) })
         : fallbackAvatar(h, pk, p.name, cls);
     // A face we keep painting is one worth keeping a thumbnail of.
-    if (p && p.picture) makeThumb(pk, p);
+    if (!feedPaint && p && p.picture) makeThumb(pk, p);
     if (clickable) {
       node.classList.add('clickable');
       // Start the profile's own fetches on touch-DOWN, not on click. The gap
@@ -3329,12 +3362,13 @@ export function messagesFeature(ctx) {
   // only runs once a wallet opens.
   if (typeof window !== 'undefined') {
     window.addEventListener('scroll', () => {
-      if (!ui.profilePk && !(ui.chatOpen && ui.msgView === 'feed')) return;
+      if (!ui.profilePk && (!(ui.chatOpen && ui.msgView === 'feed') || ui.noteThread)) return;
       // back at the top by yourself: the new posts are under your eyes, so
       // the notice has done its job (only the pill repaints — the rows are
       // keyed and stay put, so nothing moves under a finger)
       if (!ui.profilePk && feed && feed.unseen && atFeedTop()) { feed.unseen = 0; render(); }
-      if (window.innerHeight + window.scrollY < (document.documentElement.scrollHeight || 0) - 600) return;
+      if (!ui.profilePk && feed?.deferred?.length) admitFeed(feed.deferred, feed);
+      if (window.innerHeight + window.scrollY < (document.documentElement.scrollHeight || 0) - (ui.profilePk ? 600 : Math.max(2400, window.innerHeight * 3))) return;
       if (ui.profilePk) loadOlderNotes(ui.profilePk).catch(() => {});
       else loadOlderFeed().catch(() => {});
     }, { passive: true });
@@ -3653,8 +3687,8 @@ export function messagesFeature(ctx) {
   // ---- the feed: posts from the people you follow ---------------------------
   // Their kind-1 notes, newest first, replies left out — a reply belongs to
   // its thread, and a timeline of half-conversations reads like eavesdropping.
-  // The last screenful is kept locally so the feed opens with posts in it
-  // rather than a spinner, exactly like the profile pages do.
+  // Cached events avoid waiting for relays; their presentation is prepared
+  // before the reading surface is shown.
   const FEED_CACHE = 'feedNotes';
   const FEED_LIMIT = 80;
   const FEED_PAGE = 20;    // posts on screen at once, grown as you scroll
@@ -4019,13 +4053,16 @@ export function messagesFeature(ctx) {
     if (!c) {
       let stored = [];
       try { stored = wallet.loadFeatureState(feedCacheKey(curFeedId), []) || []; } catch {}
-      c = { id: curFeedId, status: stored.length ? 'ready' : 'loading', notes: stored, shown: FEED_PAGE, at: 0 };
+      c = { id: curFeedId, status: 'loading', notes: stored, shown: FEED_PAGE, at: 0, booting: true, presentations: new Map() };
       feedStates.set(curFeedId, c);
       feed = c;
-      // the cached page is on screen already; warm what it shows so the
-      // scroll below the fold, and the next boot, paint whole too
-      notesReady(stored.slice(0, FEED_PAGE)).catch(() => {});
-      refreshFeed({}, c);
+      // Cached events still need their pictures decoded. Prepare two pages
+      // before exposing the first, including the page immediately below it.
+      c.boot = notesReady(stored.slice(0, FEED_PAGE * 2)).finally(() => {
+        c.booting = false;
+        scheduleRepaint();
+      });
+      c.boot.then(() => refreshFeed({}, c));
     }
     feed = c;
     return c;
@@ -4039,8 +4076,17 @@ export function messagesFeature(ctx) {
     stopFeedWatch();
     const c = feedNow();
     c.unseen = 0; c.shown = FEED_PAGE;
+    admitFeed(c.deferred || [], c, true);
+    if (!c.booting) {
+      c.presentations.clear();
+      c.booting = true;
+      c.boot = notesReady(c.notes.slice(0, FEED_PAGE * 2)).finally(() => {
+        c.booting = false;
+        scheduleRepaint();
+      });
+    }
     watchFeed();
-    refreshFeed({}, c);
+    c.boot.then(() => refreshFeed({}, c));
     try { window.scrollTo({ top: 0 }); } catch {}
     render();
   }
@@ -4066,40 +4112,41 @@ export function messagesFeature(ctx) {
     ui.chatOpen = true; ui.msgView = 'feed';
     switchFeed(id);
   }
-  // How far from the top counts as "reading", rather than "sitting at the top
-  // of the feed". Inserting a post above what someone is reading moves the
-  // words under their eyes; at the top there is nothing to disturb.
+  // Reaching the top manually clears the new-post notice.
   const FEED_TOP_PX = 120;
   const atFeedTop = () => {
     try { return (window.scrollY || 0) < FEED_TOP_PX; } catch { return true; }
   };
 
-  // ---- a post arrives whole ------------------------------------------------
-  // A row used to paint the moment its event landed, and then finish itself
-  // over the next second or two: a punk turning into a photograph, a blank
-  // gap becoming the picture. So a post now waits at the door until its
-  // author's face and the images in its body are fetched and decoded — or
-  // have had a fair chance. A slow host holds a post for a couple of seconds,
-  // not forever, and a batch never waits longer than one post would.
-  const READY_MS = 2000;
-  const mediaReady = new Set(); // URLs decoded (or given up on) this session
-  const warmMedia = (url) => new Promise((resolve) => {
-    if (!url || mediaReady.has(url) || typeof Image === 'undefined') return resolve();
-    const done = () => { mediaReady.add(url); resolve(); };
-    try {
+  // Resolve the whole first presentation before admitting a row. The
+  // deadline leaves unavailable resources as stable, clickable fallbacks;
+  // a late response is useful on the next visit, not a mid-read replacement.
+  const READY_MS = 8000;
+  const mediaReady = new Map(); // URL -> decoded dimensions
+  const mediaWarming = new Map();
+  const warmMedia = (url) => {
+    if (!url || mediaReady.has(url) || typeof Image === 'undefined') return Promise.resolve();
+    if (mediaWarming.has(url)) return mediaWarming.get(url);
+    const task = new Promise((resolve) => {
       const img = new Image();
-      img.onload = () => { (img.decode ? img.decode() : Promise.resolve()).then(done, done); };
-      img.onerror = done; // a picture that won't load won't get better by waiting
+      const timer = setTimeout(() => done(false), READY_MS);
+      const done = (ok) => {
+        clearTimeout(timer);
+        img.onload = img.onerror = null;
+        if (ok) mediaReady.set(url, { width: img.naturalWidth, height: img.naturalHeight });
+        resolve();
+      };
+      img.onload = () => { (img.decode ? img.decode() : Promise.resolve()).then(() => done(true), () => done(false)); };
+      img.onerror = () => done(false);
       img.src = url;
-    } catch { done(); }
-  });
-  // The pictures a body will show: inline images (by extension, or markdown
-  // saying so outright) and a video's poster still. Four at most — a
-  // gallery post shows its first row whole and fills in the rest.
+    }).finally(() => mediaWarming.delete(url));
+    mediaWarming.set(url, task);
+    return task;
+  };
   function noteMediaUrls(content) {
     const urls = [];
     for (const part of String(content || '').split(NOTE_SPLIT)) {
-      if (!part || urls.length >= 4) continue;
+      if (!part) continue;
       const md = MD_PARTS.exec(part);
       const url = md ? md[3] : (/^https?:\/\//i.test(part) ? part : null);
       if (!url) continue;
@@ -4108,75 +4155,73 @@ export function messagesFeature(ctx) {
     }
     return urls;
   }
-  // The face: wait for the profile to land (the batch asks within a beat),
-  // then for whatever avatarBg would paint from — the local thumbnail is a
-  // data URL and costs nothing; an original goes through the network once.
+  const avatarUrl = (p, pk) => p?.picture
+    ? localPunk(p.picture) || (p.thumbFor === p.picture && p.thumb) || p.picture
+    : punkSmallUrl(pk);
   async function warmAvatar(pk, deadline) {
-    let p = profileOf(pk);
+    let p = liveProfileOf(pk);
     while ((p === null || (p && p.loading && !p.picture)) && Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, 100));
       p = profiles.get(pk);
     }
-    if (!p || !p.picture) return; // punk art: drawn from the pubkey, no fetch
-    if (localPunk(p.picture) || (p.thumb && p.thumbFor === p.picture)) return;
-    await warmMedia(p.picture);
+    await warmMedia(avatarUrl(p, pk));
+    if (p?.picture) makeThumb(pk, p);
   }
-  function noteReady(ev, deadline = Date.now() + READY_MS) {
-    const wait = Promise.all([warmAvatar(ev.pubkey, deadline), ...noteMediaUrls(ev.content).map(warmMedia)]);
-    return Promise.race([wait, new Promise((r) => setTimeout(r, Math.max(0, deadline - Date.now())))]).catch(() => {});
+  async function noteReady(ev, deadline = Date.now() + READY_MS, depth = 0) {
+    const tasks = [warmAvatar(ev.pubkey, deadline), ...noteMediaUrls(ev.content).map(warmMedia),
+      ...[...emojiTagMap(ev.tags).values()].map(warmMedia)];
+    for (const part of String(ev.content || '').split(NOTE_SPLIT)) {
+      if (/^(nostr:|@?)(npub|nprofile)1/i.test(part)) {
+        const ref = parseNostrRef(part.replace(/^(nostr:|@)/i, ''));
+        if (ref?.pk) tasks.push(warmAvatar(ref.pk, deadline));
+      } else if (!depth && /^nostr:(note|nevent)1/i.test(part)) {
+        const ref = parseNostrRef(part.slice(6));
+        if (ref?.type === 'event') {
+          const quote = quotedNote(ref);
+          tasks.push(Promise.resolve(quote.promise).then(() => quote.ev && noteReady(quote.ev, deadline, depth + 1)));
+        }
+      }
+    }
+    let timer;
+    try {
+      await Promise.race([Promise.all(tasks), new Promise((r) => { timer = setTimeout(r, Math.max(0, deadline - Date.now())); })]);
+    } catch {} finally { clearTimeout(timer); }
   }
   const notesReady = (evs) => { const deadline = Date.now() + READY_MS; return Promise.all(evs.map((e) => noteReady(e, deadline))); };
-
-  // ---- new posts open up rather than appear ------------------------------
-  // A post let in at the top of an open feed used to simply be there on the
-  // next paint — one frame nothing, the next frame a whole row, and the rest
-  // of the page shoved down by exactly that much. Now it opens: height from
-  // nothing to its own, fading in as it goes, over a third of a second. The
-  // feed is rebuilt on every render, so the moment a post was let in is
-  // remembered per id and a repaint mid-way resumes the animation where it
-  // was instead of starting it again.
   const keyed = (node, key) => { node.setAttribute('data-key', key); return node; };
-  const ENTER_MS = 380;
-  const feedEntered = new Map(); // note id -> ms its row first painted (0: not yet)
-  function noteEntering(evs) {
-    if (!(ui.chatOpen && ui.msgView === 'feed')) return; // nobody is watching
-    for (const e of evs) feedEntered.set(e.id, 0);
+  // Keep only the resources this row actually uses. Copying the entire
+  // session media cache into every row grows quadratically as you scroll.
+  function feedMedia(url) {
+    if (!feedPaint) return mediaReady.get(url);
+    if (!feedPaint.media.has(url)) feedPaint.media.set(url, mediaReady.get(url) || null);
+    return feedPaint.media.get(url);
   }
-  function enterRow(node, id) {
-    if (!feedEntered.has(id)) return node;
-    // the clock starts at the first paint, not at admission: a repaint can
-    // trail the merge by longer than the animation itself
-    const at = feedEntered.get(id) || (feedEntered.set(id, Date.now()), Date.now());
-    const elapsed = Date.now() - at;
-    if (elapsed >= ENTER_MS || typeof node.animate !== 'function') { feedEntered.delete(id); return node; }
-    // measured once it is in the page; the row keeps its own padding, which
-    // opens with it so the words don't sit on the hairline for a beat
-    setTimeout(() => {
-      if (!node.isConnected) return;
-      const box = node.getBoundingClientRect().height;
-      const pad = 10; // the row's vertical padding, see noteRow
-      node.style.overflow = 'hidden';
-      const anim = node.animate([
-        { height: '0px', paddingTop: '0px', paddingBottom: '0px', opacity: 0 },
-        { height: Math.max(0, box - 2 * pad) + 'px', paddingTop: pad + 'px', paddingBottom: pad + 'px', opacity: 1 },
-      ], { duration: ENTER_MS, easing: 'cubic-bezier(.2,.7,.2,1)', fill: 'backwards' });
-      anim.currentTime = Math.min(ENTER_MS, Date.now() - at);
-      anim.onfinish = anim.oncancel = () => { node.style.overflow = ''; feedEntered.delete(id); };
-    }, 0);
-    return node;
+  function feedRow(c, ev) {
+    let presentation = c.presentations.get(ev.id);
+    if (!presentation) {
+      presentation = { profiles: new Map(), media: new Map(), quotes: new Map(), time: new Map() };
+      c.presentations.set(ev.id, presentation);
+    }
+    const prev = feedPaint;
+    feedPaint = presentation;
+    try { return keyed(noteRow(ev.pubkey, ev, displayName(ev.pubkey)), ev.id); }
+    finally { feedPaint = prev; }
   }
 
   // Posts at the door: filtered in synchronously, so the same note from a
   // second relay is dropped while the first copy is still warming.
-  const feedStaged = new Set();
+  const feedStaged = new WeakMap();
   async function mergeFeed(evs, opts = {}, c = feedNow()) {
-    const known = new Set([...c.notes, ...(c.catchup || [])].map((e) => e.id));
+    let staged = feedStaged.get(c);
+    if (!staged) feedStaged.set(c, staged = new Set());
+    const known = new Set([...c.notes, ...(c.catchup || []), ...(c.deferred || [])].map((e) => e.id));
     for (const e of evs || []) noteForSpam(e);
     const add = (evs || []).filter((e) => e.kind === 1 && !isReply(e) && !hidden(e)
-      && !known.has(e.id) && !feedStaged.has(e.id) && known.add(e.id) && feedStaged.add(e.id));
+      && !known.has(e.id) && !staged.has(e.id) && known.add(e.id) && staged.add(e.id));
     if (!add.length) return false;
+    if (c.booting) await c.boot;
     await notesReady(add);
-    for (const e of add) feedStaged.delete(e.id);
+    for (const e of add) staged.delete(e.id);
     // A catch-up is settled once, after every relay has answered (see
     // settleCatchup) — not chunk by chunk, which is what made the pill count
     // up in steps and land on the same round number every time.
@@ -4184,24 +4229,32 @@ export function messagesFeature(ctx) {
       c.catchup = [...(c.catchup || []), ...add];
       return true;
     }
-    // A post that arrives on its own goes in at once, wherever you are. At
-    // the top it opens itself under your eyes. Further down it goes in
-    // above the fold with the page held still, and the pill says how many
-    // are up there — a notice, not a gate: the scrollbar already changed,
-    // and scrolling up reaches them in order. (They used to wait behind
-    // the pill, which read as "nothing new ever arrives".)
-    const above = opts.live && c.notes.length && !atFeedTop();
-    c.notes = [...c.notes, ...add].sort((a, b) => b.created_at - a.created_at).slice(0, FEED_KEEP);
-    if (opts.live && !above) noteEntering(add);
-    // posts arriving at the TOP shouldn't cost you the ones you'd scrolled to
-    const fresh = add.filter((e) => e.created_at >= (c.notes[0] || {}).created_at).length;
-    if (fresh) c.shown = Math.min((c.shown || FEED_PAGE) + fresh, c.notes.length);
-    saveFeedCache(c);
-    if (above) {
-      c.unseen = (c.unseen || 0) + add.length;
-      if (ui.chatOpen && ui.msgView === 'feed' && c === feed) holdScroll(render);
-    }
+    admitFeed([...(c.deferred || []), ...add], c);
     return true;
+  }
+
+  // Never insert between the rows currently under the reader's eyes. Gap
+  // fills wait until that part of the feed is offscreen; new posts above
+  // the reading position can be inserted immediately with an anchor.
+  function admitFeed(add, c, explicit = false) {
+    const onScreen = c === feed && ui.chatOpen && ui.msgView === 'feed' && !ui.profilePk && !ui.noteThread;
+    const rows = onScreen && !explicit ? [...document.querySelectorAll('.notes-feed > .row[data-key]')] : [];
+    const topBefore = c.notes[0]?.created_at || 0;
+    const result = mergeFeedWindow(c.notes, c.shown, add, {
+      rows: rows.map((r) => ({ id: r.getAttribute('data-key'), top: r.getBoundingClientRect().top, bottom: r.getBoundingClientRect().bottom })),
+      height: typeof window === 'undefined' ? 0 : window.innerHeight, keep: FEED_KEEP, page: FEED_PAGE,
+    });
+    c.deferred = result.deferred;
+    if (!result.added.length) return;
+    c.shown = result.shown;
+    c.notes = result.notes;
+    const retained = new Set(c.notes.map((e) => e.id));
+    for (const id of c.presentations.keys()) if (!retained.has(id)) c.presentations.delete(id);
+    saveFeedCache(c);
+    if (rows.length) {
+      c.unseen = (c.unseen || 0) + result.added.filter((e) => e.created_at > topBefore).length;
+      holdScroll(render);
+    }
   }
 
   // The pill's tap: the posts are already in, so this just goes up to them.
@@ -4209,6 +4262,7 @@ export function messagesFeature(ctx) {
   function jumpToNew() {
     const c = feed;
     if (!c) return;
+    admitFeed(c.deferred || [], c, true);
     c.unseen = 0;
     try { window.scrollTo({ top: 0 }); } catch {}
     render();
@@ -4250,59 +4304,25 @@ export function messagesFeature(ctx) {
   // beat after the page painted, moving what you had started reading. Only
   // a first load (nothing to disturb) or a rebuilt follow list goes straight in.
   async function refreshFeed(opts = {}, c = feedNow()) {
+    if (c.booting) await c.boot;
     if (!feedHasQuery(feedDef(c.id))) { c.status = 'ready'; return; }
     if (!opts.force && Date.now() - c.at < 30_000) return;
     c.at = Date.now();
     const catchup = opts.live != null ? !!opts.live : !!c.notes.length;
-    const topBefore = c.notes[0] ? c.notes[0].created_at : 0;
     try { await feedPass({}, { catchup }, c); } catch {} finally {
       c.status = 'ready';
-      if (catchup) settleCatchup(topBefore, c); else scheduleRepaint();
+      if (catchup) settleCatchup(c); else scheduleRepaint();
     }
     if (c === feed) watchFeed();
   }
-  // ---- coming back to the feed ---------------------------------------------
-  // The catch-up asks every relay for its newest posts, with no lower bound,
-  // so most of what it returns is not new at all — it's older posts that
-  // simply weren't in the fifty we keep. Those are gap fills and go in
-  // silently. What's actually new is what's newer than the newest post we
-  // had when we asked, and how many there are decides what happens:
-  //   a few — they go in above what you're looking at, and the page is held
-  //           still, so scrolling up reveals them in order, newest at the top
-  //   a lot — you've been gone a while: the feed goes to the top, at the
-  //           newest post, the way it would on a fresh open
-  const FEED_CATCHUP_MAX = 20;
-  function settleCatchup(topBefore, c = feed) {
+  // Catch-up uses the same anchor even after a long absence. Only an
+  // explicit tap on the new-post notice takes the reader to the top.
+  function settleCatchup(c = feed) {
     if (!c) return;
     const add = c.catchup || [];
     c.catchup = [];
-    if (!add.length) { scheduleRepaint(); return; }
-    const seen = new Set(c.notes.map((e) => e.id));
-    const fresh = add.filter((e) => !seen.has(e.id) && e.created_at > topBefore).length;
-    // the window grows only by what lands inside it — gap fills below its
-    // bottom edge are paged in later, not painted now
-    const edge = (c.notes[Math.min(c.shown || FEED_PAGE, c.notes.length) - 1] || {}).created_at || 0;
-    const inside = add.filter((e) => !seen.has(e.id) && e.created_at > edge).length;
-    c.notes = [...c.notes, ...add.filter((e) => !seen.has(e.id))]
-      .sort((a, b) => b.created_at - a.created_at).slice(0, FEED_KEEP);
-    saveFeedCache(c);
-    const onScreen = ui.chatOpen && ui.msgView === 'feed' && c === feed;
-    if (!onScreen || fresh > FEED_CATCHUP_MAX) {
-      c.shown = FEED_PAGE;
-      render();
-      // after the paint, so a browser that anchors the scroll through the
-      // repaint can't leave you where you were
-      if (onScreen) { try { window.scrollTo({ top: 0 }); } catch {} }
-      return;
-    }
-    // the window grows by what went in above its edge, so the posts you'd
-    // scrolled to are still there below; no entrance animation — these
-    // open above the fold
-    c.shown = Math.min((c.shown || FEED_PAGE) + inside, c.notes.length);
-    holdScroll(render);
-    // the new ones are above you now (even if you were at the top before
-    // the hold): say so — only the pill repaints
-    if (fresh && !atFeedTop()) { c.unseen = (c.unseen || 0) + fresh; render(); }
+    admitFeed([...(c.deferred || []), ...add], c);
+    scheduleRepaint();
   }
   // Repaint with the page held still: the post at the top of the viewport
   // stays where it was, however much was inserted above it. Measured after
@@ -4311,9 +4331,9 @@ export function messagesFeature(ctx) {
   function holdScroll(paint) {
     let key = null, top = 0;
     try {
-      for (const r of document.querySelectorAll('.notes-feed > [data-key]')) {
+      for (const r of document.querySelectorAll('.notes-feed > .row[data-key]')) {
         const b = r.getBoundingClientRect();
-        if (b.bottom > FEED_TOP_PX) { key = r.getAttribute('data-key'); top = b.top; break; }
+        if (b.bottom > 0 && b.top < window.innerHeight) { key = r.getAttribute('data-key'); top = b.top; break; }
       }
     } catch {}
     paint();
@@ -4344,27 +4364,38 @@ export function messagesFeature(ctx) {
     for (const u of feedUnsubs) { try { u(); } catch {} }
     feedUnsubs = [];
   }
-  // Reaching the bottom shows another twenty. Only when the window has caught
-  // up with everything we hold do we go back to the relays for older posts —
-  // rendering a hundred notes to show twenty was the whole cost here.
+  // Prepare older pages several screens ahead of the reader. A scroll while
+  // preparation is underway shares the same work instead of exposing it early.
+  let feedAheadTimer = null;
+  function prepareFeedAhead(c) {
+    if (feedAheadTimer || c.booting || c.loadingMore || (c.shown >= c.notes.length && (c.end || c.status !== 'ready'))) return;
+    feedAheadTimer = setTimeout(() => {
+      feedAheadTimer = null;
+      if (c !== feed || !ui.chatOpen || ui.msgView !== 'feed' || ui.profilePk || ui.noteThread) return;
+      const last = document.querySelector('.notes-feed > .row[data-key]:last-child');
+      if (last && last.getBoundingClientRect().bottom < window.innerHeight * 4) loadOlderFeed().catch(() => {});
+    }, 100);
+  }
   async function loadOlderFeed() {
     const c = feedNow();
-    if (c.shown < c.notes.length) {
-      c.shown = Math.min(c.shown + FEED_PAGE, c.notes.length);
-      render();
-      if (c.shown < c.notes.length) return; // still serving from what we have
-    }
-    if (c.status !== 'ready' || c.loadingMore || c.end) return;
-    const oldest = c.notes[c.notes.length - 1];
-    if (!oldest || !feedHasQuery()) { c.end = true; return; }
+    if (c.booting || c.loadingMore || (c.shown >= c.notes.length && (c.end || c.status !== 'ready'))) return;
     c.loadingMore = true;
-    render();
     try {
-      if (await feedPass({ until: oldest.created_at - 1 }, {}, c)) c.shown += FEED_PAGE;
+      if (c.shown < c.notes.length) {
+        const end = Math.min(c.shown + FEED_PAGE, c.notes.length);
+        const boundary = c.notes[end - 1].id;
+        await notesReady(c.notes.slice(c.shown, Math.min(end + FEED_PAGE, c.notes.length)));
+        c.shown = Math.max(c.shown, c.notes.findIndex((e) => e.id === boundary) + 1);
+        return;
+      }
+      if (c.status !== 'ready' || c.end) return;
+      const oldest = c.notes.at(-1);
+      if (!oldest || !feedHasQuery(feedDef(c.id))) { c.end = true; return; }
+      if (await feedPass({ until: oldest.created_at - 1 }, {}, c)) c.shown = Math.min(c.shown + FEED_PAGE, c.notes.length);
       else c.end = true;
-    } catch {} finally {
+    } finally {
       c.loadingMore = false;
-      render();
+      if (c === feed) render();
     }
   }
 
@@ -4414,7 +4445,8 @@ export function messagesFeature(ctx) {
     const frame = h('div', { class: 'yt-embed' },
       h('img', {
         class: 'yt-poster', loading: 'lazy', alt: '',
-        src: 'https://i.ytimg.com/vi/' + vid + '/hqdefault.jpg',
+        src: !feedPaint || feedMedia('https://i.ytimg.com/vi/' + vid + '/hqdefault.jpg')
+          ? 'https://i.ytimg.com/vi/' + vid + '/hqdefault.jpg' : undefined,
         onError: (e) => { e.target.style.display = 'none'; },
       }),
       h('button', {
@@ -4464,7 +4496,7 @@ export function messagesFeature(ctx) {
     if (c && (c.status !== 'missing' || Date.now() - (c.at || 0) < QUOTE_RETRY_MS)) return c;
     if (!c) { c = { status: 'loading', ev: null, at: 0 }; quoted.set(ref.id, c); }
     c.at = Date.now();
-    (async () => {
+    c.promise = (async () => {
       const relays = [...new Set([...(ref.relays || []), ...zapRelays()])];
       const evs = await queryOn(relays, { ids: [ref.id] }, 4500).catch(() => []);
       c.ev = (evs || [])[0] || c.ev || null;
@@ -4478,7 +4510,11 @@ export function messagesFeature(ctx) {
   // post to act on — no reply, no boost, no zap of its own. Tapping it opens
   // the note properly, which is where those live.
   function quoteCard(ref, depth) {
-    const c = quotedNote(ref);
+    if (feedPaint && !feedPaint.quotes.has(ref.id)) feedPaint.quotes.set(ref.id, { ...quoted.get(ref.id) });
+    const c = feedPaint ? feedPaint.quotes.get(ref.id) : quotedNote(ref);
+    if (feedPaint && !c?.ev) return h('a', {
+      href: '#', onClick: (e) => { e.preventDefault(); e.stopPropagation(); openNoteRef(ref); },
+    }, t('noteRefLink'));
     if (c.status === 'loading') {
       return h('div', { class: 'quote-card quote-loading' },
         h('span', { class: 'spinner sm' }), h('span', { class: 'small faint' }, t('noteRefLoading')));
@@ -4511,19 +4547,25 @@ export function messagesFeature(ctx) {
     if (/\.(mp4|webm|mov|m4v)(\?[^\s]*)?$/i.test(url)) {
       // metadata-only preload: the poster frame paints, nothing streams
       // until the viewer presses play
+      const stable = !!feedPaint;
       return h('video', { src: url, class: 'note-video', controls: true,
         preload: 'metadata', playsinline: true,
-        onError: (e) => { e.target.style.display = 'none'; } });
+        style: feedPaint ? 'width:100%;aspect-ratio:16/9;object-fit:contain' : undefined,
+        onError: (e) => { if (!stable) e.target.style.display = 'none'; } });
     }
     if (isImage || /\.(png|jpe?g|gif|webp|avif)(\?[^\s]*)?$/i.test(url)) {
+      const size = feedPaint ? feedMedia(url) : null;
+      if (feedPaint && !size) return h('a', { href: url, target: '_blank', rel: 'noopener noreferrer' }, label || url);
       // tap it to see it properly — a 320px-tall crop of someone's
       // photograph is a thumbnail, not the picture they posted
       return h('img', {
-        src: url, class: 'note-img clickable', loading: 'lazy', alt: label || '',
+        src: url, class: 'note-img clickable', loading: feedPaint ? 'eager' : 'lazy', alt: label || '',
+        width: size?.width, height: size?.height,
+        style: size ? 'height:auto;aspect-ratio:' + size.width + '/' + size.height : undefined,
         onClick: (e) => { e.stopPropagation(); ctx.openImage && ctx.openImage(url); },
         // a picture we were TOLD was a picture and which won't load leaves
         // nothing behind — the alt text is already in the sentence above it
-        onError: (e) => { e.target.style.display = 'none'; },
+        onError: (e) => { if (!size) e.target.style.display = 'none'; },
       });
     }
     if (youtubeId(url)) return youtubeEmbed(url, youtubeId(url));
@@ -5569,6 +5611,8 @@ export function messagesFeature(ctx) {
 
   // ---- thread view: a note in its conversation ----------------------------
   const threadCache = new Map(); // root id -> { status, root, replies }
+  const threadStore = createThreadStore();
+  const persistThread = (c) => threadStore.save(c, c.focusId);
   const noteSep = () => h('div', { style: 'height:1px;background:var(--border,rgba(128,128,128,.18));margin:0 -14px' });
   function rootIdOf(ev) {
     const es = ev.tags.filter((x) => x[0] === 'e');
@@ -5576,18 +5620,32 @@ export function messagesFeature(ctx) {
     return (marked || es[0] || [])[1] || ev.id;
   }
   function threadFor(seed) {
-    const rootId = rootIdOf(seed);
-    let c = threadCache.get(rootId);
+    const requestedRootId = rootIdOf(seed);
+    let c = threadCache.get(requestedRootId) || [...new Set(threadCache.values())]
+      .find((c) => c.replies.some((e) => e.id === seed.id || e.id === requestedRootId));
     if (c) {
-      if (seed.id === rootId) c.root ||= seed;
-      else if (!c.replies.some((ev) => ev.id === seed.id))
+      threadCache.set(requestedRootId, c);
+      c.focusId = seed.id;
+      if (seed.id === c.rootId) c.root ||= seed;
+      else if (!c.replies.some((ev) => ev.id === seed.id)) {
         c.replies = [...c.replies, seed].sort((a, b) => a.created_at - b.created_at);
+        persistThread(c);
+      }
+      if (ui.noteThread?.focusId === seed.id) ui.noteThread.rootId = c.rootId;
       return c;
     }
-    // We already have the tapped post. Keep it visible and replyable even
-    // if the root is unavailable or the relay's limited result omits it.
-    c = { status: 'loading', rootId, root: seed.id === rootId ? seed : null, replies: seed.id === rootId ? [] : [seed] };
+    // Browser history restores only the selected event. Recover the full
+    // conversation synchronously, including the canonical root discovered
+    // by climbing a reply-only chain on the previous visit.
+    const stored = threadStore.find(seed.id) || threadStore.find(requestedRootId);
+    const rootId = stored?.rootId || requestedRootId;
+    c = { status: stored ? 'ready' : 'loading', rootId, focusId: seed.id,
+      root: stored?.root || (seed.id === rootId ? seed : null), replies: stored?.replies || [] };
+    if (seed.id !== rootId && !c.replies.some((e) => e.id === seed.id)) c.replies.push(seed);
+    c.replies.sort((a, b) => a.created_at - b.created_at);
+    threadCache.set(requestedRootId, c);
     threadCache.set(rootId, c);
+    if (ui.noteThread?.focusId === seed.id) ui.noteThread.rootId = rootId;
     (async () => {
       // Where a thread lives: the reply's author, the people it tags (the
       // root's author is usually first among them), the relay hints on its
@@ -5634,6 +5692,7 @@ export function messagesFeature(ctx) {
         .filter((e) => e && e.id !== c.rootId && !seen.has(e.id) && seen.add(e.id))
         .sort((a, b) => a.created_at - b.created_at);
       c.status = 'ready';
+      persistThread(c);
       if (ui.noteThread && ui.noteThread.rootId === c.rootId) {
         render();
         // The inline reply box may have MOVED on this render (it slots under
@@ -5661,6 +5720,9 @@ export function messagesFeature(ctx) {
   // event (its tags name the root, its author names the home relays), so
   // fetch it by id — the reference's relay hints first — then open.
   async function openNoteRef(ref) {
+    const saved = threadStore.find(ref.id);
+    const cached = saved && (saved.root.id === ref.id ? saved.root : saved.replies.find((e) => e.id === ref.id));
+    if (cached) { openNoteThread(cached); return; }
     toast(t('noteRefLoading'));
     const relays = [...new Set([...(ref.relays || []), ...NOTE_RELAYS])];
     const evs = await queryOn(relays, { ids: [ref.id] }, 4000).catch(() => []);
@@ -5743,6 +5805,7 @@ export function messagesFeature(ctx) {
     const ok = await publishOn(relays, evt);
     if (!ok) throw new Error(t('msgSendFailed'));
     c.replies = [...c.replies, evt];
+    persistThread(c);
     return evt;
   }
 
@@ -6498,13 +6561,14 @@ export function messagesFeature(ctx) {
     const def = feedDef();
     const authors = feedAuthors(def);
     const hasQuery = feedHasQuery(def);
-    const visible = c.notes.filter((ev) => !hidden(ev));
+    prepareFeedAhead(c);
+    const visible = c.booting ? [] : c.notes.filter((ev) => !hidden(ev));
     // Every child keyed by its post, hairlines included, so the morph
     // reconciles the list by post: a new one at the top is inserted as its
-    // own node (and can open itself up), the rest keep theirs.
+    // own node; the rest keep theirs.
     const rows = visible.slice(0, c.shown || FEED_PAGE).flatMap((ev, i) => [
       i ? h('div', { 'data-key': 'hr:' + ev.id, style: 'height:1px;background:var(--border,rgba(128,128,128,.18));margin:0 -14px' }) : null,
-      enterRow(keyed(noteRow(ev.pubkey, ev, displayName(ev.pubkey)), ev.id), ev.id),
+      feedRow(c, ev),
     ]);
     // Posts that went in above you while you were reading. A floating pill
     // that says how many are up there; the tap takes you up to them.
@@ -6521,7 +6585,7 @@ export function messagesFeature(ctx) {
       : null;
     // the chat shell draws the brand header; this is just the page under it
     return h('div', { class: 'card col chat-page', style: 'gap:10px' },
-        pill,
+        h('div', { 'data-key': 'feed-notice', style: 'display:contents' }, pill),
         h('div', { class: 'row gap6', style: 'align-items:center' },
           backBtn(() => { ui.msgView = 'home'; stopFeedWatch(); render(); }),
           h('h3', { style: 'margin:0;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' }, def.builtin ? t('feedTitle') : def.name),
@@ -6543,7 +6607,7 @@ export function messagesFeature(ctx) {
             : h('div', { class: 'col', style: 'gap:8px' },
                 h('div', { class: 'small muted' }, t('feedNoQuery')),
                 h('button', { class: 'btn-sm', onClick: () => openFeedEditor(def) }, t('feedEdit')))
-          : c.status === 'loading' && !visible.length
+          : (c.booting || c.status === 'loading') && !visible.length
             ? h('div', { class: 'row gap6', style: 'justify-content:center;padding:12px 0' }, h('span', { class: 'spinner sm' }))
             : !visible.length
               ? h('div', { class: 'small faint', style: 'text-align:center;padding:12px 0' }, t('feedEmpty'))
@@ -8084,6 +8148,8 @@ export function messagesFeature(ctx) {
       if (zapLiveUnsub) { try { zapLiveUnsub(); } catch {} zapLiveUnsub = null; }
       clearTimeout(zapTimer); zapTimer = null; zapQueue = new Set(); zapRecent = [];
       stopFeedWatch();
+      feedStates.clear();
+      threadCache.clear();
       follows = null; followsAt = 0; feed = null; feedAt = 0; relayLists = null;
       mutes = null; mutesAt = 0;
       reacts.clear(); boosts.clear(); seenNoteEv.clear(); myReactEv.clear(); quoted.clear();

@@ -182,7 +182,7 @@ try {
     const i = document.querySelector('.header-avatar img.punk') || document.querySelector('img.punk');
     return i ? i.getAttribute('src') : '';
   });
-  check('the default face is the small punk', /^punks-sm\//.test(punkSrc), punkSrc);
+  check('the default face is the small punk', /^\/punks-sm\//.test(punkSrc), punkSrc);
 
   // And someone we have never cached at all — the case that used to sit as a
   // blank circle until a relay answered — is drawn from their pubkey alone.
@@ -195,7 +195,7 @@ try {
     const i = document.querySelector('.header-avatar img.punk') || document.querySelector('img.punk');
     return i ? i.getAttribute('src') : '';
   });
-  check('an uncached face is drawn straight away, not left blank', /^punks-sm\//.test(strangerSrc), strangerSrc || 'blank circle');
+  check('an uncached face is drawn straight away, not left blank', /^\/punks-sm\//.test(strangerSrc), strangerSrc || 'blank circle');
 
   // A picture behind a redirect, loaded plainly first (as the avatar always
   // is) and only then thumbnailed.

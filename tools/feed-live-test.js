@@ -6,8 +6,8 @@
 // catches up by itself now.
 //
 // And a post that lands while you are reading halfway down must not shove the
-// page under your thumb. It waits behind a pill that says how many, and the
-// tap that shows them takes you up to them.
+// page under your thumb. Prepared posts arrive above the viewport, and the
+// notice takes you up to them when tapped.
 //
 // Run: bun tools/feed-live-test.js
 import puppeteer from 'puppeteer-core';
@@ -33,7 +33,9 @@ const html = await buildHtml({ minify: true, pwa: false });
 // a picture that takes its time, so a post showing it must have waited
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64');
 const server = Bun.serve({ port: 5296, fetch: async (req) => {
-  if (new URL(req.url).pathname === '/slow.png') {
+  const path = new URL(req.url).pathname;
+  if (path.startsWith('/punks')) return new Response(Bun.file('dist' + path));
+  if (path === '/slow.png') {
     await sleep(700);
     return new Response(PNG, { headers: { 'content-type': 'image/png', 'cache-control': 'no-store' } });
   }
@@ -102,6 +104,7 @@ try {
   await page.evaluate(([k, pk, ns]) => {
     localStorage.setItem(k + ':follows', JSON.stringify({ tags: [['p', pk]], c: '', at: Math.floor(Date.now() / 1000) }));
     localStorage.setItem(k + ':feedNotes', JSON.stringify(ns));
+    localStorage.setItem(k + ':profiles', JSON.stringify({ [pk]: { name: 'Test Author', t: Date.now() } }));
   }, [base, AUTHOR, seeded]);
   await page.reload({ waitUntil: 'domcontentloaded' });
   await waitText('receive', 20000);
@@ -126,8 +129,7 @@ try {
   const delivered = await page.evaluate((ev) => window.__inject(ev), fresh);
   check('...a post really arrives on a live subscription', delivered > 0, delivered + ' socket(s)');
   // A post waits at the door for its author's face and its pictures (or the
-  // two-second deadline, for a face nobody has) before it goes in — so give
-  // it that long, and no longer.
+  // loading deadline) before it goes in. This author is cached locally.
   await sleep(2600);
   const after = await page.evaluate((text) => {
     const r = [...document.querySelectorAll('.notes-feed > .row')].find((n) => n.innerText.includes(text));
@@ -157,10 +159,13 @@ try {
   await sleep(900);
   check('...that reaching the top clears by itself', !(await page.$('.feed-new-pill')));
 
-  console.log('\n[a post arrives whole, at the top]');
-  // At the top of the feed a live post opens itself — no pill. It waits at
-  // the door for its picture first, and the first time the row exists its
-  // image is already decoded. A row used to paint first and fill in after.
+  console.log('\n[a post arrives whole, above the viewport]');
+  // Move the first post to the viewport edge so a prepend is offscreen.
+  await page.evaluate(() => {
+    const first = document.querySelector('.notes-feed > .row');
+    scrollBy(0, Math.ceil(first.getBoundingClientRect().top));
+  });
+  // The image is decoded before the row is admitted, with no height animation.
   await page.evaluate(() => {
     window.__firstSight = null;
     const feed = document.querySelector('.notes-feed');
@@ -180,11 +185,11 @@ try {
   });
   const t0 = await page.evaluate(() => performance.now());
   await page.evaluate((ev) => window.__inject(ev), signed('PICTURE POST http://localhost:5296/slow.png?' + Date.now(), 0));
-  check('...sitting at the top', (await page.evaluate(() => window.scrollY)) < 120);
+  const heldPictureAnchor = await page.evaluate(() => { const r = document.querySelector('.notes-feed > .row'); return { id: r.dataset.key, top: r.getBoundingClientRect().top }; });
   await page.waitForFunction(() => !!window.__firstSight, { timeout: 4000 }).catch(() => {});
-  await sleep(120); // a hair in: the animation has been started and not finished
+  await sleep(120);
   const sight = await page.evaluate(() => window.__firstSight);
-  check('the post let itself in — no pill', !!sight && sight.img && !(await page.$('.feed-new-pill')), JSON.stringify(sight));
+  check('the prepared post arrived above the reader', !!sight && sight.img && !!(await page.$('.feed-new-pill')), JSON.stringify(sight));
   check('...having waited for the slow host', !!sight && sight.at - t0 >= 700, sight ? Math.round(sight.at - t0) + 'ms' : '');
   const mid = await page.evaluate(() => {
     const row = [...document.querySelectorAll('.notes-feed > .row')].find((n) => /PICTURE POST/.test(n.innerText || ''));
@@ -195,8 +200,12 @@ try {
     const row = [...document.querySelectorAll('.notes-feed > .row')].find((n) => /PICTURE POST/.test(n.innerText || ''));
     return row ? { anims: row.getAnimations().length, h: row.getBoundingClientRect().height, overflow: row.style.overflow } : null;
   });
-  check('...and it opened rather than appeared', !!mid && !!settled && mid.anims > 0 && mid.h < settled.h
+  check('...without animating its height', !!mid && !!settled && mid.anims === 0 && mid.h === settled.h
     && settled.anims === 0 && settled.h > 0 && !settled.overflow, JSON.stringify({ mid, settled }));
+  check('...and the reading position is preserved', await page.evaluate(({ id, top }) => {
+    const row = document.querySelector('.notes-feed > [data-key="' + id + '"]');
+    return row && Math.abs(row.getBoundingClientRect().top - top) <= 1;
+  }, heldPictureAnchor));
   // decoded before the row is inserted; the fresh <img> node reports it a
   // task later, so the row's first frames are what is checked here
   check('...and its picture was already decoded when the row appeared', !!sight && (sight.ready || sight.readyMs <= 60), JSON.stringify(sight));
@@ -235,13 +244,16 @@ try {
   await page.evaluate(() => window.scrollTo(0, 900));
   await sleep(500);
   const held = await anchor();
+  // the notice keeps counting while the reader stays put: what matters is that it grew by three
+  const pillN = () => page.evaluate(() => parseInt((document.querySelector('.feed-new-pill')?.textContent || '0').replace(/\D/g, ''), 10) || 0);
+  const pillBefore = await pillN();
   const r1 = await away(() => [signed('CATCH-UP 1', 0), signed('CATCH-UP 2', 1), signed('CATCH-UP 3', 2),
     signed('an old post that was not in the cache', 5000), signed('another old one', 5100)]);
   check('coming back re-asks the relays without being told', r1.reqsAfter > r1.reqsBefore, `${r1.reqsBefore} → ${r1.reqsAfter} kind-1 requests`);
   const a1 = await rowAt(held.text);
   const feedText = () => page.evaluate(() => document.querySelector('.notes-feed')?.innerText || '');
   check('a few new posts go straight in', /CATCH-UP 1/.test(await feedText()));
-  check('...and the pill says how many are above you', /3 new posts/i.test(await page.evaluate(() => document.querySelector('.feed-new-pill')?.textContent || '')));
+  check('...and the pill says how many more are above you', (await pillN()) === pillBefore + 3, pillBefore + ' → ' + (await pillN()));
   check('...and the post you were reading has not moved', !!held && !!a1 && a1.text === held.text && Math.abs(a1.top - held.top) <= 2,
     JSON.stringify({ held, now: a1 }));
   // they sort below everything cached: page down to them
@@ -256,19 +268,26 @@ try {
   const wasTop = await anchor();
   await away(() => [signed('AT-THE-TOP A', 0), signed('AT-THE-TOP B', 1)]);
   const a2 = await rowAt(wasTop.text);
-  check('the post you had at the top stays under your eyes', !!wasTop && !!a2 && a2.text === wasTop.text && Math.abs(a2.top - wasTop.top) <= 2 && a2.y > 0,
+  check('the header and first post stay in place', !!wasTop && !!a2 && a2.text === wasTop.text && Math.abs(a2.top - wasTop.top) <= 2 && a2.y === wasTop.y,
     JSON.stringify({ was: wasTop, now: a2 }));
-  check('...with the new ones above it, newest first, and a pill saying so', /AT-THE-TOP A/.test(await topRow()) && /2 new posts/i.test(await page.evaluate(() => document.querySelector('.feed-new-pill')?.textContent || '')));
+  check('...new posts wait while the header is visible', !/AT-THE-TOP A/.test(await topRow()));
+  await page.evaluate(() => {
+    const first = document.querySelector('.notes-feed > .row');
+    scrollBy(0, Math.ceil(first.getBoundingClientRect().top));
+  });
+  await sleep(600);
+  check('...then arrive offscreen above it, with a notice', /AT-THE-TOP A/.test(await topRow()) && /2 new posts/i.test(await page.evaluate(() => document.querySelector('.feed-new-pill')?.textContent || '')));
 
   console.log('\n[coming back after a long time away]');
   await page.evaluate(() => window.scrollTo(0, 900));
   await sleep(400);
+  const heldLong = await anchor();
   // all in the same second — a post per second back would reach past the
   // top of the page after the thirteen seconds the two waits above took
   await away(() => Array.from({ length: 25 }, (_, i) => signed('LONG AWAY ' + (i + 1), 0)));
-  const a3 = await anchor();
-  check('many new posts: the feed goes to the top', !!a3 && a3.y < 120, JSON.stringify(a3));
-  check('...at the newest post, with no pill', /LONG AWAY 1\b/.test(await topRow()) && !(await page.$('.feed-new-pill')), (await topRow()).slice(0, 40));
+  const a3 = await rowAt(heldLong.text);
+  check('many new posts still preserve the reading position', !!a3 && Math.abs(a3.top - heldLong.top) <= 2, JSON.stringify({ heldLong, a3 }));
+  check('...with the newest posts above and a notice', /LONG AWAY 1\b/.test(await topRow()) && !!(await page.$('.feed-new-pill')), (await topRow()).slice(0, 40));
 
   check('no page errors', errs.length === 0, errs.slice(0, 2).join(' | '));
 } finally { await browser.close(); server.stop(true); }

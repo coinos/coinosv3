@@ -14,6 +14,7 @@ import { featureIndexSource, enabledFeatures } from '../build.js';
 const strip = (s) => s
   .replace(/\/\/[^\n]*/g, '')       // line comments
   .replace(/\s+/g, ' ')             // whitespace runs
+  .replace(/,\s*([}\]])/g, '$1')   // optional trailing commas
   .replace(/, /g, ',').replace(/ ,/g, ',')
   .trim();
 

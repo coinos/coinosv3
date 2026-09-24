@@ -6,6 +6,7 @@ const app = await Bun.file('src/app.js').text();
 const dom = app.slice(app.indexOf('function h(tag,'), app.indexOf('// ---------------------------------------------------------------- morphing'));
 const entry = `
 import { messagesFeature } from './src/features/messages.js';
+import { createThreadStore } from './src/thread-cache.js';
 ${dom}
 const author = 'a'.repeat(64), mine = 'b'.repeat(64), rootId = 'c'.repeat(64);
 const root = { id: rootId, pubkey: author, kind: 1, content: 'Root post', tags: [], created_at: 1 };
@@ -24,6 +25,10 @@ function render() {
 feature = messagesFeature({ h, wallet, ui, render, toast() {}, brandHeader: () => null,
   hook: k => k === 'nostrLoginIdentity' ? { pubkey: mine, signer } : null });
 window.test = { ui, reply, other, root, render, waiting,
+  seedFace: () => createThreadStore().save({ root, replies: [reply] }, reply.id, {
+    [author]: { name: 'Nostrich', picture: 'https://example.com/nostrich.webp', eventAt: 10, t: Date.now(),
+      thumbFor: 'https://example.com/nostrich.webp', thumb: 'data:image/png;base64,iVBORw0KGgo=', thumbPx: 144 },
+  }),
   release: () => { for (const q of waiting.splice(0)) q.resolve(q.filter.ids ? [root] : []); },
   overlay: () => {
     ui.profilePk = author; ui.profOverThread = true; render();
@@ -88,6 +93,14 @@ try {
   await page.evaluate(() => { test.ui.noteThread = null; test.ui.profilePk = null; test.render(); document.querySelector('#elsewhere').focus(); });
   await new Promise(r => setTimeout(r, 120));
   check('deferred focus does not steal focus after leaving the thread', await page.evaluate(() => document.activeElement.id === 'elsewhere'));
+  await page.evaluate(() => test.seedFace());
+  await page.reload();
+  await page.waitForSelector('#app .note-act');
+  await page.click('#app .note-act');
+  check('cached thread author paints with name and local face on first frame', await page.evaluate(() => {
+    const row = document.querySelector('.thread-page [data-zap-post]');
+    return row?.textContent.includes('Nostrich') && row.querySelector('.note-avatar.ava-img')?.style.backgroundImage.includes('data:image/png;base64');
+  }));
   assert.deepEqual(errors, []);
   console.log('✓ no browser errors');
 } finally { await browser.close(); server.stop(true); }

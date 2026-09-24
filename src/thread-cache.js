@@ -11,6 +11,18 @@ const validNote = (e) => e?.kind === 1 && typeof e.id === 'string'
   && Number.isFinite(e.created_at) && Array.isArray(e.tags)
   && e.tags.every((t) => Array.isArray(t) && t.every((v) => typeof v === 'string'));
 const savedNote = ({ id, pubkey, kind, created_at, content, tags }) => ({ id, pubkey, kind, created_at, content, tags });
+const savedProfile = (p) => {
+  if (!p || typeof p !== 'object') return null;
+  const name = typeof p.name === 'string' ? p.name.slice(0, 120) : null;
+  const picture = typeof p.picture === 'string' ? p.picture.slice(0, 1000) : null;
+  if (!name && !picture) return null;
+  const out = { name, picture, eventAt: Number.isFinite(p.eventAt) ? p.eventAt : 0, t: Number.isFinite(p.t) ? p.t : 0 };
+  if (picture && p.thumbFor === picture && typeof p.thumb === 'string'
+    && p.thumb.length <= 16000 && /^data:image\/(?:webp|jpeg|png);base64,/.test(p.thumb)) {
+    out.thumb = p.thumb; out.thumbFor = picture; out.thumbPx = p.thumbPx || 0;
+  }
+  return out;
+};
 
 export function createThreadStore(storage) {
   if (storage === undefined) { try { storage = globalThis.localStorage; } catch {} }
@@ -29,7 +41,7 @@ export function createThreadStore(storage) {
     find(id) {
       return read().find((c) => c.rootId === id || c.replies.some((e) => e.id === id)) || null;
     },
-    save(thread, focusId) {
+    save(thread, focusId, profiles = {}) {
       if (!validNote(thread.root)) return;
       const events = new Map([thread.root, ...thread.replies.filter(validNote)].map((e) => [e.id, e]));
       const keep = new Map([[thread.root.id, thread.root]]);
@@ -47,7 +59,20 @@ export function createThreadStore(storage) {
         if (keep.size >= MAX_EVENTS) break;
         visit(e.id);
       }
+      const previous = read().find((c) => c.rootId === thread.root.id);
+      const authors = [...new Set([...keep.values()].map((e) => e.pubkey))].slice(0, 24);
+      const faces = {};
+      for (const pk of authors) {
+        const fresh = savedProfile(profiles[pk]);
+        const old = savedProfile(previous?.profiles?.[pk]);
+        const face = !fresh || (old && old.eventAt > fresh.eventAt) ? old : fresh;
+        if (face === fresh && old?.thumb && !fresh.thumb && old.picture === fresh.picture) {
+          face.thumb = old.thumb; face.thumbFor = old.thumbFor; face.thumbPx = old.thumbPx;
+        }
+        if (face) faces[pk] = face;
+      }
       const entry = { rootId: thread.root.id, root: savedNote(thread.root),
+        profiles: faces,
         replies: [...keep.values()].filter((e) => e.id !== thread.root.id).map(savedNote) };
       const entries = [entry, ...read().filter((c) => c.rootId !== entry.rootId)].slice(0, MAX_THREADS);
       let json = JSON.stringify(entries);

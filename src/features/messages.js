@@ -519,7 +519,7 @@ export function messagesFeature(ctx) {
     if (repaintTimer) return;
     repaintTimer = setTimeout(() => {
       repaintTimer = null;
-      if (ui.screen === 'wallet') render();
+      if (ui.screen === 'wallet') renderThreadStable();
     }, 80);
   };
 
@@ -680,6 +680,7 @@ export function messagesFeature(ctx) {
       }
       profiles.set(pk, entry);
       persistProfile(pk, entry);
+      persistThreadProfile(pk);
       if (patch.thumb) scheduleRepaint();
       // Every warmed face gets a turn; the old concurrency guard silently
       // discarded everyone after the first three in a batch.
@@ -812,6 +813,7 @@ export function messagesFeature(ctx) {
       persistPage('full', pk, m);
     }
     persistProfile(pk, entry);
+    persistThreadProfile(pk);
     preloadPicture(entry);
     return true;
   }
@@ -2813,6 +2815,8 @@ export function messagesFeature(ctx) {
       ? h('div', { class: cls + ' fallback' }, (p.name || npubOf(pk) || '??').slice(0, 2))
       : p && p.loading && !p.picture
       ? h('div', { class: cls + ' fallback loading' })
+      : p === null && ui.noteThread
+        ? h('div', { class: cls + ' fallback loading' })
       : p === null
         ? fallbackAvatar(h, pk, null, cls)
       : p.picture 
@@ -5683,8 +5687,39 @@ export function messagesFeature(ctx) {
   // ---- thread view: a note in its conversation ----------------------------
   const threadCache = new Map(); // root id -> { status, root, replies }
   const threadStore = createThreadStore();
-  const persistThread = (c) => threadStore.save(c, c.focusId);
+  const persistThread = (c) => {
+    if (!c.root) return;
+    const faces = {};
+    for (const ev of [c.root, ...c.replies]) {
+      const p = profiles.get(ev.pubkey);
+      if (p && (p.name || p.picture)) faces[ev.pubkey] = p;
+    }
+    threadStore.save(c, c.focusId, faces);
+  };
+  function persistThreadProfile(pk) {
+    const c = ui.noteThread && threadCache.get(ui.noteThread.rootId);
+    if (c?.root && [c.root, ...c.replies].some((ev) => ev.pubkey === pk)) persistThread(c);
+  }
   const noteSep = () => h('div', { style: 'height:1px;background:var(--border,rgba(128,128,128,.18));margin:0 -14px' });
+  function renderThreadStable() {
+    if (!ui.noteThread || ui.noteThread.scrollPending || typeof document === 'undefined') { render(); return; }
+    const rows = [...document.querySelectorAll('.thread-page [data-zap-post]')];
+    const anchor = rows.find((el) => el.getAttribute('data-focus-note') === '1'
+      && el.getBoundingClientRect().top >= 0 && el.getBoundingClientRect().top < innerHeight)
+      || rows.find((el) => { const r = el.getBoundingClientRect(); return r.bottom > 0 && r.top < innerHeight; });
+    if (!anchor) { render(); return; }
+    const id = anchor.getAttribute('data-zap-post');
+    const top = anchor.getBoundingClientRect().top;
+    render();
+    const settle = () => {
+      if (!ui.noteThread || ui.noteThread.scrollPending) return;
+      const next = [...document.querySelectorAll('.thread-page [data-zap-post]')]
+        .find((el) => el.getAttribute('data-zap-post') === id);
+      if (next) window.scrollBy(0, next.getBoundingClientRect().top - top);
+    };
+    settle();
+    requestAnimationFrame(settle);
+  }
   function rootIdOf(ev) {
     const es = ev.tags.filter((x) => x[0] === 'e');
     const marked = es.find((x) => x[3] === 'root');
@@ -5709,6 +5744,18 @@ export function messagesFeature(ctx) {
     // conversation synchronously, including the canonical root discovered
     // by climbing a reply-only chain on the previous visit.
     const stored = threadStore.find(seed.id) || threadStore.find(requestedRootId);
+    // The event cache is public and survives profile-cache eviction. Restore
+    // its author faces before the first thread row is painted on refresh.
+    if (stored?.profiles) {
+      warmProfiles();
+      for (const [pk, face] of Object.entries(stored.profiles)) {
+        const current = profiles.get(pk);
+        if (!current || (current.eventAt || 0) < (face.eventAt || 0)
+          || (current.eventAt === face.eventAt && !current.thumb && face.thumb)) {
+          profiles.set(pk, { ...current, ...face });
+        }
+      }
+    }
     const rootId = stored?.rootId || requestedRootId;
     c = { status: stored ? 'ready' : 'loading', rootId, focusId: seed.id,
       root: stored?.root || (seed.id === rootId ? seed : null), replies: stored?.replies || [] };
@@ -5765,7 +5812,7 @@ export function messagesFeature(ctx) {
       c.status = 'ready';
       persistThread(c);
       if (ui.noteThread && ui.noteThread.rootId === c.rootId) {
-        render();
+        renderThreadStable();
         // The inline reply box may have MOVED on this render (it slots under
         // the focused note once that note exists) — a focus taken before the
         // load finished died with the old position. Re-take it if the reply
@@ -5778,7 +5825,7 @@ export function messagesFeature(ctx) {
       }
     })().catch(() => {
       c.status = 'ready';
-      if (ui.noteThread && ui.noteThread.rootId === c.rootId) render();
+      if (ui.noteThread && ui.noteThread.rootId === c.rootId) renderThreadStable();
     });
     return c;
   }
@@ -6016,7 +6063,7 @@ export function messagesFeature(ctx) {
         try { el.scrollIntoView({ block: 'center' }); } catch {}
       }, 60);
     }
-    return h('div', { class: 'col', style: 'gap:16px' },
+    return h('div', { class: 'col thread-page', style: 'gap:16px' },
       // full header: search/chat/settings stay reachable mid-thread (only
       // the public no-wallet surface drops the action row)
       ctx.brandHeader(!ui.pubProf && wallet.loaded),

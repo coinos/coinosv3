@@ -607,7 +607,8 @@ html:has(#app .chat-card), body:has(#app .chat-card) { overflow: hidden; }
 /* The row under a post: reply, boost, quote, react, zap — spread across the
    post's full width so each is a comfortable target, quiet until one carries
    a count or you've used it. */
-.note-acts { margin-top: 8px; justify-content: space-between; gap: 4px; max-width: 340px; }
+.note-acts { margin-top: 8px; gap: 4px; width: min(100%, 340px); }
+.note-acts > .note-act { flex: 1 1 0; min-width: 0; justify-content: center; padding-inline: 2px; }
 /* server comparison table (Settings → Advanced → Ark server) */
 .cmp-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
 .cmp-table th { text-align: left; font-weight: 600; padding: 4px 6px; border-bottom: 1px solid var(--line); }

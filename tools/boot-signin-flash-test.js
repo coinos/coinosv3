@@ -62,6 +62,32 @@ try {
     console.log(` ${clean ? '✓' : '✗'} reload ${i}: wallet at ${r.wallet}ms${r.signin != null ? `, sign-in page flashed at ${r.signin}ms` : ', no sign-in flash'}`);
     if (!clean) ok = false;
   }
+  const rootId = 'c'.repeat(64), replyId = 'd'.repeat(64), author = 'a'.repeat(64);
+  await page.evaluate(({ rootId, replyId, author }) => {
+    const root = { id: rootId, pubkey: author, kind: 1, content: 'Cached thread root', tags: [], created_at: 1 };
+    const reply = { ...root, id: replyId, content: 'Cached thread reply', tags: [['e', rootId, '', 'root']], created_at: 2 };
+    localStorage.setItem('btc-wallet-note-threads', JSON.stringify([{ rootId, root, replies: [reply], profiles: {}, counts: {} }]));
+    const nav = { ...history.state.nav, screen: 'wallet', noteThread: { rootId, focusId: replyId, seed: reply } };
+    history.replaceState({ nav, i: 0 }, '', location.href);
+  }, { rootId, replyId, author });
+  await page.evaluateOnNewDocument(() => {
+    window.__threadBoot = { homeFrames: 0, animatedFrames: 0, threadAt: null };
+    const tick = () => {
+      const state = window.__threadBoot;
+      if (document.querySelector('.balance')) state.homeFrames++;
+      const thread = document.querySelector('.thread-page');
+      if (thread?.classList.contains('anim-page')) state.animatedFrames++;
+      if (thread) state.threadAt ??= Math.round(performance.now());
+      if (state.threadAt == null || performance.now() - state.threadAt < 500) requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  });
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await sleep(1200);
+  const thread = await page.evaluate(() => window.__threadBoot);
+  const steady = thread.threadAt != null && !thread.homeFrames && !thread.animatedFrames;
+  console.log(` ${steady ? '✓' : '✗'} thread reload: ${thread.homeFrames} home frames, ${thread.animatedFrames} page animation frames`);
+  if (!steady) ok = false;
 } finally { await browser.close(); server.stop(true); }
 console.log(ok ? '\n✅ no sign-in flash' : '\n❌ the sign-in page flashed');
 process.exit(ok ? 0 : 1);

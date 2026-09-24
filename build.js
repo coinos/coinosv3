@@ -262,7 +262,9 @@ const ALL_FEATURES = { gifts: 'giftsFeature', ark: 'arkFeature', nostrlogin: 'no
 // NOT deferrable: ark (balance on the home screen), messages (deep-linked
 // profiles + the boot shell), gifts is deferrable because app.js awaits the
 // deferred load before the bootUrl check when the path looks like a gift.
-const DEFERRED_FEATURES = ['gifts', 'nwc', 'hats', 'pos'];
+// Hats decorate the header avatar on the first frame. Loading their art in a
+// later chunk makes the header change after the rest of the page has painted.
+const DEFERRED_FEATURES = ['gifts', 'nwc', 'pos'];
 
 export function enabledFeatures(spec = process.env.HAL_FEATURES) {
   if (spec == null) return Object.keys(ALL_FEATURES);

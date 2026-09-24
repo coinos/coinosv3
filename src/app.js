@@ -772,7 +772,7 @@ const BOOT_NAV = (() => { try { return (history.state && history.state.nav) || n
 // seconds pass on the unlock screen), boot renders share one history slot.
 let bootPending = !!BOOT_NAV;
 if (bootPending) setTimeout(() => { bootPending = false; }, 5000);
-function restoreNavFromHistory() {
+function restoreNavFromHistory(renderNow = true) {
   try {
     const nav = BOOT_NAV;
     if (!nav || ui.screen !== 'wallet') return;
@@ -781,8 +781,12 @@ function restoreNavFromHistory() {
     ui.lightbox = null; nav.lightbox = null; // an object URL doesn't survive a reload
     navStack = [nav];
     navIndex = 0;
+    // A reload is a continuation of the same page, not a navigation. Do not
+    // replay the full-page entrance animation as boot state settles.
+    ui.navAnimSkip = true;
+    _navAt = -1e9;
     history.replaceState({ nav, i: 0 }, '', navUrl(nav)); // undo any boot-render clobber (and the boot's path tidy)
-    render();
+    if (renderNow) render();
   } catch {}
 }
 
@@ -1470,6 +1474,9 @@ async function activateAccount(acc, opts = {}) {
   ui.sendResult = null;
   ui.giftMode = false;
   ui.offlineFallback = false;
+  // Restore the target page before the wallet's first paint. Painting home
+  // first and then replacing it with a thread made refresh visibly flash.
+  if (opts.restoreNav) restoreNavFromHistory(false);
   render();
   if (ui.txDetail) openTx(ui.txDetail); // restored a tx detail — fill in fee/details if missing
 
@@ -1800,14 +1807,13 @@ function restoreAccountsState() {
   if (sess && Array.isArray(sess.accounts) && sess.accounts.length) {
     accounts = sess.accounts;
     const active = accounts.find((a) => a.id === sess.activeId) || accounts[0];
-    activateAccount(active);
-    restoreNavFromHistory();
+    activateAccount(active, { restoreNav: true });
     return true;
   }
   if (hasVault()) {
     // A blank (optional) vault password unlocks seamlessly with no prompt.
     if (attemptVaultUnlock('')) {
-      if (accounts.length) activateAccount(preferredAccount(), { fresh: true });
+      if (accounts.length) activateAccount(preferredAccount(), { fresh: true, restoreNav: true });
       else { ui.screen = 'unlock'; render(); }
       return true;
     }
@@ -1816,7 +1822,7 @@ function restoreAccountsState() {
   const watch = loadWatchAccounts();
   if (watch.length) {
     accounts = watch.slice();
-    activateAccount(preferredAccount(), { fresh: true });
+    activateAccount(preferredAccount(), { fresh: true, restoreNav: true });
     return true;
   }
   return false;

@@ -28,7 +28,7 @@ window.test = { ui, reply, other, root, render, waiting,
   seedFace: () => createThreadStore().save({ root, replies: [reply] }, reply.id, {
     [author]: { name: 'Nostrich', picture: 'https://example.com/nostrich.webp', eventAt: 10, t: Date.now(),
       thumbFor: 'https://example.com/nostrich.webp', thumb: 'data:image/png;base64,iVBORw0KGgo=', thumbPx: 144 },
-  }),
+  }, { [reply.id]: { likes: 29, boosts: 7, sats: 210 } }),
   release: () => { for (const q of waiting.splice(0)) q.resolve(q.filter.ids ? [root] : []); },
   overlay: () => {
     ui.profilePk = author; ui.profOverThread = true; render();
@@ -100,6 +100,19 @@ try {
   check('cached thread author paints with name and local face on first frame', await page.evaluate(() => {
     const row = document.querySelector('.thread-page [data-zap-post]');
     return row?.textContent.includes('Nostrich') && row.querySelector('.note-avatar.ava-img')?.style.backgroundImage.includes('data:image/png;base64');
+  }));
+  check('cached likes, boosts and sats paint before relay replies', await page.evaluate(() => {
+    const row = [...document.querySelectorAll('.thread-page [data-zap-post]')]
+      .find((el) => el.dataset.zapPost === test.reply.id);
+    const buttons = row?.querySelectorAll('.note-acts > button');
+    return buttons?.[1].textContent === '7' && buttons?.[3].textContent === '29' && buttons?.[4].textContent === '210';
+  }));
+  await new Promise((r) => setTimeout(r, 450));
+  check('an incomplete relay tally cannot erase the cached numbers', await page.evaluate(() => {
+    const row = [...document.querySelectorAll('.thread-page [data-zap-post]')]
+      .find((el) => el.dataset.zapPost === test.reply.id);
+    const buttons = row?.querySelectorAll('.note-acts > button');
+    return buttons?.[1].textContent === '7' && buttons?.[3].textContent === '29' && buttons?.[4].textContent === '210';
   }));
   assert.deepEqual(errors, []);
   console.log('✓ no browser errors');

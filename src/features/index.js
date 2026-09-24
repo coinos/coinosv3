@@ -6,7 +6,7 @@
 //
 // This checked-in copy must stay byte-equivalent (comments aside) to
 // featureIndexSource(all features) — tools/feature-registry-check.js enforces
-// it. Deferred features (gifts, nwc, hats) hold their array position with an
+// it. Deferred features (gifts, nwc, pos) hold their array position with an
 // empty placeholder — hook precedence is position — and are filled in place
 // by loadDeferredFeatures right after boot, as separate chunks in the split
 // build. NB order is meaningful where hooks stack: gifts' receive takeover
@@ -18,19 +18,19 @@ import { arkFeature } from './ark.js';
 import { nostrLoginFeature } from './nostrlogin.js';
 import { namesFeature } from './names.js';
 import { zapsFeature } from './zaps.js';
+import { hatsFeature } from './hats.js';
 import { syncFeature } from './sync.js';
 import { messagesFeature } from './messages.js';
 
 export function buildFeatures(ctx) {
-  return [{}, arkFeature(ctx), nostrLoginFeature(ctx), namesFeature(ctx), zapsFeature(ctx), {}, {}, syncFeature(ctx), messagesFeature(ctx), {}];
+  return [{}, arkFeature(ctx), nostrLoginFeature(ctx), namesFeature(ctx), zapsFeature(ctx), {}, hatsFeature(ctx), syncFeature(ctx), messagesFeature(ctx), {}];
 }
 export async function loadDeferredFeatures(ctx, features) {
   const late = [];
   await Promise.all([
     import('./gifts.js').then((m) => { late.push(features[0] = m.giftsFeature(ctx)); }),
     import('./nwc.js').then((m) => { late.push(features[5] = m.nwcFeature(ctx)); }),
-    import('./hats.js').then((m) => { late.push(features[6] = m.hatsFeature(ctx)); }),
-    import('./pos.js').then((m) => { late.push(features[9] = m.posFeature(ctx)); }),
+    import('./pos.js').then((m) => { late.push(features[9] = m.posFeature(ctx)); })
   ]);
   return late;
 }

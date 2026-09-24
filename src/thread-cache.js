@@ -23,6 +23,11 @@ const savedProfile = (p) => {
   }
   return out;
 };
+const savedCounts = (c) => {
+  if (!c || typeof c !== 'object') return null;
+  const count = (n) => Number.isSafeInteger(n) && n >= 0 && n <= 1_000_000_000 ? n : 0;
+  return { likes: count(c.likes), boosts: count(c.boosts), sats: count(c.sats) };
+};
 
 export function createThreadStore(storage) {
   if (storage === undefined) { try { storage = globalThis.localStorage; } catch {} }
@@ -41,7 +46,7 @@ export function createThreadStore(storage) {
     find(id) {
       return read().find((c) => c.rootId === id || c.replies.some((e) => e.id === id)) || null;
     },
-    save(thread, focusId, profiles = {}) {
+    save(thread, focusId, profiles = {}, counts = {}) {
       if (!validNote(thread.root)) return;
       const events = new Map([thread.root, ...thread.replies.filter(validNote)].map((e) => [e.id, e]));
       const keep = new Map([[thread.root.id, thread.root]]);
@@ -71,8 +76,13 @@ export function createThreadStore(storage) {
         }
         if (face) faces[pk] = face;
       }
+      const tallies = {};
+      for (const id of keep.keys()) {
+        const tally = savedCounts(counts[id] || previous?.counts?.[id]);
+        if (tally) tallies[id] = tally;
+      }
       const entry = { rootId: thread.root.id, root: savedNote(thread.root),
-        profiles: faces,
+        profiles: faces, counts: tallies,
         replies: [...keep.values()].filter((e) => e.id !== thread.root.id).map(savedNote) };
       const entries = [entry, ...read().filter((c) => c.rootId !== entry.rootId)].slice(0, MAX_THREADS);
       let json = JSON.stringify(entries);

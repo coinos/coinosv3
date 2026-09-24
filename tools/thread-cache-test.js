@@ -19,7 +19,7 @@ check('a fresh store restores full content and tags by any viewed event', () => 
   const long = { ...reply, content: 'x'.repeat(5000), tags: [...reply.tags, ['emoji', 'wave', 'https://example.com/wave.png']] };
   store.save({ root, replies: [parent, long] }, long.id);
   const restored = createThreadStore(storage).find(long.id);
-  assert.deepEqual(restored, { rootId: root.id, root, profiles: {}, replies: [long, parent] });
+  assert.deepEqual(restored, { rootId: root.id, root, profiles: {}, counts: {}, replies: [long, parent] });
   assert.equal(store.find(parent.id).root.id, root.id);
 });
 check('thread authors keep their names and local avatar thumbnails across reloads', () => {
@@ -30,6 +30,11 @@ check('thread authors keep their names and local avatar thumbnails across reload
   store.save({ root, replies: [parent, reply] }, reply.id); // a relay refresh must keep the face
   assert.deepEqual(createThreadStore(storage).find(reply.id).profiles[root.pubkey],
     { ...face, t: 0 });
+});
+check('thread action totals are present before relay refresh and survive a context save', () => {
+  store.save({ root, replies: [parent, reply] }, reply.id, {}, { [reply.id]: { likes: 29, boosts: 7, sats: 210 } });
+  store.save({ root, replies: [parent, reply] }, reply.id);
+  assert.deepEqual(createThreadStore(storage).find(reply.id).counts[reply.id], { likes: 29, boosts: 7, sats: 210 });
 });
 check('a large thread retains the selected reply and its ancestors', () => {
   const siblings = Array.from({ length: 200 }, (_, i) => note(1000 + i, [['e', root.id, '', 'root']]));

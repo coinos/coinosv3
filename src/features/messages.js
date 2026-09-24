@@ -2975,6 +2975,7 @@ export function messagesFeature(ctx) {
   // for different pictures, and an unrelated event must not change its face.
   const postReactNode = ({ emoji, url }) => url ? emojiImg(shortcodeOf(emoji), url) : emoji;
   const boosts = new Map();  // note id -> Set<pubkey>
+  const noteCountsReady = new Set(); // a relay batch is complete for this note
   const seenNoteEv = new Set(); // event ids already counted
   const myReactEv = new Map();  // note id -> the id of OUR reaction, so it can be withdrawn
   const zapTotals = new Map(); // id -> { sats, seen: Set<receipt id>, mine }
@@ -2982,6 +2983,23 @@ export function messagesFeature(ctx) {
   const zapAsked = new Set();
   let zapQueue = new Set(), zapTimer = null, zapLiveUnsub = null, zapRecent = [];
   const zapRelays = () => [...new Set([...NOTE_RELAYS, ...((wallet.nostrRelays && wallet.nostrRelays()) || [])])];
+  function noteCountSnapshot(id) {
+    const rm = reacts.get(id);
+    return { likes: rm ? [...rm.values()].reduce((n, { who }) => n + visiblePks(who).length, 0) : 0,
+      boosts: visiblePks(boosts.get(id) || new Set()).length,
+      sats: zapTotals.get(id)?.sats || 0 };
+  }
+  function refreshThreadCount(id, persist = true) {
+    if (!noteCountsReady.has(id)) return;
+    const c = ui.noteThread && threadCache.get(ui.noteThread.rootId);
+    if (!c?.root || !(c.root.id === id || c.replies.some((e) => e.id === id))) return;
+    const live = noteCountSnapshot(id), old = c.counts[id];
+    // Relay answers can be incomplete. A short/empty answer must not erase
+    // numbers that were already visible when this conversation opened.
+    c.counts[id] = old ? { likes: Math.max(old.likes, live.likes), boosts: Math.max(old.boosts, live.boosts),
+      sats: Math.max(old.sats, live.sats) } : live;
+    if (persist) persistThread(c);
+  }
   const tagOf = (ev, k) => (ev.tags.find((x) => x[0] === k) || [])[1];
   function receiptSats(ev) {
     if (ev.kind === 9737) {
@@ -3041,6 +3059,7 @@ export function messagesFeature(ctx) {
         // ours, wherever it was sent from — so it can be taken back here
         if (myPubkeys().includes(ev.pubkey)) myReactEv.set(id, ev.id);
       }
+      refreshThreadCount(id);
       scheduleRepaint();
       return;
     }
@@ -3067,6 +3086,7 @@ export function messagesFeature(ctx) {
       // amount the chip has been carrying since the tap steps aside
       if (from && my.includes(from)) { cur.mine = true; voidPending(x[1], ev.created_at * 1000, sats); }
       changed = true;
+      refreshThreadCount(x[1]);
     }
     if (changed) { saveZapTotals(); scheduleRepaint(); }
   }
@@ -3090,6 +3110,12 @@ export function messagesFeature(ctx) {
             // truth now, remembered or not (a zap that was deleted has to be
             // able to disappear)
             for (const id of slice) zapSeeds().delete(id);
+            const c = ui.noteThread && threadCache.get(ui.noteThread.rootId);
+            for (const id of slice) {
+              noteCountsReady.add(id);
+              if (c && (c.root?.id === id || c.replies.some((e) => e.id === id))) refreshThreadCount(id, false);
+            }
+            if (c?.root) persistThread(c);
             saveZapTotals();
             scheduleRepaint();
           }).catch(() => {});
@@ -5517,8 +5543,10 @@ export function messagesFeature(ctx) {
     if (canZap && zapSoundOn()) warmZapSound(); // the clip is decoded before the first tap
     const mineReact = myReactOn(ev.id);
     const rm = reacts.get(ev.id);
-    const likeN = rm ? [...rm.values()].reduce((n, { who }) => n + visiblePks(who).length, 0) : 0;
-    const boostN = visiblePks(boosts.get(ev.id) || new Set()).length;
+    const cached = ui.noteThread
+      ? threadCache.get(ui.noteThread.rootId)?.counts?.[ev.id] : null;
+    const likeN = cached ? cached.likes : rm ? [...rm.values()].reduce((n, { who }) => n + visiblePks(who).length, 0) : 0;
+    const boostN = cached ? cached.boosts : visiblePks(boosts.get(ev.id) || new Set()).length;
     const btn = (icon, label, count, on, onClick, cls = '', extra = null) => h('button', {
       class: 'note-act' + (on ? ' on' : '') + (cls ? ' ' + cls : ''), title: label, 'aria-label': label,
       'aria-disabled': onClick ? undefined : 'true',
@@ -5534,7 +5562,7 @@ export function messagesFeature(ctx) {
     const z = zapTotals.get(ev.id) || zapSeeds().get(ev.id);
     const zp = pendingOf(ev.id);
     const optimistic = zp ? zp.sats : 0;
-    const zapSats = (z ? z.sats : 0) + optimistic;
+    const zapSats = (cached ? cached.sats : z ? z.sats : 0) + optimistic;
     const zapFlying = !!zp && zp.flying;
     // tap pays the default amount; hold opens the screen that sets it
     const zapHold = canZap ? holdable((el) => openZapSettings(pk, ev.id, el.getBoundingClientRect()),
@@ -5694,7 +5722,7 @@ export function messagesFeature(ctx) {
       const p = profiles.get(ev.pubkey);
       if (p && (p.name || p.picture)) faces[ev.pubkey] = p;
     }
-    threadStore.save(c, c.focusId, faces);
+    threadStore.save(c, c.focusId, faces, c.counts);
   };
   function persistThreadProfile(pk) {
     const c = ui.noteThread && threadCache.get(ui.noteThread.rootId);
@@ -5758,7 +5786,7 @@ export function messagesFeature(ctx) {
     }
     const rootId = stored?.rootId || requestedRootId;
     c = { status: stored ? 'ready' : 'loading', rootId, focusId: seed.id,
-      root: stored?.root || (seed.id === rootId ? seed : null), replies: stored?.replies || [] };
+      root: stored?.root || (seed.id === rootId ? seed : null), replies: stored?.replies || [], counts: stored?.counts || {} };
     if (seed.id !== rootId && !c.replies.some((e) => e.id === seed.id)) c.replies.push(seed);
     c.replies.sort((a, b) => a.created_at - b.created_at);
     threadCache.set(requestedRootId, c);
@@ -8271,6 +8299,7 @@ export function messagesFeature(ctx) {
       follows = null; followsAt = 0; feed = null; feedAt = 0; relayLists = null;
       mutes = null; mutesAt = 0;
       reacts.clear(); boosts.clear(); seenNoteEv.clear(); myReactEv.clear(); quoted.clear();
+      noteCountsReady.clear();
       // what happened to THEIR posts stays with them — the next identity
       // starts its list empty and asks the relays under its own key
       stopNotifWatch(); notif = null; notifAt = 0; notifNotes.clear();

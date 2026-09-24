@@ -21,8 +21,11 @@ const check = (n, c, d = '') => { console.log(` ${c ? '✓' : '✗'} ${n}${d ? '
 
 const SK = generateSecretKey();
 const AUTHOR = getPublicKey(SK);
-const IMG = 'https://coinos.io/punks/7.webp';
-const NOEXT = 'https://example.invalid/media/9f2a1c';
+// served below: a picture the feed can actually decode — a row shows a
+// picture it has decoded and links the ones it could not
+const IMG = 'http://localhost:5298/pic.png';
+const NOEXT = 'http://localhost:5298/media/9f2a1c';
+const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64');
 // the shape the real post had: the paren, then a newline, then the URL
 const CASES = [
   ['md-image', 'here it is\n![cover](' + IMG + ')\nthat was it'],
@@ -36,7 +39,12 @@ const notes = CASES.map(([, content], i) =>
   finalizeEvent({ kind: 1, created_at: Math.floor(Date.now() / 1000) - i * 60, tags: [], content }, SK));
 
 const html = await buildHtml({ minify: true, pwa: false });
-const server = Bun.serve({ port: 5298, fetch: () => new Response(html, { headers: { 'content-type': 'text/html' } }) });
+const server = Bun.serve({ port: 5298, fetch: (req) => {
+  const path = new URL(req.url).pathname;
+  if (path.startsWith('/punks')) return new Response(Bun.file('dist' + path)); // the author's face, so rows are admitted at once
+  if (path === '/pic.png' || path === '/media/9f2a1c') return new Response(PNG, { headers: { 'content-type': 'image/png' } });
+  return new Response(html, { headers: { 'content-type': 'text/html' } });
+} });
 const browser = await puppeteer.launch({ executablePath: '/usr/bin/google-chrome', headless: 'new', args: ['--no-sandbox'] });
 const page = await browser.newPage();
 const errs = [];
@@ -60,13 +68,16 @@ try {
   await page.evaluate(([k, pk, ns]) => {
     localStorage.setItem(k + ':follows', JSON.stringify({ tags: [['p', pk]], c: '', at: Math.floor(Date.now() / 1000) }));
     localStorage.setItem(k + ':feedNotes', JSON.stringify(ns));
+    localStorage.setItem(k + ':profiles', JSON.stringify({ [pk]: { name: 'Markdown Poster', t: Date.now() } }));
   }, [cacheKeyFor(mn + '\n'), AUTHOR, notes]);
   await page.reload({ waitUntil: 'domcontentloaded' });
   await waitText('receive', 20000);
   await page.evaluate(() => { const b = [...document.querySelectorAll('button')].find((e) => /message/i.test(e.getAttribute('aria-label') || '')); if (b) b.click(); });
   await sleep(1000);
   await page.evaluate(() => { const e = [...document.querySelectorAll('.item')].find((n) => /feed/i.test(n.textContent)); if (e) e.click(); });
-  await sleep(4000);
+  // rows are admitted once their pictures have been tried (a dead host takes the deadline)
+  for (let i = 0; i < 60; i++) { if ((await page.evaluate(() => document.querySelectorAll('.notes-feed > .row').length)) >= 6) break; await sleep(250); }
+  await sleep(500);
 
   const rows = await page.evaluate(() => [...document.querySelectorAll('.notes-feed > .row')].map((r) => {
     const b = r.querySelector('.note-text');

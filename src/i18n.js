@@ -219,6 +219,8 @@ const STR = {
     zapTallyTitle: '{n} sats zapped',
     close: 'Close',
     playVideo: 'Play',
+    videoUnmute: 'Unmute',
+    videoMute: 'Mute',
     openInYouTube: 'Open on YouTube',
     accountsThisOne: 'signed in',
     worthThen: 'Worth then',

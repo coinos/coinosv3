@@ -711,6 +711,16 @@ html.no-scroll { overflow: hidden; scrollbar-gutter: auto; }
 .lightbox-x:hover { background: rgba(255, 255, 255, .24); }
 @keyframes lightbox-in { from { opacity: 0; } to { opacity: 1; } }
 .note-video { display: block; max-width: 100%; max-height: 360px; border-radius: 10px; margin-top: 6px; background: #000; }
+/* a video plays by itself, muted, while it is on screen; the corner button
+   turns the sound on (see autoplay in messages.js) */
+.note-video-box { position: relative; display: block; max-width: 100%; margin-top: 6px; }
+.note-video-box .note-video { margin-top: 0; }
+.vid-sound {
+  position: absolute; top: 8px; left: 8px; z-index: 2; margin: 0; padding: 4px 10px; border: 0;
+  border-radius: 999px; background: rgba(18, 18, 18, .7); color: #fff; font-size: 13px; line-height: 1.3;
+  cursor: pointer; display: inline-flex; align-items: center; gap: 5px;
+}
+.vid-sound:hover { background: rgba(18, 18, 18, .9); }
 /* A quoted note, inside the post that quotes it: its own little card, so the
    two voices don't run together. Context, not another post to act on — the
    action row stops at the outer post. */

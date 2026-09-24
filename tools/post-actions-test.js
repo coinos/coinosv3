@@ -52,13 +52,16 @@ try {
     localStorage.setItem(k + ':feedNotes', JSON.stringify([
       { id: nid, pubkey: pk, kind: 1, created_at: Math.floor(Date.now()/1000), content: 'More flowers http://localhost:5258/pic.png', tags: [] },
     ]));
+    // a known face: a row is admitted once its author's picture has been tried
+    localStorage.setItem(k + ':profiles', JSON.stringify({ [pk]: { name: 'Flower Poster', t: Date.now() } }));
   }, [base, AUTHOR, NOTE_ID]);
   await page.reload({ waitUntil: 'domcontentloaded' });
   await waitText('receive', 20000);
   await page.evaluate(() => { const b = [...document.querySelectorAll('button')].find((e) => /message/i.test(e.getAttribute('aria-label') || '')); if (b) b.click(); });
   await sleep(1000);
   await page.evaluate(() => { const e = [...document.querySelectorAll('.item')].find((n) => /feed/i.test(n.textContent)); if (e) e.click(); });
-  await sleep(2500);
+  for (let i = 0; i < 48; i++) { if (await page.$('.note-act')) break; await sleep(250); }
+  await sleep(600);
 
   const acts = await page.evaluate(() => [...document.querySelectorAll('.note-act')].map((b) => b.getAttribute('aria-label')));
   check('every action sits under the post', acts.slice(0, 4).join(',') === 'Reply,Boost,Quote,Like', acts.join(',') || 'none');

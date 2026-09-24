@@ -4434,14 +4434,102 @@ export function messagesFeature(ctx) {
     return m ? Math.max(0, parseInt(m[1], 10) || 0) : 0;
   };
 
+  // ---- autoplay: a video plays, muted, while it is on screen --------------
+  // The way a timeline does it: a video starts by itself as it scrolls into
+  // view — muted, the only way a browser lets a page start one — pauses as
+  // it leaves, and a corner button turns the sound on. YouTube gets the same
+  // treatment: the player loads muted once its box is in view, and the
+  // button asks it to unmute over the iframe API. Data Saver keeps the old
+  // tap-to-play. One observer watches every player.
+  const autoplayOk = () => { try { return !(navigator.connection && navigator.connection.saveData); } catch { return true; } };
+  let playerWatch = null;
+  function watchPlayer(el, onIn, onOut) {
+    if (typeof IntersectionObserver === 'undefined' || !autoplayOk()) return;
+    if (!playerWatch) playerWatch = new IntersectionObserver((entries) => {
+      for (const en of entries) {
+        const el2 = en.target;
+        if (!el2.isConnected) { playerWatch.unobserve(el2); continue; }
+        if (en.isIntersecting && en.intersectionRatio >= 0.5) { if (el2._onIn) el2._onIn(); } else if (el2._onOut) el2._onOut();
+      }
+    }, { threshold: [0, 0.5] });
+    el._onIn = onIn; el._onOut = onOut;
+    playerWatch.observe(el);
+  }
+  // The corner button: what it says is the state it would switch to.
+  function soundBtn(onClick) {
+    const btn = h('button', { class: 'vid-sound', type: 'button', onClick: (e) => { e.stopPropagation(); e.preventDefault(); onClick(); } });
+    btn.setSound = (on) => {
+      btn.classList.toggle('on', !!on);
+      btn.textContent = (on ? '\u{1F50A} ' : '\u{1F507} ') + (on ? t('videoMute') : t('videoUnmute'));
+      btn.setAttribute('aria-label', on ? t('videoMute') : t('videoUnmute'));
+      btn.title = on ? t('videoMute') : t('videoUnmute');
+    };
+    btn.setSound(false);
+    return btn;
+  }
+  // An inline video, in a box with the sound button; plays on its own while
+  // on screen. Once it has played, the box is the viewer's (no morph).
+  function videoNode(url, { stable = false } = {}) {
+    const v = h('video', { src: url, class: 'note-video', controls: true,
+      preload: autoplayOk() ? 'auto' : 'metadata', playsinline: true, muted: true,
+      style: stable ? 'width:100%;aspect-ratio:16/9;object-fit:contain' : undefined,
+      onError: (e) => { if (!stable) { const b = e.target.parentElement; if (b) b.style.display = 'none'; } } });
+    v.muted = true; // the property, not just the attribute: a script-made element autoplays only muted
+    const box = h('div', { class: 'note-video-box' }, v);
+    const btn = soundBtn(() => {
+      v.muted = !v.muted;
+      btn.setSound(!v.muted);
+      if (!v.muted) { box._skipMorph = true; if (v.paused) v.play().catch(() => {}); }
+    });
+    v.onvolumechange = () => btn.setSound(!v.muted); // the native control's own mute keeps the button honest
+    box.append(btn);
+    watchPlayer(v,
+      () => { if (v.paused) v.play().then(() => { box._skipMorph = true; }).catch(() => {}); },
+      () => { if (!v.paused) v.pause(); });
+    return box;
+  }
+
   // The still, with a play button over it, and the player itself only once
-  // it's tapped. A feed of ten videos would otherwise load ten YouTube
-  // players — every one of them telling Google what you're scrolling past
-  // before you've decided to watch anything. One tap, and it plays in place.
+  // it's tapped — or, with autoplay, once the box scrolls into view, muted.
+  // A feed of ten videos would otherwise load ten YouTube players at once,
+  // every one of them telling Google what you're scrolling past; loading on
+  // view (and never with sound uninvited) keeps that to what you look at.
   function youtubeEmbed(url, vid) {
     const start = ytStart(url);
-    const src = 'https://www.youtube-nocookie.com/embed/' + vid
-      + '?autoplay=1&rel=0' + (start ? '&start=' + start : '');
+    const embedSrc = (muted) => 'https://www.youtube-nocookie.com/embed/' + vid
+      + '?autoplay=1&rel=0&playsinline=1&enablejsapi=1' + (muted ? '&mute=1' : '') + (start ? '&start=' + start : '')
+      + (typeof location !== 'undefined' ? '&origin=' + encodeURIComponent(location.origin) : '');
+    const src = embedSrc(false);
+    // the iframe API listens for commands once told someone is listening
+    const post = (box, func) => {
+      const f = box.querySelector('iframe');
+      try { if (f && f.contentWindow) f.contentWindow.postMessage(JSON.stringify({ event: 'command', func, args: [] }), '*'); } catch {}
+    };
+    const load = (box, muted) => {
+      if (!box || box.dataset.playing) return;
+      box.dataset.playing = '1';
+      // The page repaints in the background all the time (a zap count,
+      // a profile landing, the thirty-second sync), and every repaint
+      // rebuilds this box as poster + play button and patches the live
+      // one into that shape — which threw the playing iframe out a few
+      // seconds into every video. Once playing, the box is the viewer's
+      // and the morph leaves it exactly as it stands.
+      box._skipMorph = true;
+      box.textContent = '';
+      const f = document.createElement('iframe');
+      f.src = muted ? embedSrc(true) : src;
+      f.title = 'YouTube';
+      f.allow = 'accelerometer; autoplay; encrypted-media; picture-in-picture; web-share';
+      f.referrerPolicy = 'strict-origin-when-cross-origin';
+      f.allowFullscreen = true;
+      f.onload = () => { try { f.contentWindow.postMessage(JSON.stringify({ event: 'listening', id: vid }), '*'); } catch {} };
+      box.append(f);
+      if (muted) {
+        let on = false;
+        const btn = soundBtn(() => { on = !on; btn.setSound(on); post(box, on ? 'unMute' : 'mute'); if (on) post(box, 'playVideo'); });
+        box.append(btn);
+      }
+    };
     const frame = h('div', { class: 'yt-embed' },
       h('img', {
         class: 'yt-poster', loading: 'lazy', alt: '',
@@ -4455,28 +4543,17 @@ export function messagesFeature(ctx) {
           e.stopPropagation();
           const box = e.currentTarget.parentElement;
           if (!box || box.dataset.playing) return;
-          box.dataset.playing = '1';
-          // The page repaints in the background all the time (a zap count,
-          // a profile landing, the thirty-second sync), and every repaint
-          // rebuilds this box as poster + play button and patches the live
-          // one into that shape — which threw the playing iframe out a few
-          // seconds into every video. Once playing, the box is the viewer's
-          // and the morph leaves it exactly as it stands.
-          box._skipMorph = true;
-          box.textContent = '';
-          const f = document.createElement('iframe');
-          f.src = src;
-          f.title = 'YouTube';
-          f.allow = 'accelerometer; autoplay; encrypted-media; picture-in-picture; web-share';
-          f.referrerPolicy = 'strict-origin-when-cross-origin';
-          f.allowFullscreen = true;
-          box.append(f);
+          load(box, false); // a tap means sound
         },
       }, h('span', { style: 'display:flex', html: '<svg width="30" height="30" viewBox="0 0 24 24" fill="currentColor" style="display:block"><path d="M8 5v14l11-7z"/></svg>' })),
       h('a', {
         class: 'yt-open', href: url, target: '_blank', rel: 'noopener noreferrer',
         title: t('openInYouTube'), onClick: (e) => e.stopPropagation(),
       }, '\u2197'));
+    // in view: load muted the first time, resume after; out of view: pause
+    watchPlayer(frame,
+      () => { if (!frame.dataset.playing) load(frame, true); else if (frame._pausedByUs) { frame._pausedByUs = false; post(frame, 'playVideo'); } },
+      () => { if (frame.dataset.playing) { frame._pausedByUs = true; post(frame, 'pauseVideo'); } });
     return frame;
   }
 
@@ -4545,13 +4622,7 @@ export function messagesFeature(ctx) {
   // is, which beats guessing from the filename.
   function urlNode(url, { label = null, isImage = false } = {}) {
     if (/\.(mp4|webm|mov|m4v)(\?[^\s]*)?$/i.test(url)) {
-      // metadata-only preload: the poster frame paints, nothing streams
-      // until the viewer presses play
-      const stable = !!feedPaint;
-      return h('video', { src: url, class: 'note-video', controls: true,
-        preload: 'metadata', playsinline: true,
-        style: feedPaint ? 'width:100%;aspect-ratio:16/9;object-fit:contain' : undefined,
-        onError: (e) => { if (!stable) e.target.style.display = 'none'; } });
+      return videoNode(url, { stable: !!feedPaint });
     }
     if (isImage || /\.(png|jpe?g|gif|webp|avif)(\?[^\s]*)?$/i.test(url)) {
       const size = feedPaint ? feedMedia(url) : null;

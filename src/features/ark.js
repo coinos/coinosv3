@@ -796,6 +796,7 @@ export function arkFeature(ctx) {
       await mgr.send(a.address, a.amountSat);
       ui.arkSent = { amountSat: a.amountSat };
       ui.arkSend = null;
+      ui.send = blankSend(); // the next send starts empty, however this card is left
     } catch (e) {
       ui.sendError = e.message;
     }
@@ -1094,6 +1095,7 @@ export function arkFeature(ctx) {
       const settle = (a) => {
         if (a.step === 'done') {
           ui.arkLnPaid = { amountSat: a.amountSat, meta: p.meta, autopaid: !!(p._autopaid || p.autopaying) };
+          ui.send = blankSend(); // the next send starts empty, however this card is left
           if (p.meta && p.meta.pk) noteZap('inv:' + p.invoice, p.meta.pk);
           // the user opted this recipient into auto-pay: remember the chosen
           // budget so future fixed charges from them clear without a tap
@@ -1799,6 +1801,7 @@ export function arkFeature(ctx) {
       ctx.hook('zapSettled', z.eventId, true, sats); // the tally shows it now, not when the receipt lands
       ui.arkZapped = { amountSat: sats, npub: z.npub };
       ui.arkZap = null;
+      ui.send = blankSend();
     } catch (e) {
       ui.sendError = e.message;
     }
@@ -1823,6 +1826,7 @@ export function arkFeature(ctx) {
       noteZap('to:' + g.address, z.pk);
       const done = (ui.arkZapped = { amountSat: sats, npub: z.npub, gift: { url: locked.url, claimCode: locked.claimCode, dm: 'sending' } });
       ui.arkZap = null;
+      ui.send = blankSend();
       // best-effort receipt; carries the locked link so the recipient can
       // discover the gift from the note even if the DM never lands
       await wallet.nostrPublish({
@@ -2898,6 +2902,7 @@ export function arkFeature(ctx) {
       ui.arkOffboardAmt = '';
       ui.arkMoveOpen = false;
       ui.arkOffboardSend = null;
+      ui.send = blankSend();
       ui.arkOffboarded = { txid: action.txid, netSat: action.netSat, feeSat: action.feeSat };
       wallet.scan().catch(() => {}); // surface the incoming pending tx promptly
     } catch (e) {

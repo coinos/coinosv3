@@ -1462,8 +1462,13 @@ async function activateAccount(acc, opts = {}) {
   // Restore the tab / open tx from the last session so a refresh keeps the
   // user's place. A gift link always opens the claim screen instead.
   const nav = (() => { try { return JSON.parse(sessionStorage.getItem(NAV_KEY) || 'null'); } catch { return null; } })();
-  ui.tab = (!opts.gift && nav && nav.tab) || 'history';
-  ui.txDetail = (!opts.gift && nav && nav.txDetail) || null;
+  // With no place to return to, a wallet that was just opened — a sign-in,
+  // an unlock, a switch to another account — lands on Receive: its deposit
+  // address and QR up at once. Reopening the same wallet mid-flow (a seed
+  // loaded into a watch-only one) keeps History.
+  const keep = nav && (opts.restoreNav || !opts.fresh); // a sign-in starts fresh, a refresh resumes
+  ui.tab = (!opts.gift && keep && nav.tab) || (opts.fresh ? 'receive' : 'history');
+  ui.txDetail = (!opts.gift && keep && nav.txDetail) || null;
   // Not baselined yet — stays null until the scan + ack logic below sets it,
   // so the celebration never fires for payments that were already there at
   // import (the index only looks "advanced" because the scan hadn't run yet).
@@ -1787,7 +1792,8 @@ function removeAccount(id) {
 
 function switchAccount(id) {
   const acc = accounts.find((a) => a.id === id);
-  if (acc) activateAccount(acc, { fresh: true });
+  if (!acc) return;
+  activateAccount(acc, { fresh: true });
 }
 
 // Restore accounts after a refresh (sessionStorage); on a fresh session, prompt
@@ -3335,7 +3341,7 @@ function onboardScreen() {
       // Spending stays out of sight until the user sets it up.
       ui.account = 'savings';
       try { localStorage.setItem(ACCOUNT_KEY, 'savings'); } catch {}
-      ui.tab = 'history';
+      ui.tab = 'receive';
       return null; // the caller falls through to the wallet itself
     }
   }
@@ -3455,7 +3461,7 @@ function onboardScreen() {
       try { localStorage.removeItem(ONB_STEP_KEY); } catch {}
       ui.account = 'savings';
       try { localStorage.setItem(ACCOUNT_KEY, 'savings'); } catch {}
-      ui.tab = 'history';
+      ui.tab = 'receive';
       render();
     };
     return page([
@@ -3474,7 +3480,7 @@ function onboardScreen() {
         try { localStorage.removeItem(ONB_STEP_KEY); } catch {}
         ui.account = 'savings';
         try { localStorage.setItem(ACCOUNT_KEY, 'savings'); } catch {}
-        ui.tab = 'history';
+        ui.tab = 'receive';
         render();
       } }, t('onbBackupLater')),
     ]);
@@ -3510,7 +3516,7 @@ function onboardScreen() {
         try { localStorage.removeItem(ONB_STEP_KEY); } catch {}
         ui.account = 'savings';
         try { localStorage.setItem(ACCOUNT_KEY, 'savings'); } catch {}
-        ui.tab = 'history';
+        ui.tab = 'receive';
         render();
       } }, t('onbNotNow')),
     ]);
@@ -3618,7 +3624,7 @@ function onboardScreen() {
         ui.account = 'spending';
         try { localStorage.setItem(ACCOUNT_KEY, 'spending'); } catch {}
       }
-      ui.tab = 'history';
+      ui.tab = 'receive';
       render();
     } }, t('onbEnter')),
     h('button', { class: 'btn-ghost btn-block', onClick: () => { o.step = 'avatar'; render(); } }, t('back')),

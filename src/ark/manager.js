@@ -1854,7 +1854,9 @@ export class ArkManager {
     return this.info.refreshFees.baseFeeSat + Math.ceil(ppmUnits / 1_000_000);
   }
 
-  async refresh(vtxoIds) {
+  // manual: the user asked for this one (the coins page) — it earns a
+  // history row even when free; the wallet's own renewals only when they cost
+  async refresh(vtxoIds, { manual = false } = {}) {
     const inputs = (vtxoIds
       ? vtxoIds.map((id) => this._vtxo(id))
       : this.state.vtxos.filter((v) => v.state === 'spendable'));
@@ -1873,7 +1875,7 @@ export class ArkManager {
       id: `refresh-${Date.now()}`, type: 'refresh', step: 'created',
       inputIds: inputs.map((v) => v.id),
       outKeyIndex: this.state.nextKeyIndex++,
-      outAmountSat: totalSat - feeSat, feeSat,
+      outAmountSat: totalSat - feeSat, feeSat, manual: !!manual, inAmountSat: totalSat,
     };
     for (const v of inputs) v.state = 'pending';
     this.state.actions.push(action);
@@ -2005,7 +2007,7 @@ export class ArkManager {
       // inputIds let the history skip "spent elsewhere" rows for coins this
       // renewal consumed — reconciled before the claim, they'd otherwise
       // stand as spends that the renewed coin silently contradicts.
-      this._movement({ type: 'refresh', amountSat: action.outAmountSat, feeSat: action.feeSat || 0, status: 'complete', unlockHash: action.unlockHash, inputIds: [...(action.inputIds || [])], detail: `${inputRecs.length} in -> ${newVtxos.length} out${action.feeSat ? ` · fee ${action.feeSat} sat` : ''}` });
+      this._movement({ type: 'refresh', amountSat: action.outAmountSat, feeSat: action.feeSat || 0, manual: !!action.manual, status: 'complete', unlockHash: action.unlockHash, inputIds: [...(action.inputIds || [])], detail: `${inputRecs.length} in -> ${newVtxos.length} out${action.feeSat ? ` · fee ${action.feeSat} sat` : ''}` });
       this._save();
     }
   }

@@ -1353,6 +1353,19 @@ export function arkFeature(ctx) {
       : a.hopsDone > 0 ? (a.txids || [])[Math.min(a.hopsDone, (a.txids || []).length - 1)]
       : null);
 
+  // A renewal in flight, beside the in-progress exits: the tap opens the
+  // coins page, where the round's progress is spelled out.
+  function arkRefreshActionItem(a) {
+    return h('div', { class: 'item', style: 'cursor:pointer', onClick: () => { ui.arkCoinsPage = true; render(); } },
+      h('div', { class: 'ico' }, '\u21bb'),
+      h('div', { class: 'grow' },
+        h('div', { class: 'row gap6', style: 'align-items:center' },
+          t('arkRenewingHistory'), h('span', { class: 'tag pending' }, t('arkExitPendingTag'))),
+        h('div', { class: 'small faint' }, timeAgo(exitStartedTs(a) / 1000))),
+      h('div', { style: 'text-align:right' },
+        a.feeSat ? h('div', { class: 'amount-neg' }, '-' + fmtAmount(a.feeSat)) : h('div', { class: 'small muted' }, fmtAmount(a.inAmountSat || a.outAmountSat) + ' ' + unitLabel())));
+  }
+
   function arkExitActionItem(a) {
     return h('div', { class: 'item', style: 'cursor:pointer', onClick: () => { ui.arkExitDetail = a.id; render(); } },
       h('div', { class: 'ico out', html: ARK_MARK(15) }),
@@ -2153,17 +2166,19 @@ export function arkFeature(ctx) {
     const mgr = ark;
     const st = (mgr && mgr.state) || arkStateNow();
     const spend = ((st && st.vtxos) || []).filter((v) => v.state === 'spendable');
-    const pendingSat = (arkBalance() || {}).pendingSat || 0;
+    // Coins in a renewal round sit 'pending' until the fresh coin is signed
+    // (a confirmation of the round's transaction, then a sync). They stay on
+    // the page, greyed and unselectable, with the round's progress beside
+    // them — the page used to shrink to one line the moment Renew was tapped.
+    const renewing = ((st && st.actions) || []).filter((a) => a.type === 'refresh' && !['done', 'failed'].includes(a.step));
+    const inRound = new Set(renewing.flatMap((a) => a.inputIds || []));
+    const pendingCoins = ((st && st.vtxos) || []).filter((v) => v.state === 'pending' && inRound.has(v.id));
     const tip = (mgr && mgr._tipH) || 0;
     const back = () => { ui.arkCoinsPage = null; ui.arkCoinsSel = null; render(); };
-    if (!spend.length && !pendingSat) { ui.arkCoinsPage = null; return null; } // nothing left to manage
+    if (!spend.length && !pendingCoins.length) { ui.arkCoinsPage = null; return null; } // nothing left to manage
     if (!mgr) connectArk().then(() => render()).catch(() => {});
-    if (!spend.length) return h('div', { class: 'col', style: 'gap:16px' },
-      h('div', { class: 'card col', style: 'gap:8px' },
-        h('h3', {}, t('arkCoinsTitle')),
-        h('div', { class: 'small muted' }, t('pending'), ': ', fmtSats(pendingSat), ' sats')),
-      h('button', { class: 'btn-ghost btn-block', onClick: back }, t('back')));
     const totalSat = spend.reduce((n, v) => n + v.amountSat, 0);
+    const heldSat = totalSat + pendingCoins.reduce((n, v) => n + v.amountSat, 0);
     let exitFee = 0; try { exitFee = estimateExitFeeSat(mgr); } catch {}
     const feeRate = Math.max(1, (wallet.feeRates && wallet.feeRates.halfHourFee) || 2);
     const afterFee = Math.ceil(530 * feeRate);
@@ -2232,11 +2247,19 @@ export function arkFeature(ctx) {
     const renew = () => {
       if (!selCoins.length || !mgr) return;
       // fire and let the round machinery carry it — rounds can be an hour out
-      mgr.refresh(selCoins.map((v) => v.id)).catch((e) => toast(e.message));
+      mgr.refresh(selCoins.map((v) => v.id), { manual: true }).catch((e) => toast(e.message));
       toast(t('arkDepthRenewed'));
       ui.arkCoinsSel = null;
-      back();
+      render(); // the page stays: the coins show as renewing
     };
+    const stageOf = (a) => a.step === 'issued' ? t('arkRenewStageFinishing') : a.step === 'submitted' ? t('arkRenewStageRound') : t('arkRenewStageQueued');
+    const renewingCard = renewing.length ? h('div', { class: 'card col', style: 'gap:8px' },
+      h('div', { class: 'row gap6', style: 'align-items:center' },
+        h('h4', { style: 'margin:0' }, t('arkRenewingTitle')), h('span', { class: 'tag pending' }, t('arkExitPendingTag'))),
+      ...renewing.map((a) => h('div', { class: 'col', style: 'gap:2px' },
+        h('div', { class: 'small' }, t('arkRenewingLine', { amount: fmtSats(a.inAmountSat || (a.outAmountSat + (a.feeSat || 0))), fee: a.feeSat ? t('arkRenewingFee', { fee: fmtSats(a.feeSat) }) : '' })),
+        h('div', { class: 'small muted' }, stageOf(a)),
+        a.lastError ? h('div', { class: 'small faint' }, a.lastError) : null))) : null;
     const tick = (checked, onChange, title) => h('input', {
       type: 'checkbox', checked, title, style: 'flex:0 0 auto;margin:0', onChange,
     });
@@ -2271,9 +2294,11 @@ export function arkFeature(ctx) {
       h('div', { class: 'card col', style: 'gap:8px' },
         h('h3', { style: 'margin:0' }, t('arkCoinsTitle')),
         h('p', { class: 'small muted', style: 'margin:0' },
-          spend.length === 1
-            ? t('arkCoinsIntroOne', { total: fmtSats(totalSat) + ' sats' })
-            : t('arkCoinsIntro', { n: spend.length, total: fmtSats(totalSat) + ' sats' })),
+          !spend.length
+            ? t('arkCoinsIntroRenewing', { total: fmtSats(heldSat) + ' sats' })
+            : spend.length === 1
+              ? t('arkCoinsIntroOne', { total: fmtSats(totalSat) + ' sats' })
+              : t('arkCoinsIntro', { n: spend.length, total: fmtSats(totalSat) + ' sats' })),
         // One coin per row, two lines: the amount (with its renewal price on
         // the right — the number this page's action spends), then a faint
         // meta line. Five flexed columns fit a laptop but wrapped into
@@ -2288,10 +2313,10 @@ export function arkFeature(ctx) {
         h('div', { class: 'coin-scroll' },
           h('table', { class: 'coin-table' },
             h('thead', {}, h('tr', {},
-              h('th', {}, tick(sel.size === ids.size, (e) => {
+              h('th', {}, spend.length ? tick(sel.size === ids.size, (e) => {
                 ui.arkCoinsSel = e.target.checked ? new Set(ids) : new Set();
                 render();
-              }, t('arkCoinsSelectAll'))),
+              }, t('arkCoinsSelectAll')) : null),
               h('th', { class: 'num' }, t('arkCoinsColAmount')),
               h('th', { class: 'num', title: t('arkCoinsChipExpTitle') }, t('arkCoinsColExpiry')),
               h('th', { class: 'num', title: t('arkCoinsChipExitTitle') }, t('arkCoinsColExit')),
@@ -2310,7 +2335,15 @@ export function arkFeature(ctx) {
                 h('td', { class: 'num' + (due ? ' warn' : '') }, expiresOf(v)),
                 h('td', { class: 'num' }, xf == null ? '—' : fmtSats(xf), xf == null ? null : h('span', { class: 'small faint' }, ' sats')),
                 h('td', { class: 'num' }, renewChip(f)));
-            }))))),
+            }),
+            // the coins in a round: greyed, no checkbox, their column says why
+            ...pendingCoins.map((v) => h('tr', { class: 'coin-renewing', style: 'opacity:.6' },
+              h('td', {}, ''),
+              h('td', { class: 'num' }, fmtSats(v.amountSat), h('span', { class: 'small faint' }, ' sats')),
+              h('td', { class: 'num' }, expiresOf(v)),
+              h('td', { class: 'num' }, '—'),
+              h('td', { class: 'num' }, h('span', { class: 'tag pending' }, t('arkCoinsRenewing'))))))))),
+      renewingCard,
       h('div', { class: 'card col', style: 'gap:8px' },
         h('h4', { style: 'margin:0' }, t('arkCoinsRenewTitle')),
         // the round cadence comes from the server (it has been an hour and
@@ -2320,7 +2353,7 @@ export function arkFeature(ctx) {
           ...schedule.map((r) => h('div', { class: 'row between' },
             h('span', { class: 'small muted' }, r.label),
             h('span', { class: 'small' + (r.free ? ' faint' : '') }, r.cost)))) : null,
-        h('button', { class: 'btn-primary btn-block', disabled: !!ui.arkBusy || !selCoins.length || !mgr, onClick: renew },
+        !spend.length ? null : h('button', { class: 'btn-primary btn-block', disabled: !!ui.arkBusy || !selCoins.length || !mgr, onClick: renew },
           !selCoins.length ? t('arkCoinsRenewNone')
             : selCoins.length < spend.length
               ? t('arkCoinsRenewSome', { n: selCoins.length, fee: selFee > 0 ? fmtSats(selFee) + ' sats' : t('arkDepthFree') })
@@ -3645,6 +3678,10 @@ export function arkFeature(ctx) {
       const exits = (s.actions || [])
         .filter((a) => a.type === 'exit' && !['done', 'failed'].includes(a.step))
         .map((a) => ({ time: exitStartedTs(a), render: () => arkExitActionItem(a) }));
+      // ...and renewals you asked for (a Renew tap), while the round runs
+      const renewals = (s.actions || [])
+        .filter((a) => a.type === 'refresh' && a.manual && !['done', 'failed'].includes(a.step))
+        .map((a) => ({ time: exitStartedTs(a), render: () => arkRefreshActionItem(a) }));
       // Same-payment duplicates (the old settle race, or a snapshot adopted
       // whole before the merge learned to dedupe) fold at display time too —
       // the earliest telling wins, everywhere, however the state got here.
@@ -3655,7 +3692,7 @@ export function arkFeature(ctx) {
       const moves = (s.movements || [])
         .filter((m) => ['receive', 'send', 'board', 'offboard', 'exit', 'ln-send', 'ln-receive', 'refresh', 'reconcile'].includes(m.type)
           && (m.status === 'complete' || (m.type === 'send' && m.status === 'failed')))
-        .filter((m) => m.type !== 'refresh' || m.feeSat > 0)
+        .filter((m) => m.type !== 'refresh' || m.feeSat > 0 || m.manual) // a renewal you asked for is worth a row even when free
         .sort((m, n) => (m.ts || 0) - (n.ts || 0))
         .filter((m) => {
           if (!m.type.startsWith('ln-') && !(m.type === 'refresh' && m.unlockHash)) return true;
@@ -3695,7 +3732,7 @@ export function arkFeature(ctx) {
           out.push({ ...m, count: 1, vtxoIds: m.vtxoId ? [m.vtxoId] : [] });
         }
       }
-      return exits.concat(out.map((m) => ({ time: m.ts, render: () => arkHistoryItem(m) })));
+      return exits.concat(renewals, out.map((m) => ({ time: m.ts, render: () => arkHistoryItem(m) })));
     },
     historyDetail() {
       if (ui.arkExitDetail) {

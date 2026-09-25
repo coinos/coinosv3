@@ -24,7 +24,7 @@ const seeded = Array.from({ length: 45 }, (_, i) => event('Cached post ' + i + '
 seeded[1] = event('With a quote nostr:' + noteEncode(quote.id) + ' and @' + npubEncode(other), now - 660);
 seeded[3] = event('Unavailable picture ' + origin + '/late.png', now - 780);
 seeded[8] = event('Five pictures ' + Array.from({ length: 5 }, (_, i) => origin + '/gallery' + i + '.png').join(' '), now - 1080);
-seeded[24] = event('Next page picture ' + origin + '/next.png', now - 2040);
+seeded[12] = event('Next page picture ' + origin + '/next.png', now - 1320);
 const requested = new Map();
 const html = await buildHtml({ minify: true, pwa: false });
 const server = Bun.serve({ port: 5298, fetch: async (req) => {
@@ -57,6 +57,7 @@ await page.evaluateOnNewDocument((fixtures) => {
       if (m[0] === 'CLOSE') { this.subs.delete(m[1]); return; }
       if (m[0] !== 'REQ') return;
       const [_, id, filter] = m;
+      (window.__feedRequests ||= []).push(filter);
       this.subs.set(id, filter);
       let events = [];
       if (filter.kinds?.includes(0) && filter.authors?.includes(fixtures.profile.pubkey)) events = [fixtures.profile];
@@ -105,6 +106,9 @@ try {
   }, [base, pk, seeded, origin]);
   await page.reload();
   await page.waitForFunction(() => document.body.innerText.toLowerCase().includes('receive'));
+  await sleep(2000);
+  check('a small feed query starts before opening the feed', await page.evaluate(() =>
+    !document.querySelector('.notes-feed') && (window.__feedRequests || []).some((f) => f.kinds?.length === 1 && f.kinds[0] === 1 && f.limit === 10)));
   await page.evaluate(() => [...document.querySelectorAll('button')].find((e) => /message/i.test(e.getAttribute('aria-label') || ''))?.click());
   await page.waitForSelector('.item');
   await page.evaluate(() => [...document.querySelectorAll('.item')].find((e) => /feed/i.test(e.textContent))?.click());
@@ -122,12 +126,12 @@ try {
 
   // With the header visible, a prepend must wait: anchoring only the first
   // post would otherwise scroll the header offscreen.
-  const headerBefore = await page.evaluate(() => ({ y: scrollY, text: document.querySelector('.chat-page').innerText }));
+  const headerBefore = await page.evaluate(() => ({ y: scrollY, text: document.querySelector('.chat-page > .row').innerText }));
   const fresh = event('A new live post', now + 1);
   check('a live subscription received the event', await page.evaluate((e) => window.__inject(e), fresh) > 0);
   await sleep(1000);
   check('live arrival leaves the visible header and posts untouched', await page.evaluate((before) =>
-    scrollY === before.y && document.querySelector('.chat-page').innerText === before.text, headerBefore));
+    scrollY === before.y && document.querySelector('.chat-page > .row').innerText === before.text, headerBefore));
   check('new post waits until it can be inserted offscreen', !(await page.$(row(fresh.id))));
 
   // Once the reader scrolls the header away, preserve every visible row on
@@ -169,8 +173,8 @@ try {
   check('the gap fill is admitted once offscreen', !!(await page.$(row(gap.id))));
 
   await page.$eval(row(seeded[18].id), (n) => n.scrollIntoView());
-  await page.waitForSelector(row(seeded[24].id), { timeout: 10000 });
-  check('older posts reveal with decoded pictures', await page.$eval(row(seeded[24].id), (n) => { const i = n.querySelector('.note-img'); return !!i && i.complete && i.naturalWidth > 0; }));
+  await page.waitForSelector(row(seeded[12].id), { timeout: 10000 });
+  check('older posts reveal with decoded pictures', await page.$eval(row(seeded[12].id), (n) => { const i = n.querySelector('.note-img'); return !!i && i.complete && i.naturalWidth > 0; }));
 
   const before = (await snapshot()).find((r) => r.top + r.height > 0);
   await page.evaluate((evs) => {
@@ -186,6 +190,22 @@ try {
   await page.waitForFunction(() => document.querySelector('.notes-feed')?.innerText.includes('Large catch-up 24'), { timeout: 15000 });
   const after = (await snapshot()).find((r) => r.id === before.id);
   check('a large catch-up preserves the reading position', !!after && Math.abs(after.top - before.top) <= 1, JSON.stringify({ before: before.top, after: after?.top }));
+  // Start on the wallet and let its small background warm-up finish. The
+  // first feed tap must paint rows synchronously, without a loading frame.
+  await page.evaluate(([base, notes]) => {
+    localStorage.setItem(base + ':feedNotes', JSON.stringify(notes));
+    const nav = { ...history.state.nav, screen: 'wallet', tab: 'history', chatOpen: false,
+      noteThread: null, profilePk: null, msgView: 'home' };
+    history.replaceState({ nav, i: 0 }, '', '/');
+  }, [base, seeded.filter((_, i) => ![1, 3, 8, 12].includes(i)).slice(0, 10)]);
+  await page.reload();
+  await sleep(5500);
+  await page.evaluate(() => [...document.querySelectorAll('button')].find((e) => /message/i.test(e.getAttribute('aria-label') || ''))?.click());
+  await page.waitForSelector('.item');
+  check('first opening after background preparation has rows and no spinner', await page.evaluate(() => {
+    [...document.querySelectorAll('.item')].find((e) => /feed/i.test(e.textContent))?.click();
+    return !!document.querySelector('.notes-feed > .row') && !document.querySelector('.chat-page .spinner');
+  }));
   check('no browser errors', !errors.length, errors.join(' | '));
 } finally { await browser.close(); server.stop(true); }
 process.exit(ok ? 0 : 1);

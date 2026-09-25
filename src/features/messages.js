@@ -31,6 +31,7 @@ import {
 import { saveInbox } from '../dm-inbox.js';
 import { mergeFeedWindow } from '../feed-window.js';
 import { createThreadStore } from '../thread-cache.js';
+import { createFeedCache, FEED_CACHE_POSTS } from '../feed-cache.js';
 import { makeSearcher, resultRows, fallbackAvatar, warmSearch, punkImageUrl, punkSmallUrl } from '../recipient-search.js';
 import { getNetwork } from '../api.js';
 import { decodeBolt11 } from '../ark/lightning.js';
@@ -3726,10 +3727,10 @@ export function messagesFeature(ctx) {
   // Cached events avoid waiting for relays; their presentation is prepared
   // before the reading surface is shown.
   const FEED_CACHE = 'feedNotes';
-  const FEED_LIMIT = 80;
-  const FEED_PAGE = 20;    // posts on screen at once, grown as you scroll
-  const FEED_KEEP = 200;   // in memory
-  const FEED_STORE = 50;   // ...and on disk
+  const FEED_LIMIT = 30;
+  const FEED_PAGE = 10;    // posts on screen at once, grown as you scroll
+  const FEED_KEEP = 80;   // memory target; retain rows already being read
+  const FEED_STORE = FEED_CACHE_POSTS;   // ...and on disk
   let feed = null;         // the feed on screen: { id, status, notes, shown, end, loadingMore, at }
   let feedUnsubs = [];
   // ---- many feeds ----------------------------------------------------------
@@ -3856,9 +3857,16 @@ export function messagesFeature(ctx) {
   const feedTopics = (def = feedDef()) => [...new Set(((def && def.topics) || []).map(normTopic).filter(Boolean))].slice(0, 20);
   const feedHasQuery = (def = feedDef()) => !!def && (feedAuthors(def).length > 0 || feedTopics(def).length > 0);
   const feedCacheKey = (id) => (id === FOLLOWING ? FEED_CACHE : FEED_CACHE + ':' + id);
+  const feedDisk = () => typeof wallet.featureStateKey === 'function'
+    ? createFeedCache(localStorage, wallet.featureStateKey(FEED_CACHE)) : null;
   const saveFeedCache = (c) => {
     if (adhocFeeds.has(c.id)) return; // a session feed leaves nothing behind
-    try { wallet.saveFeatureState(feedCacheKey(c.id), c.notes.slice(0, FEED_STORE).map(slimNote)); } catch {}
+    try {
+      const notes = c.notes.slice(0, FEED_STORE);
+      const disk = feedDisk();
+      if (disk) disk.save(c.id, notes);
+      else wallet.saveFeatureState(feedCacheKey(c.id), notes);
+    } catch {}
   };
   // posts on a topic come from the big public relays as well as ours: a
   // hashtag has no author whose outbox we could read
@@ -4088,20 +4096,50 @@ export function messagesFeature(ctx) {
     let c = feedStates.get(curFeedId);
     if (!c) {
       let stored = [];
-      try { stored = wallet.loadFeatureState(feedCacheKey(curFeedId), []) || []; } catch {}
+      try { stored = feedDisk()?.read(curFeedId) || wallet.loadFeatureState(feedCacheKey(curFeedId), []) || []; } catch {}
+      if (!Array.isArray(stored)) stored = [];
+      stored = stored.slice(0, FEED_STORE);
       c = { id: curFeedId, status: 'loading', notes: stored, shown: FEED_PAGE, at: 0, booting: true, presentations: new Map() };
       feedStates.set(curFeedId, c);
+      while (feedStates.size > 4) {
+        const oldest = feedStates.keys().next().value;
+        feedStates.get(oldest).stopped = true;
+        feedStates.delete(oldest);
+      }
       feed = c;
-      // Cached events still need their pictures decoded. Prepare two pages
-      // before exposing the first, including the page immediately below it.
-      c.boot = notesReady(stored.slice(0, FEED_PAGE * 2)).finally(() => {
+      // Only the opening page gates first paint. The next page warms on the
+      // side, so an offscreen image cannot delay the whole feed.
+      c.boot = notesReady(stored.slice(0, FEED_PAGE)).finally(() => {
         c.booting = false;
-        scheduleRepaint();
+        if (!c.stopped && ui.chatOpen && ui.msgView === 'feed' && c === feed) scheduleRepaint();
       });
-      c.boot.then(() => refreshFeed({}, c));
+      c.boot.then(() => {
+        if (c.stopped) return;
+        notesReady(stored.slice(FEED_PAGE, FEED_PAGE * 2));
+      });
+      prefetchFeed(c);
     }
     feed = c;
     return c;
+  }
+  let feedWarmTimer = null, feedWarmSession = 0;
+  async function prefetchFeed(c) {
+    const def = feedDef(c.id);
+    const authors = feedAuthors(def).slice(0, REQ_AUTHORS), topics = feedTopics(def);
+    if (!authors.length && !topics.length) { c.status = 'ready'; return; }
+    c.at = Date.now();
+    try {
+      const events = await queryOn(NOTE_RELAYS, { kinds: [1], limit: FEED_PAGE,
+        ...(authors.length ? { authors } : {}), ...(topics.length ? { '#t': topics } : {}) }, 3000);
+      if (c.stopped) return;
+      await mergeFeed(events.filter((e) => e.kind === 1 && !isReply(e) && !hidden(e))
+        .sort((a, b) => b.created_at - a.created_at).slice(0, FEED_PAGE), {}, c);
+    } catch {} finally {
+      if (!c.stopped) {
+        c.status = 'ready';
+        if (c === feed && ui.chatOpen && ui.msgView === 'feed') { scheduleRepaint(); watchFeed(); }
+      }
+    }
   }
   function switchFeed(id) {
     if (!feedDef(id)) return;
@@ -4113,14 +4151,8 @@ export function messagesFeature(ctx) {
     const c = feedNow();
     c.unseen = 0; c.shown = FEED_PAGE;
     admitFeed(c.deferred || [], c, true);
-    if (!c.booting) {
-      c.presentations.clear();
-      c.booting = true;
-      c.boot = notesReady(c.notes.slice(0, FEED_PAGE * 2)).finally(() => {
-        c.booting = false;
-        scheduleRepaint();
-      });
-    }
+    // An already warmed feed can paint synchronously on entry.
+    if (!c.booting) c.presentations.clear();
     watchFeed();
     c.boot.then(() => refreshFeed({}, c));
     try { window.scrollTo({ top: 0 }); } catch {}
@@ -4256,7 +4288,9 @@ export function messagesFeature(ctx) {
       && !known.has(e.id) && !staged.has(e.id) && known.add(e.id) && staged.add(e.id));
     if (!add.length) return false;
     if (c.booting) await c.boot;
+    if (c.stopped) return false;
     await notesReady(add);
+    if (c.stopped) return false;
     for (const e of add) staged.delete(e.id);
     // A catch-up is settled once, after every relay has answered (see
     // settleCatchup) — not chunk by chunk, which is what made the pill count
@@ -4282,7 +4316,7 @@ export function messagesFeature(ctx) {
     });
     c.deferred = result.deferred;
     if (!result.added.length) return;
-    c.shown = result.shown;
+    c.shown = c.opened ? result.shown : FEED_PAGE;
     c.notes = result.notes;
     const retained = new Set(c.notes.map((e) => e.id));
     for (const id of c.presentations.keys()) if (!retained.has(id)) c.presentations.delete(id);
@@ -6720,6 +6754,7 @@ export function messagesFeature(ctx) {
     syncFollowSets().catch(() => {}); // throttled inside
     syncReports().catch(() => {}); // likewise
     const c = feedNow();
+    c.opened = true;
     const def = feedDef();
     const authors = feedAuthors(def);
     const hasQuery = feedHasQuery(def);
@@ -6774,9 +6809,9 @@ export function messagesFeature(ctx) {
             : !visible.length
               ? h('div', { class: 'small faint', style: 'text-align:center;padding:12px 0' }, t('feedEmpty'))
               : h('div', { class: 'card col notes-feed', style: 'gap:0' }, ...rows),
-        c.loadingMore
-          ? h('div', { class: 'row gap6', style: 'justify-content:center;padding:4px 0' }, h('span', { class: 'spinner sm' }))
-          : null,
+        // Older posts prepare offscreen; a background fetch should not add
+        // a spinner to an already readable feed.
+
         ...noteOverlays());
   }
 
@@ -8247,6 +8282,7 @@ export function messagesFeature(ctx) {
     // nobody yet — an established nostr user keeps their own list.
     identitySignedInNew() { setTimeout(() => seedNewIdentity({ onlyIfNoFollows: true }), 0); return true; },
     init() {
+      const session = ++feedWarmSession;
       // this wallet's cached faces, from its own namespace — the keys are
       // in place now, whatever the header asked for before
       profilesWarmed = false;
@@ -8292,7 +8328,13 @@ export function messagesFeature(ctx) {
       for (const jm of communities()) { try { ensureRoom(jm, { subscribe: false }); } catch {} }
       syncLists().catch(() => {});
       syncInbox().catch(() => {});
-      syncFollows().catch(() => {}); // the Follow button should be right on first paint
+      // Warm a small opening page while the wallet is idle, before Feed is
+      // opened. This is one bounded query, not a live feed subscription.
+      syncFollows().catch(() => {});
+      feedWarmTimer = setTimeout(() => {
+        feedWarmTimer = null;
+        if (session === feedWarmSession) feedNow();
+      }, 1500);
       syncMutes().catch(() => {});   // and a muted author shouldn't flash past before the list lands
       registerPush().catch(() => {}); // silent refresh when permission already granted
     },
@@ -8310,6 +8352,10 @@ export function messagesFeature(ctx) {
       if (zapLiveUnsub) { try { zapLiveUnsub(); } catch {} zapLiveUnsub = null; }
       clearTimeout(zapTimer); zapTimer = null; zapQueue = new Set(); zapRecent = [];
       stopFeedWatch();
+      ++feedWarmSession;
+      clearTimeout(feedWarmTimer); feedWarmTimer = null;
+      clearTimeout(feedAheadTimer); feedAheadTimer = null;
+      for (const c of feedStates.values()) c.stopped = true;
       feedStates.clear();
       threadCache.clear();
       follows = null; followsAt = 0; feed = null; feedAt = 0; relayLists = null;

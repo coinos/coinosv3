@@ -4335,8 +4335,21 @@ export function messagesFeature(ctx) {
     if (!c) return;
     admitFeed(c.deferred || [], c, true);
     c.unseen = 0;
-    try { window.scrollTo({ top: 0 }); } catch {}
     render();
+    glideToTop();
+  }
+  // Up to the new posts as a glide, not a cut: an instant scrollTo read as a
+  // page refresh. A long way down, most of the distance is closed in one
+  // step first — so the glide is short, and the rows it passes are the
+  // ones the window has mounted — and the last couple of screens roll by.
+  function glideToTop() {
+    try {
+      const H = window.innerHeight || 800;
+      const reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      if (reduce) { window.scrollTo({ top: 0 }); return; }
+      if (window.scrollY > H * 2) window.scrollTo({ top: H * 2 });
+      requestAnimationFrame(() => { try { window.scrollTo({ top: 0, behavior: 'smooth' }); } catch { window.scrollTo(0, 0); } });
+    } catch { try { window.scrollTo(0, 0); } catch {} }
   }
   // One pass over the plan: each relay is asked only for the authors it
   // actually carries. The slowest relay doesn't hold up the rest — every

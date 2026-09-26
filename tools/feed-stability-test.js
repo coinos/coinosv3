@@ -113,10 +113,13 @@ try {
   await page.waitForSelector('.item');
   await page.evaluate(() => [...document.querySelectorAll('.item')].find((e) => /feed/i.test(e.textContent))?.click());
   await sleep(1000);
-  check('cached rows wait for their slow avatar', !(await page.$('.notes-feed > .row')));
+  // Cached posts paint at once — never a spinner over posts we hold — and
+  // settle into their prepared presentation once faces and pictures are in.
+  check('cached rows paint at once, before their slow avatar has loaded', !!(await page.$('.notes-feed[data-booting] > .row')));
+  await page.waitForSelector('.notes-feed:not([data-booting]) > .row', { timeout: 15000 });
   await page.waitForSelector(row(seeded[0].id), { timeout: 15000 });
-  check('quoted note and mention resolved before admission', await page.$eval(row(seeded[1].id), (n) => n.innerText.includes('Quoted content') && n.innerText.includes('@Mentioned Person')));
-  check('all five gallery images decoded before admission', await page.$eval(row(seeded[8].id), (n) => n.querySelectorAll('.note-img').length === 5 && [...n.querySelectorAll('.note-img')].every((i) => i.complete && i.naturalWidth > 0)));
+  check('quoted note and mention resolved once settled', await page.$eval(row(seeded[1].id), (n) => n.innerText.includes('Quoted content') && n.innerText.includes('@Mentioned Person')));
+  check('all five gallery images decoded once settled', await page.$eval(row(seeded[8].id), (n) => n.querySelectorAll('.note-img').length === 5 && [...n.querySelectorAll('.note-img')].every((i) => i.complete && i.naturalWidth > 0)));
   check('the next page was prefetched before scrolling', requested.has('/next.png'));
   check('an unavailable image remains a usable link', await page.$eval(row(seeded[3].id), (n) => !n.querySelector('img.note-img') && !!n.querySelector('a[href$="/late.png"]')));
   const initial = await snapshot();

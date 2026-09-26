@@ -4154,7 +4154,7 @@ export function messagesFeature(ctx) {
     // An already warmed feed can paint synchronously on entry.
     if (!c.booting) c.presentations.clear();
     watchFeed();
-    c.boot.then(() => refreshFeed({}, c));
+    refreshFeed({}, c);
     try { window.scrollTo({ top: 0 }); } catch {}
     render();
   }
@@ -4374,7 +4374,8 @@ export function messagesFeature(ctx) {
   // beat after the page painted, moving what you had started reading. Only
   // a first load (nothing to disturb) or a rebuilt follow list goes straight in.
   async function refreshFeed(opts = {}, c = feedNow()) {
-    if (c.booting) await c.boot;
+    // the relays are asked at once; what they answer waits for the warm-up
+    // at the door (mergeFeed), not the asking
     if (!feedHasQuery(feedDef(c.id))) { c.status = 'ready'; return; }
     if (!opts.force && Date.now() - c.at < 30_000) return;
     c.at = Date.now();
@@ -6759,13 +6760,18 @@ export function messagesFeature(ctx) {
     const authors = feedAuthors(def);
     const hasQuery = feedHasQuery(def);
     prepareFeedAhead(c);
-    const visible = c.booting ? [] : c.notes.filter((ev) => !hidden(ev));
+    // Never a bare spinner over posts we already hold: while the opening
+    // page's faces and pictures are still being decoded, the cached rows
+    // paint as they are (live profiles, pictures as they load) and take
+    // their settled presentation once the warm-up lands. The spinner is
+    // for a feed with nothing cached at all.
+    const visible = c.notes.filter((ev) => !hidden(ev));
     // Every child keyed by its post, hairlines included, so the morph
     // reconciles the list by post: a new one at the top is inserted as its
     // own node; the rest keep theirs.
     const rows = visible.slice(0, c.shown || FEED_PAGE).flatMap((ev, i) => [
       i ? h('div', { 'data-key': 'hr:' + ev.id, style: 'height:1px;background:var(--border,rgba(128,128,128,.18));margin:0 -14px' }) : null,
-      feedRow(c, ev),
+      c.booting ? keyed(noteRow(ev.pubkey, ev, displayName(ev.pubkey)), ev.id) : feedRow(c, ev),
     ]);
     // Posts that went in above you while you were reading. A floating pill
     // that says how many are up there; the tap takes you up to them.
@@ -6808,7 +6814,7 @@ export function messagesFeature(ctx) {
             ? h('div', { class: 'row gap6', style: 'justify-content:center;padding:12px 0' }, h('span', { class: 'spinner sm' }))
             : !visible.length
               ? h('div', { class: 'small faint', style: 'text-align:center;padding:12px 0' }, t('feedEmpty'))
-              : h('div', { class: 'card col notes-feed', style: 'gap:0' }, ...rows),
+              : h('div', { class: 'card col notes-feed', style: 'gap:0', 'data-booting': c.booting ? '1' : undefined }, ...rows),
         // Older posts prepare offscreen; a background fetch should not add
         // a spinner to an already readable feed.
 
@@ -7280,6 +7286,9 @@ export function messagesFeature(ctx) {
 
   function homeView() {
     if (myPubkeys().length) syncFollowSets().catch(() => {}); // lists made elsewhere join the feeds (throttled inside)
+    // The feed is a tap away from here: have it warmed and asked for before
+    // the tap, so it opens on the latest posts rather than a spinner.
+    if (myPubkeys().length) { try { const c = feedNow(); if (!c.booting) refreshFeed({}, c); } catch {} }
     syncReports().catch(() => {}); // your follows' flags (throttled inside)
     startDMs();
     // Threads you've since replied to should stop being strangers to the

@@ -6187,7 +6187,7 @@ export function messagesFeature(ctx) {
         onClick: () => { s.replying = false; s.preview = false; render(); },
       }, t('cancel')),
       h('button', {
-        class: 'btn-primary thread-reply-send', disabled: !!s.sending || !!ui.postUploading,
+        class: 'btn-primary btn-sm thread-reply-send', disabled: !!s.sending || !!ui.postUploading,
         onClick: async () => {
           const text = (s.draft || '').trim();
           if (!text) return;

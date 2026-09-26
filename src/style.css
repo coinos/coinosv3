@@ -688,7 +688,10 @@ html:has(#app .chat-card), body:has(#app .chat-card) { overflow: hidden; }
 /* the field inside the panel: a quiet hairline, the panel is the frame */
 .thread-reply .thread-reply-input { border: 1px solid var(--line); background: var(--surface, #fff); border-radius: 10px; }
 .thread-reply .thread-reply-input:focus { border-color: var(--ink); outline: none; }
-.thread-reply .thread-reply-send { padding: 8px 18px; }
+/* Cancel and Reply: one size, the icon buttons' height */
+.thread-reply .reply-tools .thread-reply-cancel, .thread-reply .reply-tools .thread-reply-send {
+  height: 40px; padding: 0 18px; border-radius: 10px; font-size: 15px; line-height: 38px; box-sizing: border-box;
+}
 /* A picture, full screen: the image centred on a dark ground, everything
    else out of the way. Fixed to the viewport (svh, so a phone's address bar
    can't push it), and above every other layer including the toast. */

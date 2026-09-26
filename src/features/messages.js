@@ -7993,9 +7993,23 @@ export function messagesFeature(ctx) {
       const s = st();
       const stored = (!s.notifsPk || s.notifsPk === identityPk()) ? (s.notifs || []) : [];
       notif = { status: stored.length ? 'ready' : 'loading', items: stored };
+      warmNotifFaces(stored);
       refreshNotifs();
     }
     return notif;
+  }
+  // The faces the notifications page will paint, fetched and decoded ahead
+  // of it: the names in one batch, then each picture through the cache and
+  // into a thumbnail. Runs when the list is read from disk or grows (the
+  // chat home does both before the page is ever opened), so opening it
+  // paints faces rather than quiet circles that fill in one by one.
+  const notifWarmed = new Set();
+  function warmNotifFaces(items) {
+    const pks = [...new Set((items || []).map((x) => x && x.actor).filter((pk) => pk && !notifWarmed.has(pk)))].slice(0, 80);
+    if (!pks.length || typeof Image === 'undefined') return;
+    for (const pk of pks) { notifWarmed.add(pk); liveProfileOf(pk); }
+    const deadline = Date.now() + READY_MS;
+    for (const pk of pks) warmAvatar(pk, deadline).catch(() => {});
   }
   // What an event says happened, or null if it isn't about you after all.
   function notifItem(ev) {
@@ -8031,6 +8045,7 @@ export function messagesFeature(ctx) {
     const add = (evs || []).map((ev) => (ev.kind === 1 && hidden(ev) ? null : notifItem(ev)))
       .filter((x) => x && !hiddenPk(x.actor) && !known.has(x.id) && known.add(x.id));
     if (!add.length) return false;
+    warmNotifFaces(add);
     // One zap, two receipts: a coinos zap publishes its own (9737) beside the
     // LNURL server's (9735). The same person, post and amount within a few
     // minutes is one row.
@@ -8164,7 +8179,7 @@ export function messagesFeature(ctx) {
     notifSeenAtOpen = notifSeen();
     ui.chatOpen = true;
     ui.msgView = 'notifs';
-    notifNow();
+    warmNotifFaces(notifNow().items);
     refreshNotifs(true).catch(() => {});
     watchNotifs();
     markNotifsSeen();

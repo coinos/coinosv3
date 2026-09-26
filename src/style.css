@@ -684,7 +684,8 @@ html:has(#app .chat-card), body:has(#app .chat-card) { overflow: hidden; }
   display: flex; align-items: center; justify-content: center; padding: 0;
 }
 /* beside a growing reply box the icons keep their size, sat on the baseline */
-.thread-reply-input ~ .attach-btn { align-self: flex-end; height: 44px; }
+.thread-reply .reply-tools .attach-btn { height: 40px; }
+.thread-reply .thread-reply-send { padding: 8px 18px; }
 /* A picture, full screen: the image centred on a dark ground, everything
    else out of the way. Fixed to the viewport (svh, so a phone's address bar
    can't push it), and above every other layer including the toast. */

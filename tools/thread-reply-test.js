@@ -65,7 +65,7 @@ page.on('request', r => r.url().startsWith(server.url.origin) ? r.continue() : r
 const check = (name, value) => { assert(value, name); console.log('✓ ' + name); };
 const inline = () => page.evaluate(() => {
   const input = document.querySelector('.thread-reply-input');
-  const box = input?.parentElement.parentElement;
+  const box = input?.closest('.thread-reply'); // the field sits directly in the box now, tools on a row beneath
   return !!input && box.previousElementSibling?.dataset.zapPost === test.ui.noteThread.focusId;
 });
 try {
@@ -81,7 +81,9 @@ try {
   await page.waitForFunction(() => test.waiting.length === 2);
   await page.evaluate(() => test.release());
   await page.waitForFunction(() => document.body.innerText.includes('Root post'));
-  check('a relay result omitting the tapped reply keeps it and its composer', await inline());
+  // the composer folds away once the reply is sent; the tapped reply itself stays
+  check('a relay result omitting the tapped reply keeps it (composer folded after sending)', await page.evaluate(() =>
+    !!document.querySelector('[data-zap-post="' + test.ui.noteThread.focusId + '"]') && !document.querySelector('.thread-reply-input')));
   await page.evaluate(() => test.overlay());
   check('fixture starts with a profile covering the existing thread', await page.evaluate(() => test.ui.profOverThread && !document.querySelector('.thread-reply-input')));
   await page.click('#outside .note-act');

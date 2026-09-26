@@ -130,7 +130,7 @@ try {
   let np = null; try { np = decode(p2.slice(1)); } catch {}
   check('the address bar names the person (npub)', p2.startsWith('/npub1') && np && np.data === AUTHOR, p2.slice(0, 30));
   await page.goBack(); await sleep(600);
-  check('Back returns to the thread and its address', (await path()) === p1 && await page.evaluate(() => !!document.querySelector('[data-focus-note], .thread-reply-input')));
+  check('Back returns to the thread and its address', (await path()) === p1 && await page.evaluate(() => !!document.querySelector('.thread-card')));
   await page.goForward(); await sleep(600);
   check('the profile has an Add to a list button', await page.evaluate(() => !![...document.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Add to a list')));
   await page.evaluate(() => [...document.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Add to a list').click()); await sleep(400);
@@ -161,7 +161,7 @@ try {
   await page.evaluate(() => [...document.querySelectorAll('.feed-chip')].find((c) => c.textContent.trim() === 'Following').click()); await sleep(800);
   await page.evaluate(() => { const r = [...document.querySelectorAll('[data-zap-post]')].find((n) => /a post to open/.test(n.textContent)); r.click(); }); await sleep(800);
   await page.reload({ waitUntil: 'domcontentloaded' });
-  check('reloading a thread lands on the thread, at its address', await waitFor(() => !!document.querySelector('.thread-reply-input'), 20000) && (await path()) === p1, await path());
+  check('reloading a thread lands on the thread, at its address', await waitFor(() => !!document.querySelector('.thread-card'), 20000) && (await path()) === p1, await path());
   check('...with its post', await waitText('a post to open', 5000));
   await page.evaluate(() => { const r = [...document.querySelectorAll('[data-zap-post]')].find((n) => /a post to open/.test(n.textContent)); [...r.querySelectorAll('span')].find((s) => s.style.cursor === 'pointer' && s.style.fontWeight === '600').click(); }); await sleep(800);
   await page.reload({ waitUntil: 'domcontentloaded' });
@@ -169,7 +169,7 @@ try {
   const hist = () => page.evaluate(() => JSON.stringify({ len: history.length, i: history.state && history.state.i, prof: !!(history.state && history.state.nav && history.state.nav.profilePk), th: !!(history.state && history.state.nav && history.state.nav.noteThread), over: history.state && history.state.nav && history.state.nav.profOverThread, path: location.pathname.slice(0, 12) }));
   const before = await hist();
   await page.goBack(); await sleep(800);
-  check('Back from it is the thread again', (await path()) === p1 && await page.evaluate(() => !!document.querySelector('.thread-reply-input')), before + ' -> ' + await hist());
+  check('Back from it is the thread again', (await path()) === p1 && await page.evaluate(() => !!document.querySelector('.thread-card')), before + ' -> ' + await hist());
   check('no page errors', errs.length === 0, errs.slice(0, 2).join(' | '));
 } finally { await browser.close(); server.stop(true); }
 console.log(ok ? '\n✅ lists: a feed of people is a nostr list; posts and people are links' : '\n❌ failed');

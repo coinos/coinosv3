@@ -117,8 +117,11 @@ try {
     console.log(' — no post in the feed to reply to, skipping the reply half');
   } else {
     await sleep(2500);
+    check('a thread opened to read has no reply box yet', !(await page.$('.thread-reply-input')));
+    await page.evaluate(() => { const b = [...document.querySelectorAll('.note-act')].find((x) => x.getAttribute('aria-label') === 'Reply'); if (b) b.click(); });
+    await sleep(400);
     const box = await page.$('.thread-reply-input');
-    check('a thread has a reply box', !!box);
+    check('Reply opens the box', !!box);
     if (box) {
       await type('.thread-reply-input', 'my answer https://coinos.io/punks/3.webp');
       await sleep(300);

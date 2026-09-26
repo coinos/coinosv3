@@ -5202,6 +5202,7 @@ export function messagesFeature(ctx) {
     } else ui.noteThread = { rootId: rootIdOf(ev), focusId: ev.id, seed: ev };
     const s = ui.noteThread;
     ui.profOverThread = false;
+    s.replying = true; // the box appears under this note
     s.scrollPending = false; // focus the composer, without a competing note scroll
     s.refocus = true;
     render();
@@ -6115,16 +6116,19 @@ export function messagesFeature(ctx) {
     const row = (ev) => noteRow(ev.pubkey, ev, displayName(ev.pubkey), { open: false, focus: ev.id === s.focusId && ev.id !== c.rootId });
     // The reply box sits INLINE, right under the note it answers — it used
     // to live at the bottom of the thread, where nobody scrolled to find it.
-    const replyBox = () => h('div', { class: 'col', style: 'gap:8px;padding:2px 0 10px' },
+    // The box appears once Reply is tapped (or while a draft is pending) —
+    // a thread opened to read used to come with an empty field under its
+    // first post. Amethyst's shape: the field across the full width, the
+    // tools on a row beneath it.
+    const replyBox = () => h('div', { class: 'col thread-reply', style: 'gap:8px;padding:2px 0 10px' },
       s.preview ? draftPreview(s.draft) : null,
-      h('div', { class: 'row', style: 'gap:8px;align-items:flex-end' },
       // A textarea that grows with the reply, like the chat composer: Enter
       // sends, Shift+Enter (or Ctrl+J) breaks the line — a reply used to be
       // a one-line field with no way to write a paragraph.
       h('textarea', {
-        class: 'grow thread-reply-input', placeholder: t('threadReplyHint'),
-        rows: String(Math.min(5, (s.draft || '').split('\n').length)),
-        style: 'font-family:var(--sans);resize:none;max-height:120px;overflow-y:auto;line-height:1.4',
+        class: 'thread-reply-input', placeholder: t('threadReplyHint'),
+        rows: String(Math.min(6, Math.max(2, (s.draft || '').split('\n').length))),
+        style: 'font-family:var(--sans);resize:none;max-height:160px;overflow-y:auto;line-height:1.4;width:100%;box-sizing:border-box',
         value: s.draft || '',
         // a render per keystroke only while the preview is open; the morph
         // leaves a focused field alone, so this can't fight the typing
@@ -6142,6 +6146,7 @@ export function messagesFeature(ctx) {
           }
         },
       }),
+      h('div', { class: 'row reply-tools', style: 'gap:8px;align-items:center' },
       // A reply can carry a picture too — same upload, same imeta tag, same
       // paperclip. The URL lands in the draft, which is what every client
       // reads as the media.
@@ -6163,6 +6168,11 @@ export function messagesFeature(ctx) {
         },
       }),
       previewBtn(!!s.preview, () => { s.preview = !s.preview; render(); }),
+      h('span', { class: 'grow' }),
+      h('button', {
+        class: 'btn-ghost btn-sm thread-reply-cancel', type: 'button',
+        onClick: () => { s.replying = false; s.preview = false; render(); },
+      }, t('cancel')),
       h('button', {
         class: 'btn-primary thread-reply-send', disabled: !!s.sending || !!ui.postUploading,
         onClick: async () => {
@@ -6177,6 +6187,7 @@ export function messagesFeature(ctx) {
             // focused field's value — clear it by hand
             const inp = document.querySelector('.thread-reply-input');
             if (inp) inp.value = '';
+            s.replying = false; s.preview = false; // sent: the box folds away
             toast(t('threadReplied'));
           } catch (e) { if (!e.silent) toast(e.message); }
           s.sending = false; render();
@@ -6186,7 +6197,7 @@ export function messagesFeature(ctx) {
     // nothing narrower is focused; appended at the end if the focused note
     // hasn't loaded yet, so the box never disappears entirely)
     const kids = [];
-    let boxPlaced = false;
+    let boxPlaced = !(s.replying || (s.draft || '').trim()); // nothing to place until Reply is tapped
     const place = (ev) => {
       if (boxPlaced) return;
       if (ev.id === s.focusId || (!s.focusId && c.root && ev.id === c.root.id)) {
@@ -6249,7 +6260,7 @@ export function messagesFeature(ctx) {
       // full header: search/chat/settings stay reachable mid-thread (only
       // the public no-wallet surface drops the action row)
       ctx.brandHeader(!ui.pubProf && wallet.loaded),
-      h('div', { class: 'card col', style: 'gap:0;padding:2px 14px' }, ...kids),
+      h('div', { class: 'card col thread-card', style: 'gap:0;padding:2px 14px' }, ...kids),
       h('button', { class: 'btn-ghost btn-block', onClick: () => { ui.noteThread = null; render(); } }, t('back')),
       ...noteOverlays());
   }

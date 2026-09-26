@@ -685,6 +685,9 @@ html:has(#app .chat-card), body:has(#app .chat-card) { overflow: hidden; }
 }
 /* beside a growing reply box the icons keep their size, sat on the baseline */
 .thread-reply .reply-tools .attach-btn { height: 40px; }
+/* the field inside the panel: a quiet hairline, the panel is the frame */
+.thread-reply .thread-reply-input { border: 1px solid var(--line); background: var(--surface, #fff); border-radius: 10px; }
+.thread-reply .thread-reply-input:focus { border-color: var(--ink); outline: none; }
 .thread-reply .thread-reply-send { padding: 8px 18px; }
 /* A picture, full screen: the image centred on a dark ground, everything
    else out of the way. Fixed to the viewport (svh, so a phone's address bar

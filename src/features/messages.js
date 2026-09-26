@@ -5801,7 +5801,7 @@ export function messagesFeature(ctx) {
         h('button', { class: 'btn-ghost btn-block', onClick: close }, t('back'))));
   }
 
-  function noteRow(pk, ev, name, { open = true, focus = false } = {}) {
+  function noteRow(pk, ev, name, { open = true, focus = false, joined = false } = {}) {
     // NOT prefetchProfilePage: that fetches the author's whole page — their
     // kind 0, their relay list, their last thirty notes — and a feed row is
     // not a profile tap. Twenty rows meant sixty requests, which is how the
@@ -5826,7 +5826,9 @@ export function messagesFeature(ctx) {
       style: 'gap:10px;align-items:flex-start;padding:10px 0'
         + (openable ? ';cursor:pointer' : '')
         + (pending ? ';opacity:.55' : '')
-        + (focus ? ';background:var(--accent-soft,rgba(128,128,128,.08));border-radius:8px;padding-left:8px;padding-right:8px;margin:0 -8px' : ''),
+        // joined: the reply box continues this highlight below, so the
+        // bottom corners stay square and the two read as one panel
+        + (focus ? ';background:var(--accent-soft,rgba(128,128,128,.08));border-radius:' + (joined ? '8px 8px 0 0' : '8px') + ';padding-left:8px;padding-right:8px;margin:0 -8px' : ''),
       // closest('button') guard: on touch, a ⚡ tap must never double as a
       // row tap even if propagation quirks let the click reach us
       onClick: openable ? (e) => { if (e.target && e.target.closest && e.target.closest('button')) return; openNoteThread(ev); } : undefined,
@@ -6113,14 +6115,25 @@ export function messagesFeature(ctx) {
   function threadScreen() {
     const s = ui.noteThread;
     const c = threadFor(s.seed);
-    const row = (ev) => noteRow(ev.pubkey, ev, displayName(ev.pubkey), { open: false, focus: ev.id === s.focusId && ev.id !== c.rootId });
+    const boxUnder = (ev) => !!(s.replying || (s.draft || '').trim()) && (ev.id === s.focusId || (!s.focusId && c.root && ev.id === c.root.id));
+    const row = (ev) => {
+      const focus = ev.id === s.focusId && ev.id !== c.rootId;
+      return noteRow(ev.pubkey, ev, displayName(ev.pubkey), { open: false, focus, joined: focus && boxUnder(ev) });
+    };
     // The reply box sits INLINE, right under the note it answers — it used
     // to live at the bottom of the thread, where nobody scrolled to find it.
     // The box appears once Reply is tapped (or while a draft is pending) —
     // a thread opened to read used to come with an empty field under its
     // first post. Amethyst's shape: the field across the full width, the
     // tools on a row beneath it.
-    const replyBox = () => h('div', { class: 'col thread-reply', style: 'gap:8px;padding:2px 0 10px' },
+    // The box takes the width of the note above it and, under a focused
+    // note, continues its highlight: same soft background, the bottom
+    // corners rounded, the note's squared off — one panel, not a field
+    // dropped in beneath a card.
+    const replyBox = (joined) => h('div', {
+      class: 'col thread-reply' + (joined ? ' joined' : ''),
+      style: 'gap:8px;margin:0 -8px;padding:' + (joined ? '2px' : '8px') + ' 8px 10px;background:var(--accent-soft,rgba(128,128,128,.08));border-radius:' + (joined ? '0 0 8px 8px' : '8px'),
+    },
       s.preview ? draftPreview(s.draft) : null,
       // A textarea that grows with the reply, like the chat composer: Enter
       // sends, Shift+Enter (or Ctrl+J) breaks the line — a reply used to be
@@ -6201,7 +6214,7 @@ export function messagesFeature(ctx) {
     const place = (ev) => {
       if (boxPlaced) return;
       if (ev.id === s.focusId || (!s.focusId && c.root && ev.id === c.root.id)) {
-        kids.push(replyBox());
+        kids.push(replyBox(ev.id === s.focusId && ev.id !== c.rootId));
         boxPlaced = true;
       }
     };
@@ -6239,7 +6252,7 @@ export function messagesFeature(ctx) {
     walk(c.rootId, 0);
     if (c.status === 'loading') kids.push(h('div', { class: 'row', style: 'justify-content:center;padding:12px' }, h('span', { class: 'spinner sm' })));
     else if (!c.replies.length) kids.push(h('div', { class: 'small faint', style: 'text-align:center;padding:10px 0' }, t('threadNoReplies')));
-    if (!boxPlaced) kids.push(replyBox());
+    if (!boxPlaced) kids.push(replyBox(false));
     // A tapped reply deep in a long thread has to be ON SCREEN when the
     // thread opens — highlighting it somewhere below the fold reads as the
     // thread having missed it. Scroll to it after this paint; if the replies

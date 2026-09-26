@@ -3400,6 +3400,7 @@ export function messagesFeature(ctx) {
   if (typeof window !== 'undefined') {
     window.addEventListener('scroll', () => {
       if (!ui.profilePk && (!(ui.chatOpen && ui.msgView === 'feed') || ui.noteThread)) return;
+      windowScrolled(ui.profilePk ? notesCache.get(ui.profilePk) : feed);
       // back at the top by yourself: the new posts are under your eyes, so
       // the notice has done its job (only the pill repaints — the rows are
       // keyed and stay put, so nothing moves under a finger)
@@ -4399,6 +4400,93 @@ export function messagesFeature(ctx) {
   // stays where it was, however much was inserted above it. Measured after
   // the paint, so a browser that anchored the scroll itself isn't corrected
   // twice.
+  // ---- windowing: only the rows near the viewport are in the DOM ----------
+  // A long scroll used to leave hundreds of rows mounted, and every repaint
+  // (a zap count landing, the thirty-second sync) rebuilt and diffed all of
+  // them — the slowdown you feel deep in the feed. Now a spacer stands in
+  // for the rows above and below the window at their measured heights, so
+  // the page keeps its length (scrollbar, Back, anchoring all behave), while
+  // a repaint touches a few dozen rows however far you have scrolled. The
+  // shape is svelte-virtual-list's: measure after paint, put unmeasured rows
+  // in at the running average, and hold the reader's row still when a
+  // measurement corrects an estimate.
+  const WINDOW_AHEAD = 2.5; // screens kept rendered beyond the viewport, each way
+  const WINDOW_MIN = 30; // below this many rows, no windowing at all
+  const ROW_GAP = 1; // the hairline between rows
+  function listWindow(c, list) {
+    const H = typeof window === 'undefined' ? 0 : window.innerHeight;
+    if (!H || list.length <= WINDOW_MIN) return { start: 0, end: list.length, top: 0, bottom: 0 };
+    const heights = c.heights || (c.heights = new Map());
+    let sum = 0, n = 0;
+    for (const v of heights.values()) { sum += v; n++; }
+    const avg = n ? sum / n : 200;
+    const y0 = (window.scrollY || 0) - (c.listTop || 0); // viewport top, relative to the list
+    const lo = y0 - WINDOW_AHEAD * H, hi = y0 + (1 + WINDOW_AHEAD) * H;
+    let y = 0, start = 0, end = list.length, top = 0, bottom = 0;
+    for (let i = 0; i < list.length; i++) {
+      const rowH = (heights.get(list[i].id) || avg) + ROW_GAP;
+      if (y + rowH <= lo) { top += rowH; start = i + 1; }
+      else if (y >= hi) { bottom += rowH; if (end === list.length) end = i; }
+      y += rowH;
+    }
+    return { start, end, top, bottom };
+  }
+  // The rows for a windowed list: hairline + row for what is in the window,
+  // a spacer either side. Every child keyed, so the morph moves by key.
+  function windowedRows(c, list, rowOf) {
+    const win = listWindow(c, list);
+    c.win = win;
+    const hr = (ev) => h('div', { 'data-key': 'hr:' + ev.id, style: 'height:1px;background:var(--border,rgba(128,128,128,.18));margin:0 -14px' });
+    const out = [];
+    if (win.top) out.push(h('div', { 'data-key': 'win-top', class: 'feed-spacer', style: 'height:' + Math.round(win.top) + 'px' }));
+    for (let i = win.start; i < win.end; i++) {
+      if (i) out.push(hr(list[i]));
+      out.push(rowOf(list[i]));
+    }
+    if (win.bottom) out.push(h('div', { 'data-key': 'win-bottom', class: 'feed-spacer', style: 'height:' + Math.round(win.bottom) + 'px' }));
+    measureRows(c);
+    return out;
+  }
+  // After the paint: remember each mounted row's height and where the list
+  // starts. A spacer that was built on estimates gets its real numbers on a
+  // repaint that holds the reader's row still.
+  function measureRows(c, { repaint = true } = {}) {
+    if (c._measuring || typeof requestAnimationFrame === 'undefined') return;
+    c._measuring = true;
+    requestAnimationFrame(() => {
+      c._measuring = false;
+      const changed = measureNow(c);
+      if (changed && repaint && c.win && (c.win.top || c.win.bottom)) holdScroll(render);
+    });
+  }
+  function measureNow(c) {
+    const list = document.querySelector('.notes-feed');
+    if (!list) return false;
+    c.listTop = list.getBoundingClientRect().top + (window.scrollY || 0);
+    const heights = c.heights || (c.heights = new Map());
+    let changed = false;
+    for (const r of list.querySelectorAll(':scope > .row[data-key]')) {
+      const hgt = r.getBoundingClientRect().height;
+      const key = r.getAttribute('data-key');
+      if (hgt > 0 && Math.abs((heights.get(key) || 0) - hgt) > 0.5) { heights.set(key, hgt); changed = true; }
+    }
+    return changed;
+  }
+  // On scroll: when the window should move, repaint with the reader's row
+  // held still. One frame at a time.
+  let windowRaf = 0;
+  function windowScrolled(c) {
+    if (!c || !c.win || windowRaf) return;
+    windowRaf = requestAnimationFrame(() => {
+      windowRaf = 0;
+      measureNow(c);
+      const list = c.winList ? c.winList() : null;
+      if (!list) return;
+      const next = listWindow(c, list);
+      if (next.start !== c.win.start || next.end !== c.win.end) holdScroll(render);
+    });
+  }
+
   function holdScroll(paint) {
     let key = null, top = 0;
     try {
@@ -4443,7 +4531,9 @@ export function messagesFeature(ctx) {
     feedAheadTimer = setTimeout(() => {
       feedAheadTimer = null;
       if (c !== feed || !ui.chatOpen || ui.msgView !== 'feed' || ui.profilePk || ui.noteThread) return;
-      const last = document.querySelector('.notes-feed > .row[data-key]:last-child');
+      if (c.win && c.win.bottom) return; // rows below are held back by the window, not by paging
+      const rows = document.querySelectorAll('.notes-feed > .row[data-key]');
+      const last = rows[rows.length - 1];
       if (last && last.getBoundingClientRect().bottom < window.innerHeight * 4) loadOlderFeed().catch(() => {});
     }, 100);
   }
@@ -6606,10 +6696,7 @@ export function messagesFeature(ctx) {
         return h('div', { class: 'col', style: 'gap:8px' },
           h('div', { class: 'small muted', style: 'padding:0 2px' }, t('profNotesTitle')),
           h('div', { class: 'card col notes-feed', style: 'gap:0' },
-            ...c.notes.flatMap((ev, i) => [
-              i ? h('div', { style: 'height:1px;background:var(--border,rgba(128,128,128,.18));margin:0 -14px' }) : null,
-              noteRow(pk, ev, name),
-            ])),
+            ...(c.winList = () => c.notes, windowedRows(c, c.notes, (ev) => keyed(noteRow(pk, ev, name), ev.id)))),
           c.loadingMore
             ? h('div', { class: 'row gap6', style: 'justify-content:center;padding:4px 0' },
                 h('span', { class: 'spinner sm' }))
@@ -6769,10 +6856,9 @@ export function messagesFeature(ctx) {
     // Every child keyed by its post, hairlines included, so the morph
     // reconciles the list by post: a new one at the top is inserted as its
     // own node; the rest keep theirs.
-    const rows = visible.slice(0, c.shown || FEED_PAGE).flatMap((ev, i) => [
-      i ? h('div', { 'data-key': 'hr:' + ev.id, style: 'height:1px;background:var(--border,rgba(128,128,128,.18));margin:0 -14px' }) : null,
-      c.booting ? keyed(noteRow(ev.pubkey, ev, displayName(ev.pubkey)), ev.id) : feedRow(c, ev),
-    ]);
+    const list = visible.slice(0, c.shown || FEED_PAGE);
+    c.winList = () => c.notes.filter((ev) => !hidden(ev)).slice(0, c.shown || FEED_PAGE);
+    const rows = windowedRows(c, list, (ev) => (c.booting ? keyed(noteRow(ev.pubkey, ev, displayName(ev.pubkey)), ev.id) : feedRow(c, ev)));
     // Posts that went in above you while you were reading. A floating pill
     // that says how many are up there; the tap takes you up to them.
     // Keyed, so the morph keeps this very node while the count changes —

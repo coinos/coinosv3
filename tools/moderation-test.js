@@ -57,7 +57,7 @@ await page.evaluateOnNewDocument((fx) => {
           if (kinds.includes(10000) && window.__mutes && (f.authors || []).includes(window.__mutes.pubkey)) answer(ws, m[1], [window.__mutes]);
           else if (kinds.includes(1984) && (f.authors || []).includes(fx.author)) answer(ws, m[1], [fx.report]);
           else if (kinds.includes(1) && f['#e'] && f['#e'].includes(fx.root)) answer(ws, m[1], fx.replies);
-          else if (kinds.includes(1)) subs.push([ws, m[1], f]);
+          else if (kinds.includes(1)) { subs.push([ws, m[1], f]); answer(ws, m[1], []); return; } // no real posts: the feeds hold only what the test injects
         }
         if (m[0] === 'EVENT' && m[1]) {
           window.__published.push(m[1]);
@@ -162,7 +162,9 @@ try {
   const stuffed = post(TAGGER, 'airdrop ' + Array.from({ length: 14 }, (_, i) => '#tag' + i).join(' '), 5, [['t', 'bitcoin'], ...Array.from({ length: 14 }, (_, i) => ['t', 'tag' + i])]);
   await page.evaluate((e) => window.__inject(e), stuffed);
   await sleep(3500);
-  check('a stranger\'s ordinary post lands', n > 0 && await waitText('a fine post from a stranger', 6000), n + ' sub(s)');
+  const landed = n > 0 && await waitText('a fine post from a stranger', 6000);
+  if (!landed && process.env.DEBUG) console.log('DEBUG feed:', await page.evaluate(() => ({ rows: document.querySelectorAll('.notes-feed > .row').length, booting: !!document.querySelector('.notes-feed[data-booting]'), spacers: document.querySelectorAll('.feed-spacer').length, text: (document.querySelector('.chat-page') || document.body).innerText.slice(0, 400).replace(/\n+/g, ' | ') })));
+  check('a stranger\'s ordinary post lands', landed, n + ' sub(s)');
   check('six copies of the same pitch do not: the spammer is hidden', !(await has('buy the dip now')));
   check('...nor does a post stuffed with hashtags', !(await has('airdrop')));
 

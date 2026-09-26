@@ -809,6 +809,9 @@ html.no-scroll { overflow: hidden; scrollbar-gutter: auto; }
 /* the profile notes feed: page-scrolled (no inner scrollbox); on phones it
    runs edge to edge — the card walls step outside #app's padding */
 .notes-feed { padding: 2px 14px; }
+/* rows scrolled well out of view are not in the DOM: a spacer stands in
+   at their measured height, so the page keeps its length (see listWindow) */
+.feed-spacer { display: block; flex: 0 0 auto; }
 @media (max-width: 520px) {
   .notes-feed {
     margin-left: -16px; margin-right: -16px;

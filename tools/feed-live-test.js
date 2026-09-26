@@ -287,7 +287,10 @@ try {
   await away(() => Array.from({ length: 25 }, (_, i) => signed('LONG AWAY ' + (i + 1), 0)));
   const a3 = await rowAt(heldLong.text);
   check('many new posts still preserve the reading position', !!a3 && Math.abs(a3.top - heldLong.top) <= 2, JSON.stringify({ heldLong, a3 }));
-  check('...with the newest posts above and a notice', /LONG AWAY 1\b/.test(await topRow()) && !!(await page.$('.feed-new-pill')), (await topRow()).slice(0, 40));
+  check('...with a notice', !!(await page.$('.feed-new-pill')));
+  // the page top is not mounted from down here (windowing): go up to look
+  await page.evaluate(() => window.scrollTo(0, 0)); await sleep(600);
+  check('...and the newest posts at the top', /LONG AWAY 1\b/.test(await topRow()), (await topRow()).slice(0, 40));
 
   check('no page errors', errs.length === 0, errs.slice(0, 2).join(' | '));
 } finally { await browser.close(); server.stop(true); }

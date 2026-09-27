@@ -598,7 +598,7 @@ export function messagesFeature(ctx) {
         ? { thumb: p.thumb, thumbFor: p.thumbFor, thumbPx: p.thumbPx || 0 } : {}),
       ...(p.thumbFail ? { thumbFail: p.thumbFail, thumbFailAt: p.thumbFailAt || 0, thumbFails: p.thumbFails || 1,
         thumbFailVersion: p.thumbFailVersion || 0 } : {}) };
-    if (!profFlush) profFlush = setTimeout(flushProfiles, 1500);
+    if (!profFlush) profFlush = setTimeout(flushProfiles, 500);
   }
   // A punk picture is OUR OWN art. Every coinos user who keeps the default
   // publishes https://v3.coinos.io/punks/N.webp as their nostr picture, and
@@ -727,7 +727,10 @@ export function messagesFeature(ctx) {
     (async () => {
       let bmp = null;
       try {
-        const res = await fetch(url, { mode: 'cors', cache: 'reload', signal: AbortSignal.timeout(THUMB_SLOW) });
+        // the browser's cache is welcome: the face was just painted from this
+        // very URL, and 'reload' re-downloaded every original (38 MB in one
+        // scroll) — a stale copy still makes a fine thumbnail
+        const res = await fetch(url, { mode: 'cors', signal: AbortSignal.timeout(THUMB_SLOW) });
         if (!res.ok) throw new Error('http ' + res.status);
         bmp = await createImageBitmap(await res.blob());
         // centre-crop to a square, the way background-size:cover paints it
@@ -4523,7 +4526,7 @@ export function messagesFeature(ctx) {
     });
   }
 
-  function holdScroll(paint) {
+  function holdScroll(paint, c = feed) {
     let key = null, top = 0;
     try {
       for (const r of document.querySelectorAll('.notes-feed > .row[data-key]')) {
@@ -4533,8 +4536,28 @@ export function messagesFeature(ctx) {
     } catch {}
     paint();
     if (!key) return;
+    const find = () => document.querySelector('.notes-feed > [data-key="' + CSS.escape(key) + '"]');
     try {
-      const r = document.querySelector('.notes-feed > [data-key="' + CSS.escape(key) + '"]');
+      let r = find();
+      // Not mounted any more: a batch went in above (a catch-up of thirty
+      // posts, say) and the window, computed for the old scroll offset, now
+      // holds the newcomers instead of the reader's row. Estimate where the
+      // row went from the height cache, scroll there, and paint once more
+      // so the window catches up — then the usual correction lands it.
+      if (!r && c && c.heights && c.winList) {
+        const list = c.winList();
+        const i = list.findIndex((ev) => ev.id === key);
+        if (i >= 0) {
+          let sum = 0, n = 0;
+          for (const v of c.heights.values()) { sum += v; n++; }
+          const avg = n ? sum / n : 200;
+          let y = 0;
+          for (let j = 0; j < i; j++) y += (c.heights.get(list[j].id) || avg) + ROW_GAP;
+          window.scrollTo(0, Math.max(0, (c.listTop || 0) + y - top));
+          paint();
+          r = find();
+        }
+      }
       const d = r ? r.getBoundingClientRect().top - top : 0;
       if (Math.abs(d) > 1) window.scrollBy(0, d);
     } catch {}

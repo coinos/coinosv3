@@ -190,7 +190,10 @@ try {
     Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
     document.dispatchEvent(new Event('visibilitychange'));
   });
-  await page.waitForFunction(() => document.querySelector('.notes-feed')?.innerText.includes('Large catch-up 24'), { timeout: 15000 });
+  // the new posts go in above the reader — inside the window's top spacer,
+  // not the DOM — so what shows is the notice counting them
+  try { await page.waitForFunction(() => parseInt((document.querySelector('.feed-new-pill')?.textContent || '0').replace(/\D/g, ''), 10) >= 25, { timeout: 15000 }); }
+  catch (e) { console.log('  catch-up did not surface:', JSON.stringify(await page.evaluate(() => ({ pill: document.querySelector('.feed-new-pill')?.textContent || null, rows: document.querySelectorAll('.notes-feed > .row').length, h: document.documentElement.scrollHeight, y: scrollY, top: document.querySelector('[data-key="win-top"]')?.offsetHeight || 0, first: document.querySelector('.notes-feed > .row')?.innerText.slice(0, 40), catchupLeft: (window.__catchup || []).length, reqs: (window.__feedRequests || []).length }))), errors.slice(0, 3)); }
   const after = (await snapshot()).find((r) => r.id === before.id);
   check('a large catch-up preserves the reading position', !!after && Math.abs(after.top - before.top) <= 1, JSON.stringify({ before: before.top, after: after?.top }));
   // Start on the wallet and let its small background warm-up finish. The

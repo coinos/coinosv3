@@ -138,8 +138,10 @@ function blankSend() {
 // ---------------------------------------------------------------- DOM helper
 function h(tag, attrs = {}, ...children) {
   const e = document.createElement(tag);
+  const lazy = lazySrcTag(e.nodeName);
   for (const [k, v] of Object.entries(attrs || {})) {
     if (v == null || v === false) continue;
+    if (k === 'src' && lazy) { e.setAttribute('data-lazy-src', v); continue; }
     if (k === 'class') e.className = v;
     else if (k === 'html') { e.innerHTML = v; e._html = v; }
     else if (k === 'value') e.value = v;
@@ -160,6 +162,33 @@ function h(tag, attrs = {}, ...children) {
   return e;
 }
 
+// A media element starts downloading the moment its src is set — even off
+// the document. Every render builds a fresh tree to diff against the live
+// one, so an <img src> or <video src> built here used to start a load per
+// repaint that the morph then threw away (a feed scroll built two hundred
+// videos and fourteen hundred images in sixteen seconds). The source waits
+// on data-lazy-src and becomes src only once the node is in the page (see
+// promoteLazySrc); the morph treats the two as the same attribute.
+// (a function declaration: h() is called at module load before a const here
+// would be initialized)
+function lazySrcTag(name) { return name === 'IMG' || name === 'VIDEO' || name === 'AUDIO' || name === 'SOURCE'; }
+function promoteLazySrc(root) {
+  for (const el of root.querySelectorAll('[data-lazy-src]')) {
+    const v = el.getAttribute('data-lazy-src');
+    el.removeAttribute('data-lazy-src');
+    if (el.getAttribute('src') !== v) el.setAttribute('src', v);
+  }
+}
+// a node appended by hand, outside render(), gets its source the same way
+if (typeof MutationObserver !== 'undefined' && typeof document !== 'undefined') {
+  new MutationObserver((ms) => {
+    for (const m of ms) for (const n of m.addedNodes) {
+      if (n.nodeType !== 1) continue;
+      if (n.hasAttribute('data-lazy-src')) promoteLazySrc({ querySelectorAll: () => [n] });
+      promoteLazySrc(n);
+    }
+  }).observe(document.documentElement, { childList: true, subtree: true });
+}
 // ---------------------------------------------------------------- morphing
 // render() builds a fresh tree exactly as before, but instead of replacing
 // the document we PATCH the live DOM into its shape. Nodes keep their
@@ -204,8 +233,15 @@ function morph(a, b) {
   // click), like a field's value: a render that doesn't set `open` leaves it
   // alone instead of collapsing the section on every background repaint.
   const userOwned = (at) => a.nodeName === 'DETAILS' && at.name === 'open';
-  for (const at of [...a.attributes]) if (!b.hasAttribute(at.name) && !userOwned(at)) a.removeAttribute(at.name);
-  for (const at of [...b.attributes]) if (a.getAttribute(at.name) !== at.value) a.setAttribute(at.name, at.value);
+  for (const at of [...a.attributes]) {
+    if (b.hasAttribute(at.name) || userOwned(at)) continue;
+    if (at.name === 'src' && b.hasAttribute('data-lazy-src')) continue; // the lazy source stands for it
+    a.removeAttribute(at.name);
+  }
+  for (const at of [...b.attributes]) {
+    if (at.name === 'data-lazy-src') { if (a.getAttribute('src') !== at.value) a.setAttribute('src', at.value); continue; }
+    if (a.getAttribute(at.name) !== at.value) a.setAttribute(at.name, at.value);
+  }
   if (snap) {
     a.style.transition = 'none';
     requestAnimationFrame(() => requestAnimationFrame(() => { a.style.transition = ''; }));
@@ -639,6 +675,7 @@ function renderInner() {
   }
   applyAnim(screen, 'anim-page', (performance.now() - _navAt) < 340 ? performance.now() - _navAt : -1);
   morphChildren(root, [screen, footer(), ...(ui.lightbox ? [imageViewer()] : [])]);
+  promoteLazySrc(root); // sources on the nodes that actually made it into the page
   try { document.documentElement.classList.toggle('no-scroll', !!ui.lightbox); } catch {}
   if (fpath) {
     const el = nodeAtPath(fpath);

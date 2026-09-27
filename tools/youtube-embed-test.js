@@ -50,7 +50,9 @@ await sleep(3500);
 let ok = true;
 const check = (n, c, d = '') => { console.log(` ${c ? '✓' : '✗'} ${n}${d ? ' — ' + d : ''}`); if (!c) ok = false; };
 
-const posters = await page.evaluate(() => [...document.querySelectorAll('.yt-embed img')].map((i) => i.getAttribute('src')));
+if (process.env.DEBUG) console.log('ROWS:', await page.evaluate(() => [...document.querySelectorAll('.notes-feed > .row')].map((r) => r.innerText.replace(/\n+/g, ' | ').slice(0, 80) + ' :: embeds=' + r.querySelectorAll('.yt-embed').length + ' links=' + r.querySelectorAll('a').length)));
+// a box in view has already swapped its poster for a muted player (autoplay), so read either
+const posters = await page.evaluate(() => [...document.querySelectorAll('.yt-embed')].map((b) => b.querySelector('iframe')?.getAttribute('src') || b.querySelector('img')?.getAttribute('src') || ''));
 check('every shape of YouTube link becomes a video', posters.length === 3, posters.length + ' embed(s)');
 check('...the long one', posters.some((u) => u.includes('dQw4w9WgXcQ')));
 check('...the short one', posters.some((u) => u.includes('aqz-KE-bpKQ')));
@@ -58,7 +60,7 @@ check('...and a Shorts link', posters.some((u) => u.includes('abc123XYZ_-')));
 const other = await page.evaluate(() => [...document.querySelectorAll('.notes-feed a[href^="http"]')].map((a) => a.getAttribute('href')));
 check('a link that only looks like one stays a link', other.includes('https://example.com/watch?v=nope'));
 
-check('nothing has loaded a player yet', (await page.evaluate(() => document.querySelectorAll('iframe').length)) === 0);
+check('players load only for boxes in view, muted', await page.evaluate(() => [...document.querySelectorAll('.yt-embed')].every((b) => { const r = b.getBoundingClientRect(); const inView = r.top < innerHeight && r.bottom > 0; const f = b.querySelector('iframe'); return inView ? !!f && /mute=1/.test(f.src) : !f; })));
 await page.evaluate(() => document.querySelector('.yt-play').click());
 await sleep(1200);
 const src = await page.evaluate(() => { const f = document.querySelector('iframe'); return f ? f.getAttribute('src') : ''; });

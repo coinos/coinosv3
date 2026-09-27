@@ -271,6 +271,18 @@ const allKeyed = (nodes) => nodes.length > 0
 function morphKeyed(parent, cur, next) {
   const byKey = new Map();
   for (const n of cur) if (n.nodeType === 1 && n.hasAttribute('data-key')) byKey.set(n.getAttribute('data-key'), n);
+  // Drop what the new render no longer has BEFORE placing the rest: with
+  // stale nodes still in front, every survivor's position was off by the
+  // stale count and each one was pulled out and re-inserted — a move per row
+  // per repaint (the feed's window evicting rows at the top did this to all
+  // the rows below on every scroll), and a moved <video> is taken out of
+  // the document and back, which restarts its loading.
+  const wanted = new Set(next.map((b) => b.getAttribute('data-key')));
+  for (const n of cur) {
+    if (n.parentNode !== parent) continue;
+    const k = n.nodeType === 1 ? n.getAttribute('data-key') : null;
+    if (k == null || !wanted.has(k)) n.remove();
+  }
   const kept = new Set();
   for (let i = 0; i < next.length; i++) {
     const b = next[i];

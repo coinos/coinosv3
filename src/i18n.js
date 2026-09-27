@@ -327,6 +327,8 @@ const STR = {
     feedNoFollows: "You don't follow anyone yet. Their posts will show up here.",
     feedFindPeople: 'Find people',
     feedEmpty: 'Nothing posted yet.',
+    feedLoadingMore: 'Loading more posts…',
+    feedEnd: 'You’re all caught up.',
     feedAttach: 'Attach a picture or video',
     postLike: 'Like',
     postBoost: 'Boost',

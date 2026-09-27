@@ -41,10 +41,11 @@ await page.evaluateOnNewDocument((all) => {
           const f = m[2] || {};
           const evs = (f.kinds || []).includes(1) && !f['#e'] && !f.ids
             ? all.filter((e) => (!f.until || e.created_at <= f.until) && (!f.since || e.created_at >= f.since)).slice(0, f.limit || 100) : [];
+          // an older page takes a relay a moment: long enough for the footer to be seen
           setTimeout(() => {
             for (const e of evs) ws.dispatchEvent(new MessageEvent('message', { data: JSON.stringify(['EVENT', m[1], e]) }));
             ws.dispatchEvent(new MessageEvent('message', { data: JSON.stringify(['EOSE', m[1]]) }));
-          }, 0);
+          }, f.until ? 900 : 0);
           return;
         }
         if (m[0] === 'EVENT') return;
@@ -95,13 +96,25 @@ try {
   console.log('\n[a long scroll]');
   check('the feed opens on its first posts', (await dom()).first === 'post number 1', JSON.stringify(await dom()));
   // page to the bottom, again and again
-  let d = null;
+  let d = null, sawLoading = false;
+  const footNow = () => page.evaluate(() => document.querySelector('.feed-foot')?.textContent || '');
   for (let i = 0; i < 14; i++) {
     await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
-    await sleep(700);
+    for (let k = 0; k < 5; k++) { if (/Loading more/.test(await footNow())) sawLoading = true; await sleep(140); }
     d = await dom();
   }
   check('many pages in, the page is long', d.height > 6000, d.height + 'px');
+  // paging to the very end: the footer says loading while it happens, and that there is no more once it is over
+  let foot = '';
+  for (let i = 0; i < 40; i++) {
+    await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+    foot = await footNow();
+    if (/Loading more/.test(foot)) sawLoading = true;
+    if (/caught up/.test(foot)) break;
+    await sleep(300);
+  }
+  check('the foot of the feed said more was loading', sawLoading);
+  check('...and that you are caught up once there is no more', /caught up/.test(foot), foot);
   check('...but only a window of rows is mounted', d.rows > 0 && d.rows <= 60, d.rows + ' rows');
   check('...with a spacer standing in for the rows above', d.top > 1000, d.top + 'px');
 

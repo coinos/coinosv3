@@ -4600,6 +4600,7 @@ export function messagesFeature(ctx) {
     const c = feedNow();
     if (c.booting || c.loadingMore || (c.shown >= c.notes.length && (c.end || c.status !== 'ready'))) return;
     c.loadingMore = true;
+    if (c === feed) render(); // the footer says so while it happens
     try {
       if (c.shown < c.notes.length) {
         const end = Math.min(c.shown + FEED_PAGE, c.notes.length);
@@ -6994,9 +6995,16 @@ export function messagesFeature(ctx) {
             : !visible.length
               ? h('div', { class: 'small faint', style: 'text-align:center;padding:12px 0' }, t('feedEmpty'))
               : h('div', { class: 'card col notes-feed', style: 'gap:0', 'data-booting': c.booting ? '1' : undefined }, ...rows),
-        // Older posts prepare offscreen; a background fetch should not add
-        // a spinner to an already readable feed.
-
+        // The foot of the feed says what is happening down there: older
+        // posts on their way, or nothing older left to fetch. (Older pages
+        // prepare offscreen, so the line is mostly seen by a reader who
+        // outruns them.)
+        c.loadingMore
+          ? h('div', { class: 'row gap6 feed-foot', style: 'justify-content:center;align-items:center;padding:10px 0' },
+              h('span', { class: 'spinner sm' }), h('span', { class: 'small muted' }, t('feedLoadingMore')))
+          : c.end && visible.length && !(c.win && c.win.bottom) && c.shown >= visible.length
+            ? h('div', { class: 'small faint feed-foot', style: 'text-align:center;padding:10px 0' }, t('feedEnd'))
+            : null,
         ...noteOverlays());
   }
 

@@ -6658,7 +6658,7 @@ export function messagesFeature(ctx) {
                 logoutBtn())
             : ui.pubProf
               ? null // no wallet open: messaging and paying both need one
-              : h('div', { class: 'row gap6 wrap' },
+              : h('div', { class: 'row gap6 wrap prof-actions' },
                 h('button', { class: 'btn-primary grow', onClick: () => {
                   const peer = pk;
                   // leave the thread this profile may sit over too: the

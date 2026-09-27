@@ -1034,7 +1034,7 @@ export class Wallet {
   // signed manually with d = spend_priv + t_k (the output key is used raw, with
   // no BIP-341 tweak, so btc-signer's auto key-path signing doesn't apply).
   sign(tx) {
-    if (this.watchOnly) throw new Error('Watch-only wallet — no keys to sign with.');
+    if (this.watchOnly) throw new Error('Watch-only wallet: no keys to sign with.');
     const bip84 = new Map();
     for (const u of this.utxos) bip84.set(utxoId(u), u);
     // Prevout scripts + amounts, for any signer that needs a taproot sighash.
@@ -1991,7 +1991,7 @@ export function parseExtendedKey(s) {
   let kind, norm;
   if (ver === hex.encode(_XPUB_VER) || ver === hex.encode(_ZPUB_VER)) { kind = 'xpub'; norm = _XPUB_VER; }
   else if (ver === hex.encode(_XPRV_VER) || ver === hex.encode(_ZPRV_VER)) { kind = 'xprv'; norm = _XPRV_VER; }
-  else throw new Error('Unrecognized key type — use a native-segwit xpub/zpub or xprv/zprv.');
+  else throw new Error('Unrecognized key type. Use a native-segwit xpub/zpub or xprv/zprv.');
   const out = new Uint8Array(data);
   out.set(norm, 0);
   const key = _b58c.encode(out);

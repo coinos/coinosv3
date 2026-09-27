@@ -924,7 +924,7 @@ export function nwcFeature(ctx) {
       h('div', { class: 'small faint' }, t('nwcTabWarning')),
       lastError
         ? h('div', { class: 'notice err', style: 'font-size:11px' },
-            `${new Date(lastError.at).toLocaleTimeString()} — ${lastError.why}`)
+            `${new Date(lastError.at).toLocaleTimeString()}: ${lastError.why}`)
         : null,
       lastSeen
         ? h('div', { class: 'small faint' },

@@ -466,12 +466,12 @@ export async function fetchWalletBackup(signer, relays = BACKUP_RELAYS) {
       return pool.querySync([url], filter, { maxWait: 6000 });
     }));
     const answered = results.filter((r) => r.status === 'fulfilled');
-    if (!answered.length) throw new Error('could not reach any relay to look for an existing wallet — check your connection and try again');
+    if (!answered.length) throw new Error('could not reach any relay to look for an existing wallet. Check your connection and try again');
     const newest = answered.flatMap((r) => r.value).sort((a, b) => b.created_at - a.created_at)[0];
     if (!newest) return null;
     let body;
     try { body = JSON.parse(await signer.decryptSelf(newest.content)); }
-    catch { throw new Error('found this account’s wallet but could not decrypt it — approve the decryption prompt in your signer and try again'); }
+    catch { throw new Error('found this account’s wallet but could not decrypt it. Approve the decryption prompt in your signer and try again'); }
     if (!body || !body.mnemonic) throw new Error('found this account’s wallet backup but it is unreadable');
     return body;
   } finally { try { pool.close(relays); } catch {} }

@@ -21,7 +21,7 @@ export async function resolveBip353(name, domain) {
   const uris = res.txts.filter((t) => /^bitcoin:/i.test(t));
   if (!uris.length) return null;
   // BIP-353: multiple bitcoin: TXT records at one label are invalid
-  if (uris.length > 1) throw new Error('multiple payment records — invalid');
+  if (uris.length > 1) throw new Error('multiple payment records, invalid');
   return uris[0];
 }
 

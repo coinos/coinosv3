@@ -323,7 +323,7 @@ export function installGiftWallet(wallet) {
         if (change >= DUST) { eAmount = gift; }
         // change would be dust: drop it into the fee, single output, honour the
         // requested amount (fee = sum - gift, which must clear a 1-output fee).
-        else { eAmount = gift; change = 0n; if (sum - gift < fundFee(1)) throw new Error('Not enough to cover the funding fee — try a smaller gift.'); }
+        else { eAmount = gift; change = 0n; if (sum - gift < fundFee(1)) throw new Error('Not enough to cover the funding fee. Try a smaller gift.'); }
       }
       if (eAmount < DUST) throw new Error('Gift amount is too small.');
       // the throwaway key that holds the gift until the claimer sweeps it

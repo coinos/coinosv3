@@ -675,7 +675,7 @@ export class ArkManager {
     if (!inputs.length) throw new Error('no spendable ark balance');
     if (inputs.some((v) => !v || v.state !== 'spendable')) throw new Error('vtxo not spendable');
     if (this.info.maxOffboardInputs && inputs.length > this.info.maxOffboardInputs) {
-      throw new Error(`too many coins for one offboard (${inputs.length}) — refresh/consolidate first`);
+      throw new Error(`too many coins for one offboard (${inputs.length}), refresh/consolidate first`);
     }
     const tip = await this.chain.tipHeight();
     const satVkb = await getOffboardFeeRate(this.arkUrl);
@@ -781,7 +781,7 @@ export class ArkManager {
     if (!candidates.length) {
       const total = this.balance().spendableSat;
       throw new Error(total >= amountSat
-        ? 'no single vtxo covers this amount — consolidate with refresh() first'
+        ? 'no single vtxo covers this amount, consolidate with refresh() first'
         : 'insufficient ark balance');
     }
     return candidates[0];
@@ -1168,7 +1168,7 @@ export class ArkManager {
           this._tipH = Math.max(this._tipH || 0, serverTip);
           this._tipAt = Date.now();
           this._save();
-          throw new Error('chain tip was stale — retrying with the corrected expiry');
+          throw new Error('chain tip was stale, retrying with the corrected expiry');
         }
         // INVALID_ARGUMENT (status 3): the server rejected the package outright
         // — nothing was spent, everything returns to spendable. "already
@@ -1330,7 +1330,7 @@ export class ArkManager {
     action.error = action.error || 'payment failed';
     this._movement({
       type: 'ln-send', amountSat: action.amountSat, status: 'failed',
-      detail: 'payment failed — funds returned', invoice: action.invoice,
+      detail: 'payment failed, funds returned', invoice: action.invoice,
     });
     this._save();
   }
@@ -1557,7 +1557,7 @@ export class ArkManager {
         const minExpiry = Math.min(...decoded.map((v) => v.policy.htlcExpiry));
         if (tip > minExpiry - this._expiryMargin()) {
           action.step = 'failed';
-          action.error = 'HTLCs near expiry — abandoned before preimage reveal';
+          action.error = 'HTLCs near expiry, abandoned before preimage reveal';
           this._movement({ type: 'ln-receive', amountSat: action.amountSat, status: 'failed', detail: action.error });
           this._save();
           return;
@@ -2204,7 +2204,7 @@ export class ArkManager {
   // (the operator recipe) — omitted, they come from the status response.
   async rescueParticipation(unlockHashHex, inputVtxoIds) {
     if (this.state.actions.some((a) => a.unlockHash === unlockHashHex && a.step !== 'failed')) {
-      throw new Error('an action for this participation already exists — sync drives it');
+      throw new Error('an action for this participation already exists, sync drives it');
     }
     // One of ours, waiting on a scheduled height: it has its inputs and key
     // index already, so promote rather than rediscover them.

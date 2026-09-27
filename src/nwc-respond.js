@@ -112,7 +112,7 @@ async function respondOffer(ev, rec, walletKey, { notifier, fetchFn, saveFn, log
     await saveFn(walletKey, rec);
     await publish({ bolt11: a.invoice });
     log(`minted ${sat} sat offer invoice while closed`);
-    return { notify: { title: 'Incoming payment', body: 'Someone is paying you — open Coinos to receive it.' } };
+    return { notify: { title: 'Incoming payment', body: 'Someone is paying you. Open Coinos to receive it.' } };
   } catch (e) {
     log('offer mint failed: ' + e.message);
     await publish({ error: 'Temporary Failure', code: 2 }).catch(() => {});

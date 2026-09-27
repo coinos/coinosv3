@@ -71,11 +71,11 @@ function exitChain(vtxo, serverPub, sizeOnly) {
     const t = vtxo.genesis[i].transition;
     let witness;
     if (t.type === 'cosigned' || t.type === 'arkoor') {
-      if (!t.signature) throw new Error('vtxo chain is missing a signature — cannot exit');
+      if (!t.signature) throw new Error('vtxo chain is missing a signature: cannot exit');
       witness = [hex.decode(t.signature)];
     } else if (t.type === 'hashLockedCosigned') {
       if (!t.signature || !t.unlock?.preimage) {
-        throw new Error('vtxo chain is missing its unlock preimage — cannot exit');
+        throw new Error('vtxo chain is missing its unlock preimage: cannot exit');
       }
       const preimage = hex.decode(t.unlock.preimage);
       if (sizeOnly) {

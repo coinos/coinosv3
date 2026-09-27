@@ -41,7 +41,7 @@ self.addEventListener('push', (e) => {
         } catch (err) { console.warn('[sw-dm] could not classify:', err && err.message); }
       }
       const T = {
-        payment: ['Payment received', data.amountSat ? `+${Number(data.amountSat).toLocaleString()} sats — open coinos to see it.` : 'Open coinos to see it.'],
+        payment: ['Payment received', data.amountSat ? `+${Number(data.amountSat).toLocaleString()} sats. Open coinos to see it.` : 'Open coinos to see it.'],
         dm: dmName ? [dmName, 'sent you a message.'] : ['New message', 'You have a new private message.'],
         chat: ['New chat activity', 'There are new messages in your communities.'],
         mention: [data.reply ? 'New reply to your post' : 'You were mentioned', data.text || 'Open coinos to see it.'],

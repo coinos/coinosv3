@@ -8581,7 +8581,7 @@ export function messagesFeature(ctx) {
       for (const c of feedStates.values()) c.stopped = true;
       feedStates.clear();
       threadCache.clear();
-      follows = null; followsAt = 0; feed = null; feedAt = 0; relayLists = null;
+      follows = null; followsAt = 0; feed = null; relayLists = null;
       mutes = null; mutesAt = 0;
       stCache = null; stAt = 0; // the next account's state, not this one's
       if (profFlush) { clearTimeout(profFlush); flushProfiles(); } // this account's faces, written before the blob is dropped

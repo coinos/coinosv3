@@ -21,7 +21,7 @@ import {
   getArkInfo, handshake, encodeAddress, decodeAddress, blindMailboxId,
   readMailbox, decodeVtxo, arkIdFromServerPubkey, GrpcError,
   grpcStream, decodeMailboxMessage, mailboxRequestBytes,
-  getVtxoStatus, VTXO_STATE_SPENT, vtxoBytesToStr, vtxoBytesFromStr, vtxoBytesNormalize } from './proto.js';
+  getVtxoStatus, VTXO_STATE_SPENT, VTXO_STATE_SPENDABLE, vtxoBytesToStr, vtxoBytesFromStr, vtxoBytesNormalize } from './proto.js';
 import {
   buildArkoorSend, cosignWithServer, cosignPackageWithServer, buildAllSignedVtxos,
   registerVtxoTransactions, postArkoorMessage, txid,
@@ -597,7 +597,19 @@ export class ArkManager {
   // way — spendable -> spent — so a lying server can hide balance from the UI
   // but never mint it, and the signed bytes stay held for unilateral exit.
   async reconcile() {
-    const candidates = this.state.vtxos.filter((v) => v.state === 'spendable');
+    // 'pending' means an action of this device holds the coin. One that no
+    // live action (or standing renewal order) names is an orphan: the pay
+    // that took it ran on another device and merged in mid-flight, or its
+    // action was pruned. Left alone it counted in the balance forever (thirty
+    // zap-sized coins, 645 sats, on adam's laptop); the server settles it.
+    const held = new Set();
+    for (const a of this.state.actions || []) {
+      if (a.step === 'done' || a.step === 'failed') continue;
+      for (const id of a.inputIds || []) held.add(id);
+      for (const part of a.parts || []) if (part && part.inputId) held.add(part.inputId);
+    }
+    for (const e of this.state.scheduled || []) for (const id of e.inputIds || []) held.add(id);
+    const candidates = this.state.vtxos.filter((v) => v.state === 'spendable' || (v.state === 'pending' && !held.has(v.id) && v.bytes));
     // Each status query signs a challenge (schnorr) and may decode the vtxo —
     // real secp256k1 work. Building them all in one synchronous map was a
     // ~100ms+ EC burst on boot (dozens of coins), the stall behind a carousel
@@ -612,6 +624,14 @@ export class ArkManager {
     const states = await Promise.all(pending); // unreachable/erroring server changes nothing
     let changed = false;
     candidates.forEach((v, i) => {
+      if (v.state === 'pending') {
+        // an orphan the server still counts is simply spendable again; one it
+        // holds as spent is gone, and the pay that took it was recorded (or
+        // will merge in) elsewhere — no row of its own
+        if (states[i] === VTXO_STATE_SPENDABLE) { v.state = 'spendable'; changed = true; }
+        else if (states[i] === VTXO_STATE_SPENT) { v.state = 'spent'; changed = true; }
+        return;
+      }
       if (states[i] !== VTXO_STATE_SPENT) return;
       v.state = 'spent';
       this._movement({ type: 'reconcile', amountSat: v.amountSat, status: 'complete', vtxoId: v.id, detail: 'spent elsewhere (server vtxo status)' });

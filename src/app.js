@@ -826,6 +826,10 @@ function restoreNavFromHistory(renderNow = true) {
     const nav = BOOT_NAV;
     if (!nav || ui.screen !== 'wallet') return;
     bootPending = false;
+    // The page that saved this nav may have had no wallet (the start screen,
+    // the vault prompt); with an account open now, those screens are stale.
+    // Restoring one painted the start page over a perfectly good wallet.
+    if (['unlock', 'vault'].includes(nav.screen) && activeAccount()) nav.screen = 'wallet';
     for (const f of NAV_FIELDS) if (f in nav) ui[f] = f === 'profEdit' && nav[f] ? structuredClone(nav[f]) : nav[f];
     ui.lightbox = null; nav.lightbox = null; // an object URL doesn't survive a reload
     navStack = [nav];

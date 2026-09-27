@@ -14,7 +14,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let ok = true;
 const check = (n, c, d = '') => { console.log(` ${c ? '✓' : '✗'} ${n}${d ? ' — ' + d : ''}`); if (!c) ok = false; };
 const key = () => { const sk = generateSecretKey(); return { sk, pk: getPublicKey(sk) }; };
-const AUTHOR = key(), MUTED = key(), REPORTED = key(), OTHER = key(), SPAMMER = key(), TAGGER = key();
+const AUTHOR = key(), MUTED = key(), REPORTED = key(), OTHER = key(), SPAMMER = key(), TAGGER = key(), FLAGGED = key();
 const now = Math.floor(Date.now() / 1000);
 const post = (who, content, ago, tags = []) => finalizeEvent({ kind: 1, created_at: now - ago, tags, content }, who.sk);
 const ROOT = post(AUTHOR, 'a post to open, about #bitcoin and other things', 300);
@@ -26,6 +26,7 @@ const seeded = [
   post(AUTHOR, 'my friend loves lasagna apparently', 600),
   post(AUTHOR, 'tagged post', 700, [['t', 'nsfw']]),
   post(REPORTED, 'reported post here, flagged by my friend', 800),
+  post(FLAGGED, 'a fine post by someone one friend mis-flagged', 900),
 ];
 const reply = (who, text, ago) => post(who, text, ago, [['e', ROOT.id, '', 'root'], ['p', AUTHOR.pk]]);
 const REPLIES = [reply(OTHER, 'reply from ok person', 200), reply(MUTED, 'reply from muted person', 150)];
@@ -55,7 +56,7 @@ await page.evaluateOnNewDocument((fx) => {
           window.__reqs.push(f);
           const kinds = f.kinds || [];
           if (kinds.includes(10000) && window.__mutes && (f.authors || []).includes(window.__mutes.pubkey)) answer(ws, m[1], [window.__mutes]);
-          else if (kinds.includes(1984) && (f.authors || []).includes(fx.author)) answer(ws, m[1], [fx.report]);
+          else if (kinds.includes(1984) && (f.authors || []).includes(fx.author)) answer(ws, m[1], fx.reports);
           else if (kinds.includes(1) && f['#e'] && f['#e'].includes(fx.root)) answer(ws, m[1], fx.replies);
           else if (kinds.includes(1)) { subs.push([ws, m[1], f]); answer(ws, m[1], []); return; } // no real posts: the feeds hold only what the test injects
         }
@@ -82,7 +83,11 @@ await page.evaluateOnNewDocument((fx) => {
     }
     return n;
   };
-}, { author: AUTHOR.pk, root: ROOT.id, replies: REPLIES, report: finalizeEvent({ kind: 1984, created_at: now - 100, tags: [['e', seeded[5].id, 'spam'], ['p', REPORTED.pk]], content: '' }, AUTHOR.sk) });
+}, { author: AUTHOR.pk, root: ROOT.id, replies: REPLIES, reports: [
+  finalizeEvent({ kind: 1984, created_at: now - 100, tags: [['e', seeded[5].id, 'spam'], ['p', REPORTED.pk]], content: '' }, AUTHOR.sk),
+  // one friend flagging a PERSON is not enough to fold everything they write
+  finalizeEvent({ kind: 1984, created_at: now - 90, tags: [['p', FLAGGED.pk, 'impersonation']], content: '' }, AUTHOR.sk),
+] });
 const errs = [];
 page.on('pageerror', (e) => errs.push(String(e)));
 const click = (t) => page.evaluate((x) => { const e = [...document.querySelectorAll('button')].find((n) => n.textContent.trim().toLowerCase().includes(x)); if (e) { e.click(); return true; } return false; }, t);
@@ -135,6 +140,7 @@ try {
   check('the flagged post is folded, naming who', await waitText('reported by', 12000) && !(await has('reported post here')), (await text()).match(/Reported by[^\n]*/)?.[0]);
   await page.evaluate(() => { const b = [...document.querySelectorAll('.note-folded button')].find((x) => /show/i.test(x.textContent)); b.click(); }); await sleep(400);
   check('Show unfolds it', await has('reported post here'));
+  check('a person flagged by only one friend is not folded', await has('a fine post by someone one friend mis-flagged') && (await text()).split('Reported by').length === 2);
 
   console.log('\n[thread replies go through the same door; Report… hides and publishes]');
   await page.evaluate(() => { const r = [...document.querySelectorAll('[data-zap-post]')].find((n) => /a post to open/.test(n.textContent)); r.click(); }); await sleep(1500);

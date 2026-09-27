@@ -5544,13 +5544,14 @@ export function messagesFeature(ctx) {
     const toObj = (m) => Object.fromEntries([...m.entries()].slice(-1500).map(([k, v]) => [k, [...v].slice(0, 50)]));
     try { wallet.saveFeatureState(REPORTS, { ev: toObj(r.ev), pk: toObj(r.pk), mine: [...r.mine].slice(-500), at: r.at }); } catch {}
   }
+  // A report typed 'other' says nothing anyone can act on and is ignored.
   function noteReport(ev) {
     const r = reportsNow();
     const mine = myPubkeys().includes(ev.pubkey);
     const hex = (v) => /^[0-9a-f]{64}$/.test(v || '');
     let es = 0;
     for (const x of ev.tags || []) {
-      if (x[0] !== 'e' || !hex(x[1])) continue;
+      if (x[0] !== 'e' || !hex(x[1]) || x[2] === 'other') continue;
       es++;
       (r.ev.get(x[1]) || r.ev.set(x[1], new Set()).get(x[1])).add(ev.pubkey);
       if (mine) r.mine.add(x[1]);
@@ -5559,7 +5560,7 @@ export function messagesFeature(ctx) {
       // a PERSON is reported when the p tag carries a reason, or when the
       // report names no post at all; a post report's p tag merely credits
       // the author and is not held against them
-      if (x[0] !== 'p' || !hex(x[1]) || x[1] === ev.pubkey || (es && !x[2])) continue;
+      if (x[0] !== 'p' || !hex(x[1]) || x[1] === ev.pubkey || (es && !x[2]) || x[2] === 'other') continue;
       (r.pk.get(x[1]) || r.pk.set(x[1], new Set()).get(x[1])).add(ev.pubkey);
       if (mine) r.mine.add(x[1]);
     }
@@ -5586,14 +5587,20 @@ export function messagesFeature(ctx) {
     } catch { reportsAt = 0; }
   }
   // Who among your follows flagged this post or its author.
+  // A flag on THIS post from one follow folds it. A flag on the PERSON
+  // folds everything they write, so it takes two follows to agree — one
+  // mis-tapped "impersonation" on a well-known key used to fold their whole
+  // timeline for everyone who followed the tapper.
+  const PERSON_REPORTS_MIN = 2;
   function reportsOn(ev) {
     if (!ev || !ev.id || !modOn('reports') || isMe(ev.pubkey)) return null;
     const r = reportsNow();
     const f = followsNow().set;
-    const by = new Set();
-    for (const pk of r.ev.get(ev.id) || []) if (f.has(pk) && pk !== ev.pubkey) by.add(pk);
-    for (const pk of r.pk.get(ev.pubkey) || []) if (f.has(pk) && pk !== ev.pubkey) by.add(pk);
-    return by.size ? [...by] : null;
+    const onPost = new Set(), onPerson = new Set();
+    for (const pk of r.ev.get(ev.id) || []) if (f.has(pk) && pk !== ev.pubkey) onPost.add(pk);
+    for (const pk of r.pk.get(ev.pubkey) || []) if (f.has(pk) && pk !== ev.pubkey) onPerson.add(pk);
+    if (!onPost.size && onPerson.size < PERSON_REPORTS_MIN) return null;
+    return [...new Set([...onPost, ...onPerson])];
   }
   // A flagged post, folded: who flagged it, and a tap to see it anyway.
   function foldedRow(ev, by) {

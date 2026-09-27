@@ -1920,6 +1920,33 @@ export class ArkManager {
     this._save();
   }
 
+  // The server no longer knows the participation we submitted. Either the
+  // round ran under a DIFFERENT submission — a retry from this or another
+  // device minted a new unlock hash, the inputs are spent, and the output
+  // reached the wallet through the mailbox — or it was dropped before any
+  // round ran, and the inputs are still ours to submit again. Left alone,
+  // the action sat "in progress" for weeks, asking on every sync.
+  async _repairSubmitted(action, inputRecs) {
+    const states = await Promise.all(inputRecs.map((v) =>
+      getVtxoStatus(this.arkUrl, this._decoded(v).point.raw, this._keyForVtxo(v).privkey).catch(() => null)));
+    if (states.some((st) => st == null)) return; // couldn't tell today; ask again next sync
+    const spent = inputRecs.filter((v, i) => states[i] === VTXO_STATE_SPENT);
+    if (spent.length === inputRecs.length) {
+      for (const v of inputRecs) v.state = 'spent';
+      action.step = 'failed';
+      action.superseded = true; // not a failure of the renewal, only of this record of it
+      action.lastError = 'superseded: the round ran under another submission';
+    } else if (!spent.length) {
+      action.step = 'created';
+      delete action.unlockHash;
+      delete action.lastError;
+    } else {
+      await this._repairRefresh(action, inputRecs);
+      return;
+    }
+    this._save();
+  }
+
   // A refresh claim can be reached from two directions at once — the sync
   // loop resuming the action, and a mailbox breadcrumb claiming the moment
   // the round is announced. Both are safe server-side (cosign and forfeit are
@@ -1962,7 +1989,13 @@ export class ArkManager {
       this._save();
     }
     if (action.step === 'submitted') {
-      const status = await roundParticipationStatus(this.arkUrl, hex.decode(action.unlockHash));
+      let status;
+      try { status = await roundParticipationStatus(this.arkUrl, hex.decode(action.unlockHash)); }
+      catch (e) {
+        if (!/not found/i.test(e.message || '')) throw e; // transient: retry on next sync
+        await this._repairSubmitted(action, inputRecs);
+        return;
+      }
       if (status.status === 0 || !status.fundingTx) return; // round pending; retry on next sync
       const fundingTx = parseTx(status.fundingTx);
       const confirmed = await this.chain.getTxStatus(fundingTx.txid);

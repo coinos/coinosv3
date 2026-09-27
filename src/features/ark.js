@@ -2259,7 +2259,9 @@ export function arkFeature(ctx) {
       ...renewing.map((a) => h('div', { class: 'col', style: 'gap:2px' },
         h('div', { class: 'small' }, t('arkRenewingLine', { amount: fmtSats(a.inAmountSat || (a.outAmountSat + (a.feeSat || 0))), fee: a.feeSat ? t('arkRenewingFee', { fee: fmtSats(a.feeSat) }) : '' })),
         h('div', { class: 'small muted' }, stageOf(a)),
-        a.lastError ? h('div', { class: 'small faint' }, a.lastError) : null))) : null;
+        // a check that failed is retried on the next sync; the reason is a
+        // server string nobody should have to read
+        a.lastError ? h('div', { class: 'small faint' }, t('arkRenewStageRetry')) : null))) : null;
     const tick = (checked, onChange, title) => h('input', {
       type: 'checkbox', checked, title, style: 'flex:0 0 auto;margin:0', onChange,
     });

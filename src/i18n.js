@@ -438,6 +438,7 @@ const STR = {
     arkRenewStageQueued: 'Joining the next round — the wallet submits it on its next sync.',
     arkRenewStageRound: 'In a round. The fresh coin arrives once the round’s transaction has a confirmation, about a block from now, the next time this wallet syncs.',
     arkRenewStageFinishing: 'Finishing: signing the fresh coin.',
+    arkRenewStageRetry: 'The last check with the server didn’t go through; the wallet keeps trying.',
     arkRenewingHistory: 'Renewing',
     arkRenewingOpen: 'See the coins',
     arkCoinsExitTitle: 'Unilateral exit',

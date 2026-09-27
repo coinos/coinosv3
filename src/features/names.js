@@ -322,14 +322,15 @@ export function namesFeature(ctx) {
   // mirrors, so ask it directly instead of dead-ending in the Lightning
   // fallback — which for staging names points at a webroot that serves HTML.
   const OUR_DOMAINS = ['coinos.io', 'staging.coinos.io', 'halwallet.app'];
-  async function registrarUri(name, domain) {
+  async function registrarLookup(name, domain) {
     try {
       const r = await withTimeout(
         fetch(`${REGISTRAR}/name/${encodeURIComponent(name)}?domain=${encodeURIComponent(domain)}`).then((x) => x.json()),
         8000, 'registrar');
-      return r && r.taken && r.uri ? r.uri : null;
+      return r && r.taken ? { uri: r.uri || null, pubkey: /^[0-9a-f]{64}$/.test(r.pubkey || '') ? r.pubkey : null } : null;
     } catch { return null; }
   }
+  const registrarUri = (name, domain) => registrarLookup(name, domain).then((r) => (r && r.uri) || null);
 
   function beginResolve(text) {
     const parsed = parsePaymentName(text);
@@ -338,9 +339,14 @@ export function namesFeature(ctx) {
     render();
     (async () => {
       let uri = null, resolveErr = null;
+      // our registrar also knows WHO owns the name: the send form shows the
+      // person (face + name) rather than the ark address the name resolves
+      // to, which reads as gibberish to anyone new to this
+      const ownerP = OUR_DOMAINS.includes(parsed.domain) ? registrarLookup(parsed.name, parsed.domain) : Promise.resolve(null);
       try { uri = await resolveBip353(parsed.name, parsed.domain); } catch (e) { resolveErr = e; }
       if (ui.nameResolve?.text !== text) return;
-      if (!uri && OUR_DOMAINS.includes(parsed.domain)) uri = await registrarUri(parsed.name, parsed.domain);
+      const owner = await ownerP;
+      if (!uri && owner) uri = owner.uri;
       if (ui.nameResolve?.text !== text) return;
       ui.nameResolve = null;
       if (!uri && resolveErr) {
@@ -357,6 +363,7 @@ export function namesFeature(ctx) {
           // whose review would only send it back there.
           if (await Promise.resolve(hook('arkBoardIfOwn', ark)).catch(() => false)) return;
           ui.send.recipients[0].address = ark;
+          ui.send.recipients[0].via = { name: `${parsed.name}@${parsed.domain}`, ark, pk: (owner && owner.pubkey) || null };
           render();
           return;
         }

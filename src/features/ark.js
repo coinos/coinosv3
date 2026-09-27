@@ -766,7 +766,9 @@ export function arkFeature(ctx) {
       { class: 'card col', style: 'gap:12px' },
       h('h3', {}, t('arkSendTitle')),
       row(t('lnPayAmount'), fmtAmount(a.amountSat) + ' ' + unitLabel()),
-      row(t('arkPayTo'), shortAddr(a.address, 14)),
+      row(t('arkPayTo'), a.via
+        ? h('span', { class: 'row gap6', style: 'align-items:center' }, a.via.pk ? ctx.hook('avatarNode', a.via.pk) : null, a.via.name)
+        : shortAddr(a.address, 14)),
       row(t('networkFee'), t('arkNoFee')),
       ui.sendError ? h('div', { class: 'notice err' }, ui.sendError) : null,
       // An amount Spending can't cover isn't a dead end while Savings can:
@@ -3446,7 +3448,8 @@ export function arkFeature(ctx) {
             // spend a different balance than the one selected.
             ui.sendError = t('arkPayFromSpending');
           } else {
-            ui.arkSend = { address: dest, amountSat: sats };
+            const via = s.recipients[0].via && s.recipients[0].via.ark === dest ? s.recipients[0].via : null;
+            ui.arkSend = { address: dest, amountSat: sats, via };
           }
           render();
         })();

@@ -8504,6 +8504,7 @@ export function messagesFeature(ctx) {
     // nobody yet — an established nostr user keeps their own list.
     identitySignedInNew() { setTimeout(() => seedNewIdentity({ onlyIfNoFollows: true }), 0); return true; },
     openProfile(pk) { openProfile(pk); return true; },
+    avatarNode(pk, cls) { return avatar(pk, cls || 'chat-avatar mini', false); },
     init() {
       const session = ++feedWarmSession;
       // this wallet's cached faces, from its own namespace — the keys are

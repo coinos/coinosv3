@@ -4855,6 +4855,10 @@ function recipientRow(s, r, i) {
   // same idea for destination annotations (e.g. the lightning-address zap
   // button): they only exist in the rendered tree, so a flip must re-render
   r._note = !!featureHook('sendFormNote', r.address);
+  // A payment name resolved to an address on the person's behalf: keep
+  // showing the name (and their face) — the ark1… it became is plumbing.
+  const viaOf = () => (r.via && r.via.ark === r.address ? r.via : null);
+  const via = viaOf();
 
   // Updated imperatively on input (and on render) so paste, typing, and scan
   // all reflect immediately without disrupting the input's focus/cursor.
@@ -4867,7 +4871,7 @@ function recipientRow(s, r, i) {
     const a = r.address.trim();
     const nodes = addrVerifyNodes(a);
     check.replaceChildren(...nodes);
-    check.style.display = a ? '' : 'none';
+    check.style.display = a && !viaOf() ? '' : 'none';
   };
   // The suggestions panel gets the same imperative treatment — see the
   // sendSearcher note: a render between key repeats kills backspace-hold.
@@ -4885,7 +4889,7 @@ function recipientRow(s, r, i) {
   const tryFeature = (v, typed) => featureMatchSend(v, typed);
   const addrInput = h('input', {
     type: 'text', class: 'mono-input grow', placeholder: i === 0 ? t('destPlaceholder') : 'bc1q…',
-    autocapitalize: 'none', autocomplete: 'off', spellcheck: 'false', value: r.address,
+    autocapitalize: 'none', autocomplete: 'off', spellcheck: 'false', value: via ? via.name : r.address,
     // the delay lets the keyboard start opening (and any render() swap of
     // this input) before parkSendField measures the live activeElement.
     // warmSearch pre-opens the search transports so the first keystroke's
@@ -4932,6 +4936,10 @@ function recipientRow(s, r, i) {
       !single && h('button', { type: 'button', class: 'btn-sm', title: t('remove'), onClick: () => { s.recipients.splice(i, 1); render(); } }, '✕')
     ),
     check,
+    via ? h('div', { class: 'row gap6 send-via', style: 'align-items:center' },
+      via.pk ? featureHook('avatarNode', via.pk) : null,
+      h('span', { class: 'small' }, via.name),
+      h('span', { class: 'small faint' }, t('sendNameHint'))) : null,
     suggest,
     r._ready ? h('div', { class: 'input-group' },
       h('input', {
@@ -5002,7 +5010,8 @@ function sendForm() {
     ),
     // any feature may annotate the destination (ark hint, lightning-address
     // zap offer, …) — each hook decides for itself whether the text is its
-    s.recipients.length === 1 ? (featureHook('sendFormNote', plainAddr) || null) : null,
+    s.recipients.length === 1 && !(s.recipients[0].via && s.recipients[0].via.ark === s.recipients[0].address)
+      ? (featureHook('sendFormNote', plainAddr) || null) : null,
     ready && !arkDest && h(
       'div',
       { class: 'field' },

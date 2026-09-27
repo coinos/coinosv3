@@ -2453,10 +2453,14 @@ function softLock() {
   toast(t('lockedToast'));
 }
 
+// Lock (or unlock) the wallets on this device — a row on the Accounts page,
+// where the other whole-device actions (log out, clear) live; it used to be
+// a header icon, one tap from a mis-tap on every screen.
 function lockBtn() {
+  if (!activeAccount()) return null;
   const locked = wallet.watchOnly && hasVault();
   return h('button', {
-    class: 'header-msgs',
+    class: 'btn-ghost btn-block',
     title: locked ? t('unlock') : t('lockWallet'),
     'aria-label': locked ? t('unlock') : t('lockWallet'),
     onClick: locked
@@ -2467,7 +2471,7 @@ function lockBtn() {
           } else { ui.justLocked = false; ui.screen = 'vault'; render(); }
         }
       : () => softLock(),
-  }, h('span', { class: 'hm-ico', style: 'font-size:18px;line-height:1' }, locked ? '\u{1F512}' : '\u{1F513}'));
+  }, h('span', { style: 'font-size:15px;line-height:1;margin-right:6px' }, locked ? '\u{1F512}' : '\u{1F513}'), locked ? t('unlock') : t('lockWallet'));
 }
 
 // Messages sit one tap away, left of the wallet selector. The dot is presence,
@@ -2523,7 +2527,6 @@ function brandHeader(withLock) {
           searchBtn(),
           messagesBtn(),
           settingsBtn(),
-          lockBtn(),
           avatarMenu())
       : null
   );
@@ -3056,6 +3059,7 @@ function accountsScreen() {
       ),
       h('button', { class: 'btn-block', onClick: () => { ui.addWallet = { kind: 'spending', from: 'new' }; render(); } }, t('addWallet')),
       h('button', { class: 'btn-block', onClick: signInAnother }, t('signInAnother')),
+      lockBtn(),
       activeAccount() ? h('button', { class: 'btn-ghost btn-block', onClick: () => { ui.logoutConfirm = true; render(); } }, t('logout')) : null,
       hasVault() ? h('button', { class: 'btn-ghost btn-block', onClick: startChangePw }, t('changePassword')) : null,
       h('button', { class: 'btn-ghost btn-block', onClick: () => { ui.confirmClear = true; render(); } }, t('clearAll'))
@@ -3080,10 +3084,23 @@ function groupAccounts() {
 // Who a group of wallets belongs to: their face and name, and a mark when
 // it's the identity you're currently using. One identity on the device needs
 // no heading at all — there's nothing to tell apart.
+// Tapping the identity signs you in as it (its first wallet) and opens its
+// profile page — the URL used to take the npub while the list stayed put,
+// because the profile only paints over the wallet screen.
+function openIdentityProfile(pk) {
+  const g = groupAccounts().find((x) => x.pk === pk);
+  const first = g && g.rows[0];
+  if (first && first.id !== activeId) {
+    clearFeatureNav();
+    activateAccount(first, { fresh: true }); // the screen flip and feature init are synchronous
+  } else { clearFeatureNav(); ui.screen = 'wallet'; }
+  featureHook('openProfile', pk);
+  render();
+}
 function identityHeading(pk) {
   if (!pk || groupAccounts().length < 2) return null;
   const me = ctx.shownPubkey && ctx.shownPubkey();
-  const chip = featureHook('profileChip', pk);
+  const chip = featureHook('profileChip', pk, undefined, () => openIdentityProfile(pk));
   return h('div', {
     class: 'row gap6',
     style: 'align-items:center;padding:10px 0 4px;border-bottom:1px solid var(--line)',

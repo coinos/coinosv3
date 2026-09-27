@@ -21,6 +21,8 @@ await page.setViewport({ width: 420, height: 880 });
 
 const click = (sel, t) => page.evaluate((s, x) => { const e = [...document.querySelectorAll(s)].find((n) => n.textContent.trim().toLowerCase().includes(x.toLowerCase())); if (e) { e.click(); return true; } return false; }, sel, t);
 const clickTitle = (t) => page.evaluate((x) => { const b = [...document.querySelectorAll('button')].find((n) => n.title === x); if (b) { b.click(); return true; } return false; }, t);
+// the padlock lives on the Accounts page: open it from the balance card first
+const padlock = async (pg, title) => { await pg.evaluate(() => document.querySelector('.balance-switch')?.click()); await sleep(500); return pg.evaluate((x) => { const b = [...document.querySelectorAll('button')].find((n) => n.title === x); if (b) { b.click(); return true; } return false; }, title); };
 const body = () => page.evaluate(() => document.body.innerText);
 const waitText = async (x, ms = 20000) => { for (let i = 0; i < ms / 250; i++) { if ((await body()).toLowerCase().includes(x.toLowerCase())) return true; await sleep(250); } return false; };
 
@@ -40,7 +42,7 @@ try {
   await sleep(2000);
 
   console.log('\n[the Wallets list before opting into Spending]');
-  await click('button', 'Wallets');
+  await page.evaluate(() => document.querySelector('.balance-switch')?.click());
   await sleep(600);
   let txt = await body();
   check('shows the on-chain wallet', /savings/i.test(txt), txt.slice(0, 140).replace(/\n+/g, ' | '));
@@ -50,7 +52,7 @@ try {
   check('back home', await waitText('receive'));
 
   console.log('\n[padlock with no password: declining is free]');
-  await clickTitle('Lock wallet');
+  await padlock(page, 'Lock wallet');
   await sleep(500);
   txt = await body();
   check('it asks for a password in place', (await page.$$('input[type=password]')).length >= 2, txt.slice(0, 120).replace(/\n+/g, ' | '));
@@ -58,8 +60,7 @@ try {
   await click('button', 'Not now');
   await sleep(600);
   txt = await body();
-  check('declining lands back home', /receive/i.test(txt) && /balance/i.test(txt), txt.slice(0, 120).replace(/\n+/g, ' | '));
-  check('not on the wallets list', !/add wallet|delete all/i.test(txt));
+  check('declining lands back where the padlock was tapped (the Accounts page)', /add account/i.test(txt), txt.slice(0, 120).replace(/\n+/g, ' | '));
 
   console.log('\n[the logo still means home]');
   await page.evaluate(() => document.querySelector('.brand')?.click());
@@ -68,7 +69,7 @@ try {
   check('logo goes home, not to a password prompt', /receive/i.test(txt) && !/unlock saved|enter your password/i.test(txt), txt.slice(0, 120).replace(/\n+/g, ' | '));
 
   console.log('\n[setting a password locks in place]');
-  await clickTitle('Lock wallet');
+  await padlock(page, 'Lock wallet');
   await sleep(500);
   const fields = await page.$$('input[type=password]');
   check('password form is up', fields.length >= 2, `${fields.length} field(s)`);
@@ -78,11 +79,13 @@ try {
   await sleep(1200);
   txt = await body();
   check('still home (watch-only), not signed out', /receive/i.test(txt) && /balance/i.test(txt), txt.slice(0, 120).replace(/\n+/g, ' | '));
+  await page.evaluate(() => document.querySelector('.balance-switch')?.click()); await sleep(500);
   const closed = await page.evaluate(() => [...document.querySelectorAll('button')].some((b) => b.title && /unlock/i.test(b.title)));
   check('padlock is closed', closed);
+  await page.evaluate(() => document.querySelector('.brand')?.click()); await sleep(400);
 
   console.log('\n[and the padlock now asks for the password]');
-  await clickTitle('Unlock');
+  await padlock(page, 'Unlock');
   await sleep(600);
   txt = await body();
   check('unlock needs the password', /password/i.test(txt), txt.slice(0, 120).replace(/\n+/g, ' | '));
@@ -104,7 +107,7 @@ try {
     return waitText2('receive');
   };
   const addWallet = async () => {
-    await click2('Wallets'); await sleep(600);
+    await p2.evaluate(() => document.querySelector('.balance-switch')?.click()); await sleep(600);
     await click2('Add wallet'); await sleep(400);
     await click2('Savings'); await sleep(200);
     await click2('Continue'); await sleep(600);
@@ -126,7 +129,7 @@ try {
   await sleep(1000);
   check('wallet B open', await addWallet());
   await sleep(2000);
-  await clickTitle2('Lock wallet');
+  await padlock(p2, 'Lock wallet');
   await sleep(600);
   txt = await body2();
   check('padlock offers to SET a password (B is saved, vault is passwordless)',
@@ -148,7 +151,7 @@ try {
   await click2('Unlock');
   check('password opens it', await waitText2('receive'));
   await sleep(1000);
-  await click2('Wallets'); await sleep(600);
+  await p2.evaluate(() => document.querySelector('.balance-switch')?.click()); await sleep(600);
   check('both wallets survived the re-encrypt', (await savingsRows()) === 2, `${await savingsRows()} row(s)`);
   await click2('Back'); await sleep(500);
 
@@ -158,7 +161,7 @@ try {
   await sleep(1000);
   check('wallet C open', await addWallet());
   await sleep(2000);
-  await clickTitle2('Lock wallet');
+  await padlock(p2, 'Lock wallet');
   await sleep(600);
   txt = await body2();
   check('it says WHICH password it wants', /already saved on this device/i.test(txt), txt.slice(0, 160).replace(/\n+/g, ' | '));
@@ -179,7 +182,7 @@ try {
   await click2('Unlock');
   check('unlocked once more', await waitText2('receive'));
   await sleep(1000);
-  await click2('Wallets'); await sleep(600);
+  await p2.evaluate(() => document.querySelector('.balance-switch')?.click()); await sleep(600);
   check('all three wallets are in the vault', (await savingsRows()) === 3, `${await savingsRows()} row(s)`);
   await ctx2.close();
 } catch (e) {

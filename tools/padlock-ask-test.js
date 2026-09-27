@@ -35,27 +35,25 @@ try {
   await click('button', 'Open wallet');
   await waitText('receive', 20000);
 
-  // open my own profile (the header avatar)
-  await page.evaluate(() => document.querySelector('.header-avatar')?.click());
+  // open the Accounts page (the balance card's switcher) — the padlock lives there
+  await page.evaluate(() => document.querySelector('.balance-switch')?.click());
   await sleep(900);
-  const onProfile = await page.evaluate(() => !!document.querySelector('.profile-avatar, .chat-avatar.profile-avatar'));
-  check('profile page is open', onProfile, (await bodyText()).slice(0, 60).replace(/\n/g, ' | '));
+  check('Accounts page is open', /add account/i.test(await bodyText()), (await bodyText()).slice(0, 60).replace(/\n/g, ' | '));
 
   // tap the padlock — the ask must appear without navigating anywhere
   const tapped = await page.evaluate(() => {
     const b = [...document.querySelectorAll('button')].find((e) => /lock/i.test(e.getAttribute('aria-label') || ''));
     if (!b) return false; b.click(); return true;
   });
-  check('padlock is reachable from the profile page', tapped);
+  check('padlock is reachable from the Accounts page', tapped);
   await sleep(500);
   const text = await bodyText();
   check('the ask appears on the tap', /protect this device/i.test(text), text.split('\n').slice(0, 3).join(' | '));
 
-  // declining lands back on the profile, not somewhere else
+  // declining lands back on the Accounts page, not somewhere else
   await click('button', 'not now');
   await sleep(600);
-  const back = await page.evaluate(() => !!document.querySelector('.profile-avatar'));
-  check('declining lands back on the profile page', back, (await bodyText()).slice(0, 60).replace(/\n/g, ' | '));
+  check('declining lands back on the Accounts page', /add account/i.test(await bodyText()), (await bodyText()).slice(0, 60).replace(/\n/g, ' | '));
 } finally {
   await browser.close(); server.stop(true);
 }

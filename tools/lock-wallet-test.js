@@ -82,17 +82,18 @@ try {
   await sleep(1000);
 
   console.log('\n[the padlock still asks — locking needs a password]');
+  // the padlock lives on the Accounts page (the balance card's switcher opens it)
+  await page.evaluate(() => document.querySelector('.balance-switch')?.click());
+  await sleep(600);
   await page.evaluate(() => { const b = [...document.querySelectorAll('button')].find((n) => n.title === 'Lock wallet'); if (b) b.click(); });
   await sleep(600);
   txt = await body();
   check('padlock asks even after "Not now"', /protect this device/i.test(txt), txt.slice(0, 120).replace(/\n+/g, ' | '));
   await click('button', 'Not now');
   await sleep(600);
-  check('and declining lands home', await waitText('receive'));
+  check('and declining lands back on the Accounts page', /add account/i.test(await body()));
 
   console.log('\n[now with a password]');
-  await click('button', 'Wallets');
-  await sleep(800);
   await click('button', 'Change password');
   await sleep(800);
   const fields = await page.$$('input[type=password]');
@@ -138,7 +139,7 @@ try {
   check('backing out deletes nothing', (await vaultSize()) > 0);
 
   console.log('\n[delete all is the destructive one]');
-  await click('button', 'Wallets');
+  await page.evaluate(() => document.querySelector('.balance-switch')?.click());
   await sleep(800);
   await click('button', 'Delete all');
   await sleep(600);

@@ -8489,11 +8489,13 @@ export function messagesFeature(ctx) {
         fieldWhen: { lud16: follows('lud16'), nip05: follows('nip05') },
       }).catch(() => {});
     },
-    profileChip(pk, size) {
+    // opens the profile, unless the caller has a step to take first (the
+    // Accounts page switches to that identity before showing its profile)
+    profileChip(pk, size, onOpen) {
       const big = size === 'lg';
       return h('span', {
         class: 'zap-chip' + (big ? ' lg' : ''),
-        onClick: (e) => { e.stopPropagation(); openProfile(pk); },
+        onClick: (e) => { e.stopPropagation(); if (onOpen) onOpen(); else openProfile(pk); },
       }, avatar(pk, 'chat-avatar ' + (big ? 'chip-lg' : 'mini'), false),
         h('span', { class: big ? '' : 'small' }, displayName(pk)));
     },
@@ -8501,6 +8503,7 @@ export function messagesFeature(ctx) {
     // the same start, but only the follows of an identity that follows
     // nobody yet — an established nostr user keeps their own list.
     identitySignedInNew() { setTimeout(() => seedNewIdentity({ onlyIfNoFollows: true }), 0); return true; },
+    openProfile(pk) { openProfile(pk); return true; },
     init() {
       const session = ++feedWarmSession;
       // this wallet's cached faces, from its own namespace — the keys are

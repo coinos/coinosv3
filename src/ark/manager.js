@@ -1927,8 +1927,14 @@ export class ArkManager {
   // round ran, and the inputs are still ours to submit again. Left alone,
   // the action sat "in progress" for weeks, asking on every sync.
   async _repairSubmitted(action, inputRecs) {
-    const states = await Promise.all(inputRecs.map((v) =>
-      getVtxoStatus(this.arkUrl, this._decoded(v).point.raw, this._keyForVtxo(v).privkey).catch(() => null)));
+    // a coin this wallet already holds as spent needs no asking — and an old
+    // spent coin has had its bytes pruned, so it could not be asked about
+    const states = await Promise.all(inputRecs.map((v) => {
+      if (!v) return null;
+      if (v.state === 'spent') return VTXO_STATE_SPENT;
+      try { return getVtxoStatus(this.arkUrl, this._decoded(v).point.raw, this._keyForVtxo(v).privkey).catch(() => null); }
+      catch { return null; }
+    }));
     if (states.some((st) => st == null)) return; // couldn't tell today; ask again next sync
     const spent = inputRecs.filter((v, i) => states[i] === VTXO_STATE_SPENT);
     if (spent.length === inputRecs.length) {

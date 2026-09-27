@@ -1,3 +1,20 @@
+/* Public Sans, the coinos.io face (OFL, one variable-weight file each way).
+   font-display swap: the system stack paints first and the face lands when
+   the file has; offline before the first fetch, the fallback stays. */
+@font-face {
+  font-family: "Public Sans";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("/PublicSans.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Public Sans";
+  font-style: italic;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("/PublicSans-Italic.woff2") format("woff2");
+}
 /* Bitcoin Wallet — hand-rolled CSS. Clean light "paper wallet" look. */
 
 :root {
@@ -31,7 +48,7 @@
   --radius: 16px;
   --wash: rgba(247, 147, 26, 0.05); /* warm glow behind the page top */
   --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
-  --sans: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --sans: "Public Sans", system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
 }
 
 /* Dark theme — applied via data-theme="dark" on <html>. */

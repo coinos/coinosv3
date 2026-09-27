@@ -2141,7 +2141,7 @@ export function messagesFeature(ctx) {
       dec: async (ct) => nip44.decrypt(ct, wallet.nostr.ck),
     });
     const login = hook('nostrLoginIdentity');
-    if (login && login.signer && login.signer.encryptSelf) out.push({
+    if (login && login.signer && login.signer.encryptSelf && !login.signer.interactive) out.push({
       pk: login.pubkey,
       sign: (e) => login.signer.signEvent(e),
       enc: (txt) => login.signer.encryptSelf(txt),
@@ -2506,7 +2506,9 @@ export function messagesFeature(ctx) {
     const out = [];
     if (wallet.nostr && wallet.nostr.sk) out.push(wallet.nostr.sk);
     const login = hook('nostrLoginIdentity');
-    if (login && login.signer && login.signer.decryptFrom) out.push(login.signer);
+    // an interactive signer (Amber by intent) is a trip through another app
+    // per call: never for a wrap that arrives on its own
+    if (login && login.signer && login.signer.decryptFrom && !login.signer.interactive) out.push(login.signer);
     return out;
   }
   // A "full-strength" attempt has every key this wallet expects: retries
@@ -2515,7 +2517,7 @@ export function messagesFeature(ctx) {
   // sealed to the login npub.
   function decryptorsComplete() {
     const login = hook('nostrLoginIdentity');
-    return !login || !!(login.signer && login.signer.decryptFrom);
+    return !login || !login.signer || !!login.signer.interactive || !!login.signer.decryptFrom;
   }
 
   // Raw-key unwraps (seed-derived / pasted nsec — the common case) run in

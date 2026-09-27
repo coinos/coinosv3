@@ -39,6 +39,7 @@ import { wordlist } from '@scure/bip39/wordlists/english';
 import { getPublicKey, finalizeEvent, nip44 } from './nostr.js';
 import { SimplePool } from 'nostr-tools/pool';
 import { generateSecretKey } from 'nostr-tools/pure';
+import { decode as nip19decode } from 'nostr-tools/nip19';
 
 // NIP-46 loads lazily from dist/nip46.js (same pattern as the QR decoder):
 // bunker logins are rare, and the module is heavy. Tests running outside a
@@ -304,6 +305,135 @@ export async function nostrConnect({ relays = ['wss://relay.coinos.io', 'wss://n
 }
 
 // A pasted key: signing happens locally, and the key is never persisted.
+// ---- NIP-55: an Android signer app (Amber), by intent --------------------
+// Amber without a bunker (offline, no relays) can still sign for a web
+// page: the page opens a `nostrsigner:` URL and the app answers. A web page
+// cannot receive an intent result, so the answer comes back one of two
+// ways — appended to a callback URL, which NAVIGATES the tab (our TWA would
+// reload, losing the promise that asked), or copied to the clipboard when
+// no callback is given. We take the clipboard: the tab stays alive, every
+// caller's await survives, and when the user comes back here the answer is
+// read off the clipboard. If the browser won't hand the clipboard over,
+// the login card offers a box to paste it into (amberDeliver). Each request
+// is a round trip through the app — NIP-55 is honest that this means a
+// popup per signature, which is why it is a login door, not the default.
+export const amberAvailable = () => typeof navigator !== 'undefined' && /Android/i.test(navigator.userAgent || '');
+let amberReq = null; // { type, ts, resolve, reject, timer }
+let amberWatch = null;
+const amberListeners = new Set();
+export const onAmberChange = (fn) => { amberListeners.add(fn); return () => amberListeners.delete(fn); };
+const amberChanged = () => { for (const fn of amberListeners) { try { fn(); } catch {} } };
+export const amberPending = () => (amberReq ? { type: amberReq.type, since: amberReq.ts } : null);
+const HEX64 = /^[0-9a-f]{64}$/i;
+// What an answer of this type looks like — anything else on the clipboard
+// is somebody's grocery list, not a signature.
+function amberParse(type, text, payload) {
+  const v = String(text || '').trim();
+  if (!v || v === payload) return null;
+  if (type === 'get_public_key') {
+    if (HEX64.test(v)) return v.toLowerCase();
+    if (/^npub1[023456789acdefghjklmnpqrstuvwxyz]+$/.test(v)) { try { const d = nip19decode(v); if (d.type === 'npub') return d.data; } catch {} }
+    try { const j = JSON.parse(v); if (j && HEX64.test(j.pubkey || '')) return j.pubkey.toLowerCase(); } catch {}
+    return null;
+  }
+  if (type === 'sign_event') {
+    try { const ev = JSON.parse(v); return ev && ev.sig && ev.id && HEX64.test(ev.pubkey || '') ? ev : null; } catch { return null; }
+  }
+  // the clipboard still holds the LAST answer (an npub, say) when the next
+  // request goes out: an answer must look like its own kind, and never
+  // repeat the one before
+  if (v === amberLastAnswer) return null;
+  if (type === 'nip44_encrypt') return /^Ag[A-Za-z0-9+/]{100,}={0,2}$/.test(v) ? v : null; // version byte 2, nonce, body, mac
+  if (type === 'nip04_encrypt') return /^[A-Za-z0-9+/=]+\?iv=[A-Za-z0-9+/=]+$/.test(v) ? v : null;
+  if (/^npub1[023456789acdefghjklmnpqrstuvwxyz]+$/.test(v) || HEX64.test(v)) return null; // a key is never a plaintext
+  return v; // a decrypt: the caller knows what it expects and will say if this isn't it
+}
+let amberLastAnswer = null;
+// Resolve the waiting request with an answer, however it arrived.
+export function amberDeliver(text) {
+  if (!amberReq) return false;
+  const got = amberParse(amberReq.type, text, amberReq.payload);
+  if (got == null) return false;
+  amberLastAnswer = String(text || '').trim();
+  const r = amberReq;
+  amberStop();
+  r.resolve(got);
+  return true;
+}
+export function amberCancel(reason = 'signer request cancelled') {
+  if (!amberReq) return;
+  const r = amberReq;
+  amberStop();
+  r.reject(new Error(reason));
+}
+function amberStop() {
+  if (amberReq) clearTimeout(amberReq.timer);
+  amberReq = null;
+  if (amberWatch) { amberWatch(); amberWatch = null; }
+  amberChanged();
+}
+// Read the clipboard whenever the tab comes back to the front, and every
+// so often while it is — Amber copies its answer just before the user
+// switches back here.
+function amberWatchClipboard() {
+  const read = async () => {
+    if (!amberReq || typeof navigator === 'undefined' || !navigator.clipboard) return;
+    try { // a hidden or unfocused page is simply refused by the browser
+      const txt = await navigator.clipboard.readText();
+      if (amberReq && amberDeliver(txt)) return;
+    } catch {} // no permission: the paste box is the way in
+  };
+  const onVis = () => { if (document.visibilityState === 'visible') setTimeout(read, 250); };
+  document.addEventListener('visibilitychange', onVis);
+  window.addEventListener('focus', onVis);
+  const iv = setInterval(read, 800);
+  setTimeout(read, 300);
+  return () => { document.removeEventListener('visibilitychange', onVis); window.removeEventListener('focus', onVis); clearInterval(iv); };
+}
+function amberLaunch(url) {
+  if (typeof window !== 'undefined' && typeof window.__coinosAmberLaunch === 'function') { window.__coinosAmberLaunch(url); return; } // tests
+  window.location.href = url;
+}
+// One trip at a time: the app fires several signatures at once right after a
+// sign-in (the backup, the relay list, the follows), and Amber can only be
+// asked for one; the rest wait their turn in this chain.
+let amberQueue = Promise.resolve();
+function amberRequest(type, payload, params = {}, { timeoutMs = 180_000 } = {}) {
+  const q = new URLSearchParams({ type, compressionType: 'none', returnType: 'event' });
+  if (params.pubkey) q.set('pubkey', params.pubkey);
+  const url = 'nostrsigner:' + encodeURIComponent(payload || '') + '?' + q.toString();
+  const run = () => new Promise((resolve, reject) => {
+    amberReq = { type, payload: payload || '', ts: Date.now(), resolve, reject,
+      timer: setTimeout(() => amberCancel('signer did not answer'), timeoutMs) };
+    amberWatch = amberWatchClipboard();
+    amberChanged();
+    amberLaunch(url);
+  });
+  const p = amberQueue.then(run, run);
+  amberQueue = p.catch(() => {});
+  return p;
+}
+export async function amberSigner({ pubkey = null } = {}) {
+  if (!pubkey) pubkey = await amberRequest('get_public_key', '');
+  return amberAdapter(pubkey);
+}
+function amberAdapter(pubkey) {
+  return {
+    kind: 'amber', pubkey, label: 'Amber', interactive: true, // every call is a trip through the app: nothing in the background may use it
+    session: { amber: pubkey }, // the pubkey is all a later boot needs; no round trip to come back
+    signEvent: async (e) => {
+      const ev = await amberRequest('sign_event', JSON.stringify({ ...e, pubkey }), { pubkey });
+      if (ev.pubkey !== pubkey) throw new Error('the signer answered with a different account');
+      return ev;
+    },
+    encryptSelf: (txt) => amberRequest('nip44_encrypt', txt, { pubkey }),
+    decryptSelf: (ct) => amberRequest('nip44_decrypt', ct, { pubkey }),
+    encryptTo: (peer, txt) => amberRequest('nip44_encrypt', txt, { pubkey: peer }),
+    decryptFrom: (peer, ct) => amberRequest('nip44_decrypt', ct, { pubkey: peer }),
+    ping: async () => true,
+  };
+}
+
 export function keySigner(sk) {
   const pubkey = getPublicKey(sk);
   const conv = nip44.getConversationKey(sk, pubkey);

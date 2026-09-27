@@ -4703,9 +4703,19 @@ export function messagesFeature(ctx) {
     });
     v.onvolumechange = () => btn.setSound(!v.muted); // the native control's own mute keeps the button honest
     box.append(btn);
+    // Off screen, a muted preview lets go of its media entirely (a paused
+    // player keeps buffering the whole file — a scroll past ten clips
+    // streamed seventy megabytes); back in view it reattaches and plays
+    // from the start. A clip the reader unmuted keeps its place instead.
     watchPlayer(v,
-      () => { if (v.paused) v.play().then(() => { box._skipMorph = true; }).catch(() => {}); },
-      () => { if (!v.paused) v.pause(); });
+      () => {
+        if (!v.getAttribute('src') && !v.getAttribute('data-lazy-src')) v.setAttribute('src', url);
+        if (v.paused) v.play().then(() => { box._skipMorph = true; }).catch(() => {});
+      },
+      () => {
+        if (!v.paused) v.pause();
+        if (v.muted && box._skipMorph) { try { v.removeAttribute('src'); v.load(); } catch {} }
+      });
     return box;
   }
 

@@ -17,6 +17,7 @@ import { decode as nip19decode, npubEncode, nsecEncode, neventEncode } from 'nos
 import { normalizeURL } from 'nostr-tools/utils';
 import { wrapEvent as nip17WrapEvent } from 'nostr-tools/nip17';
 import { SimplePool } from 'nostr-tools/pool';
+import { dlog } from './debug.js';
 import { randomBytes, bytesToHex } from '@noble/hashes/utils';
 import { base64urlnopad } from '@scure/base';
 
@@ -107,19 +108,50 @@ export function unwrapDMsOffthread(wraps, sk) {
 // otherwise gets retried on every profile fetch, every sync, every chat
 // subscribe — each attempt logging a browser-level WebSocket error we cannot
 // catch from JS. So we remember failures and stop dialing for a while.
+// A relay found dead is skipped for ten minutes the first time, and twice as
+// long each time it fails again (a day at most), and the verdict survives a
+// reload — a relay that has been gone for weeks (relay.mostr.pub, say, from
+// somebody's relay list) is otherwise redialled at every boot, each attempt
+// a red line in the console.
 const SICK_MS = 10 * 60_000;
-const sick = new Map(); // url -> until
+const SICK_MAX_MS = 24 * 60 * 60_000;
+const SICK_KEY = 'coinos-sick-relays';
+const relayKey = (u) => { try { return normalizeURL(u); } catch { return u; } };
+const sick = new Map(); // normalized url -> { until, n }
+try {
+  const saved = JSON.parse(localStorage.getItem(SICK_KEY) || '{}');
+  for (const [u, v] of Object.entries(saved)) if (v && v.until > Date.now()) sick.set(u, v);
+} catch {}
+const saveSick = () => {
+  try { localStorage.setItem(SICK_KEY, JSON.stringify(Object.fromEntries([...sick].slice(-200)))); } catch {}
+};
 export function markRelaySick(url, why) {
   if (!url) return;
-  if (!sick.has(url)) console.warn(`nostr: ${url} unreachable (${why || 'connect failed'}) — skipping for 10 min`);
-  sick.set(url, Date.now() + SICK_MS);
+  const n = relayKey(url);
+  const prev = sick.get(n);
+  const strikes = prev ? (prev.n || 1) + 1 : 1;
+  const ms = Math.min(SICK_MAX_MS, SICK_MS * 2 ** (strikes - 1));
+  if (!prev) dlog(`nostr: ${url} unreachable (${why || 'connect failed'}) — skipping for ${Math.round(ms / 60_000)} min`);
+  sick.set(n, { until: Date.now() + ms, n: strikes });
+  saveSick();
+  // and out of the pool: left in, its own reconnect loop keeps dialling
+  // (ten seconds, then twenty, then every minute) for as long as the tab lives
+  resetRelay(url);
 }
+const isSick = (u) => sick.has(relayKey(u));
 // Drop known-bad relays, but never hand back an empty set: if everything is
 // sick the network probably is, and one doomed attempt beats doing nothing.
 function liveRelays(list) {
   const now = Date.now();
-  for (const [u, until] of sick) if (until < now) sick.delete(u);
-  const ok = (list || []).filter((u) => !sick.has(u));
+  let changed = false;
+  for (const [u, v] of sick) if (v.until < now) { sick.delete(u); changed = true; }
+  if (changed) saveSick();
+  // a relay the pool has been failing to reconnect to is dead by now
+  for (const u of list || []) {
+    const r = pool.relays.get(relayKey(u));
+    if (r && !r.connected && (r.reconnectAttempts || 0) >= 3) markRelaySick(u, 'reconnect loop');
+  }
+  const ok = (list || []).filter((u) => !isSick(u));
   return ok.length ? ok : (list || []);
 }
 // Dial a relay once in the background to learn whether it's reachable; a
@@ -127,12 +159,13 @@ function liveRelays(list) {
 const probed = new Set();
 function probeRelays(list) {
   for (const url of list || []) {
-    if (probed.has(url) || sick.has(url)) continue;
-    probed.add(url);
+    const n = relayKey(url);
+    if (probed.has(n) || sick.has(n)) continue;
+    probed.add(n);
     Promise.resolve(pool.ensureRelay(url, { connectionTimeout: 6000 }))
       .then(() => {})
       .catch((e) => markRelaySick(url, e && e.message))
-      .finally(() => setTimeout(() => probed.delete(url), SICK_MS));
+      .finally(() => setTimeout(() => probed.delete(n), SICK_MS));
   }
 }
 
@@ -161,6 +194,8 @@ export function resetRelay(url) {
   dialingSince.delete(n);
   const r = pool.relays.get(n);
   if (!r) return;
+  // no zombie: a dropped relay must not go on reconnecting from outside the pool
+  try { r.skipReconnection = true; if (r.reconnectTimeoutHandle) clearTimeout(r.reconnectTimeoutHandle); } catch {}
   try { r.close(); } catch {}
   pool.relays.delete(n);
 }

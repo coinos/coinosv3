@@ -27,6 +27,7 @@ import {
   subscribeOn, publishOn, queryOn,
 } from '../nostr.js';
 import { t } from '../i18n.js';
+import { dlog } from '../debug.js';
 import { qrSvg } from '../qr.js';
 import { getNetwork } from '../api.js';
 import { loadBg, saveBg, clearBg } from '../nwc-bg.js';
@@ -287,30 +288,30 @@ export function nwcFeature(ctx) {
   async function onRequest(c, ev) {
     // TEMP instrumentation for the Amethyst-spinner bug: every event that
     // reaches this handler logs, and every silent guard names itself.
-    console.log(`nwc: onRequest ev=${ev.id.slice(0, 8)} kind=${ev.kind} age=${nowSec() - ev.created_at}s from=${ev.pubkey.slice(0, 8)} conn=${c.id}`);
-    if (ev.kind !== REQ_KIND) return console.log('nwc: guard drop — wrong kind');
-    if (handled.has(ev.id)) return console.log('nwc: guard drop — already handled', ev.id.slice(0, 8));
+    dlog(`nwc: onRequest ev=${ev.id.slice(0, 8)} kind=${ev.kind} age=${nowSec() - ev.created_at}s from=${ev.pubkey.slice(0, 8)} conn=${c.id}`);
+    if (ev.kind !== REQ_KIND) return dlog('nwc: guard drop — wrong kind');
+    if (handled.has(ev.id)) return dlog('nwc: guard drop — already handled', ev.id.slice(0, 8));
     handled.add(ev.id);
     if (handled.size > 500) handled.clear();
     if (ev.created_at && nowSec() - ev.created_at > MAX_AGE_SEC) {
-      return console.log('nwc: guard drop — too old', nowSec() - ev.created_at, 's');
+      return dlog('nwc: guard drop — too old', nowSec() - ev.created_at, 's');
     }
     // Same wallet, several tabs: the first to claim the request answers it.
     return withRequestLock(ev.id, () => serve(c, ev),
-      () => console.log('nwc: skip — another tab or the worker holds', ev.id.slice(0, 8)));
+      () => dlog('nwc: skip — another tab or the worker holds', ev.id.slice(0, 8)));
   }
 
   async function serve(c, ev) {
     // only the client this connection was issued to
     if (ev.pubkey !== c.clientPk) {
-      return console.log(`nwc: guard drop — pubkey mismatch got=${ev.pubkey.slice(0, 8)} want=${c.clientPk.slice(0, 8)}`);
+      return dlog(`nwc: guard drop — pubkey mismatch got=${ev.pubkey.slice(0, 8)} want=${c.clientPk.slice(0, 8)}`);
     }
     // Re-resolve the connection from stored state: the closure's `c` is a
     // snapshot from listen() time, so budget math computed from it restarts
     // from a stale value on every request (spends never accumulate), and a
     // connection revoked on another device would keep being served here.
     const cur = (load().conns || []).find((x) => x.id === c.id);
-    if (!cur || cur.revoked) return console.log('nwc: guard drop — connection gone or revoked', c.id);
+    if (!cur || cur.revoked) return dlog('nwc: guard drop — connection gone or revoked', c.id);
     c = cur;
 
     const scheme = ev.tags?.find((x) => x[0] === 'encryption')?.[1] === 'nip44_v2'
@@ -356,13 +357,13 @@ export function nwcFeature(ctx) {
         const prior = await query(NWC_RELAYS, { kinds: [RES_KIND], '#e': [ev.id] }, 1500);
         return !!(prior && prior.length);
       };
-      if (age > 5 && await lookBack()) return console.log('nwc: skip — request already answered elsewhere', ev.id.slice(0, 8));
+      if (age > 5 && await lookBack()) return dlog('nwc: skip — request already answered elsewhere', ev.id.slice(0, 8));
       if (mobile && age <= 5) await new Promise((r) => setTimeout(r, 1000));
       claimed = await claim(ev.id);
-      if (claimed === false) return console.log('nwc: standing down — another device claimed', ev.id.slice(0, 8));
+      if (claimed === false) return dlog('nwc: standing down — another device claimed', ev.id.slice(0, 8));
       if (claimed === null && age <= 5) {
         await new Promise((r) => setTimeout(r, 300 + Math.random() * 900));
-        if (await lookBack()) return console.log('nwc: skip — request already answered elsewhere', ev.id.slice(0, 8));
+        if (await lookBack()) return dlog('nwc: skip — request already answered elsewhere', ev.id.slice(0, 8));
       }
     }
     updateConn(c.id, { lastUsed: Date.now() });
@@ -380,7 +381,7 @@ export function nwcFeature(ctx) {
         await new Promise((r) => setTimeout(r, errGraceMs));
         const prior = await query(NWC_RELAYS, { kinds: [RES_KIND], '#e': [ev.id] }, 1500).catch(() => []);
         if (prior && prior.length) {
-          return console.log('nwc: staying quiet — request answered elsewhere', ev.id.slice(0, 8));
+          return dlog('nwc: staying quiet — request answered elsewhere', ev.id.slice(0, 8));
         }
       }
       delete payload.sibling;
@@ -598,7 +599,7 @@ export function nwcFeature(ctx) {
   const infoPublished = new Set(); // connection ids whose 13194 went out this session
   let listenGen = 0; // TEMP instrumentation: which listen() generation is live
   function stop() {
-    if (unsubs.length) console.log(`nwc: stop() closing ${unsubs.length} sub(s) from gen ${listenGen}`);
+    if (unsubs.length) dlog(`nwc: stop() closing ${unsubs.length} sub(s) from gen ${listenGen}`);
     for (const u of unsubs) { try { u(); } catch {} }
     unsubs = [];
   }
@@ -617,17 +618,17 @@ export function nwcFeature(ctx) {
       ));
     }
     const list = conns();
-    console.log(`nwc: listen() gen ${gen} — ${list.length} connection(s)`);
+    dlog(`nwc: listen() gen ${gen} — ${list.length} connection(s)`);
     for (const c of list) {
-      console.log(`nwc: gen ${gen} subscribing for conn=${c.id} service=${c.servicePk.slice(0, 8)}`);
+      dlog(`nwc: gen ${gen} subscribing for conn=${c.id} service=${c.servicePk.slice(0, 8)}`);
       unsubs.push(subscribe(
         NWC_RELAYS,
         { kinds: [REQ_KIND], '#p': [c.servicePk], since: nowSec() - MAX_AGE_SEC },
         (ev) => {
-          console.log(`nwc: gen ${gen} event arrived ev=${ev.id.slice(0, 8)} for conn=${c.id}`);
+          dlog(`nwc: gen ${gen} event arrived ev=${ev.id.slice(0, 8)} for conn=${c.id}`);
           onRequest(c, ev).catch((e) => console.error('nwc: onRequest threw', e));
         },
-        { onclose: (reasons) => console.log(`nwc: gen ${gen} sub CLOSED for conn=${c.id}:`, JSON.stringify(reasons)) },
+        { onclose: (reasons) => dlog(`nwc: gen ${gen} sub CLOSED for conn=${c.id}:`, JSON.stringify(reasons)) },
       ));
       // Republish the capability event once per session per connection: a
       // client that can't find kind 13194 just spins, and a single publish at
@@ -745,7 +746,7 @@ export function nwcFeature(ctx) {
       await enableBackground();
       await reconcileBg();
       render();
-    } catch (e) { console.log('nwc: background answering not armed:', e.message); }
+    } catch (e) { dlog('nwc: background answering not armed:', e.message); }
   }
 
   // A connection that only answers while a tab happens to be open is a broken

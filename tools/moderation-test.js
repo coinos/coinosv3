@@ -140,7 +140,7 @@ try {
   check('the flagged post is folded, naming who', await waitText('reported by', 12000) && !(await has('reported post here')), (await text()).match(/Reported by[^\n]*/)?.[0]);
   await page.evaluate(() => { const b = [...document.querySelectorAll('.note-folded button')].find((x) => /show/i.test(x.textContent)); b.click(); }); await sleep(400);
   check('Show unfolds it', await has('reported post here'));
-  check('a person flagged by only one friend is not folded', await has('a fine post by someone one friend mis-flagged') && (await text()).split('Reported by').length === 2);
+  check('a person flagged by only one friend is not folded', await has('a fine post by someone one friend mis-flagged') && !(await page.$('.note-folded')));
 
   console.log('\n[thread replies go through the same door; Report… hides and publishes]');
   await page.evaluate(() => { const r = [...document.querySelectorAll('[data-zap-post]')].find((n) => /a post to open/.test(n.textContent)); r.click(); }); await sleep(1500);

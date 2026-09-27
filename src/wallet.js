@@ -1785,8 +1785,13 @@ export class Wallet {
   _cacheKey() {
     let id = this.watchOnly ? this.xpub : this.xprv ? this.xprv : `${this.mnemonic}\n${this.passphrase}`;
     if (this.accountIndex) id += `\n#${this.accountIndex}`; // derived siblings get their own slots
+    // hashed once per identity: every feature-state read went through here,
+    // and a feed repaint reads state dozens of times
+    if (this._cacheKeyFor === id && this._cacheKeyVal) return this._cacheKeyVal;
     const bytes = new TextEncoder().encode(id);
-    return 'btc-wallet-cache:' + hex.encode(sha256(bytes)).slice(0, 32);
+    this._cacheKeyFor = id;
+    this._cacheKeyVal = 'btc-wallet-cache:' + hex.encode(sha256(bytes)).slice(0, 32);
+    return this._cacheKeyVal;
   }
 
   // The fresh receive index the "payment received" screen has been shown for.

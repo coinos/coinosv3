@@ -73,8 +73,17 @@ export function messagesFeature(ctx) {
 
   // ---- persisted state ----------------------------------------------------
 
+  // The messages state is a large blob (chat caches, DMs, feeds) and reading
+  // it means parsing all of it. A repaint asks for it dozens of times (every
+  // row's mute and spam checks go through it), so within a tick every caller
+  // shares one parse; a write refreshes the copy. Another tab's write shows
+  // up on the next tick.
+  let stCache = null, stAt = 0;
+  const ST_MEMO_MS = 50;
   const st = () => {
+    if (stCache && Date.now() - stAt < ST_MEMO_MS) return stCache;
     const s = wallet.loadFeatureState('messages', {});
+    stCache = s; stAt = Date.now();
     s.joined ||= {}; // { [cid]: { [pubkey]: true } }
     s.cache ||= {}; // { [channelId]: [msgs] }
     s.communities ||= []; // join material beyond the built-in
@@ -93,7 +102,7 @@ export function messagesFeature(ctx) {
       if (s.joined[k] === true) { (s.joined[COMMUNITY.community_id] ||= {})[k] = true; delete s.joined[k]; }
     return s;
   };
-  const save = (s) => wallet.saveFeatureState('messages', s);
+  const save = (s) => { stCache = s; stAt = Date.now(); wallet.saveFeatureState('messages', s); };
 
   const communities = () => [COMMUNITY, ...st().communities];
 
@@ -539,31 +548,31 @@ export function messagesFeature(ctx) {
     // warms again once they're there.
     if (!wallet.mnemonic && !wallet.xprv && !wallet.xpub) return;
     profilesWarmed = true;
-    const cached = wallet.loadFeatureState('profiles', {});
+    const cached = profilesDisk();
     for (const [pk, p] of Object.entries(cached)) if (!profiles.has(pk)) profiles.set(pk, p);
   }
-  function persistProfile(pk, p) {
-    // A faceless answer is not a fact worth writing down — persisting
-    // {name:null, picture:null} rows only evicts real faces from the cap and
-    // spreads a cold-relay miss across sessions.
-    if (!p || (!p.name && !p.picture)) return;
-    const s = wallet.loadFeatureState('profiles', {});
-    s[pk] = { name: p.name || null, picture: p.picture || null, nip05: p.nip05 || null, lud16: p.lud16 || null,
-      about: p.about || null, banner: p.banner || null, eventAt: p.eventAt || 0, t: Date.now(),
-      ...(p.thumbFor === p.picture && p.thumb
-        ? { thumb: p.thumb, thumbFor: p.thumbFor, thumbPx: p.thumbPx || 0 } : {}),
-      ...(p.thumbFail ? { thumbFail: p.thumbFail, thumbFailAt: p.thumbFailAt || 0, thumbFails: p.thumbFails || 1,
-        thumbFailVersion: p.thumbFailVersion || 0 } : {}) };
+  // The persisted profile blob (names, faces, thumbnails) lives parsed in
+  // memory and is written back once per burst: a batch of thirty profiles
+  // landing during a scroll used to parse and re-serialize the whole blob
+  // thirty times over, on the main thread, mid-scroll.
+  let profBlob = null, profFlush = null;
+  const profilesDisk = () => (profBlob ||= wallet.loadFeatureState('profiles', {}));
+  function flushProfiles() {
+    profFlush = null;
+    const s = profBlob;
+    if (!s) return;
     // Thumbnails are the bulk of this blob, so they live on a budget: the
     // least recently seen faces give theirs up first. The row itself stays —
     // that face just paints the way it used to.
-    if (JSON.stringify(s).length > THUMB_BUDGET) {
+    let size = JSON.stringify(s).length;
+    if (size > THUMB_BUDGET) {
       // never our own: the header face is the one that must paint offline
       const mine = new Set(myPubkeys());
       const oldestFirst = Object.keys(s).filter((k) => s[k].thumb && !mine.has(k)).sort((a, b) => (s[a].t || 0) - (s[b].t || 0));
       for (const k of oldestFirst) {
+        size -= (s[k].thumb || '').length;
         delete s[k].thumb; delete s[k].thumbFor;
-        if (JSON.stringify(s).length <= THUMB_BUDGET) break;
+        if (size <= THUMB_BUDGET) break;
       }
     }
     const keys = Object.keys(s);
@@ -576,6 +585,20 @@ export function messagesFeature(ctx) {
       for (const k of evictable.sort((a, b) => (s[a].t || 0) - (s[b].t || 0)).slice(0, keys.length - 150)) delete s[k];
     }
     wallet.saveFeatureState('profiles', s);
+  }
+  function persistProfile(pk, p) {
+    // A faceless answer is not a fact worth writing down — persisting
+    // {name:null, picture:null} rows only evicts real faces from the cap and
+    // spreads a cold-relay miss across sessions.
+    if (!p || (!p.name && !p.picture)) return;
+    const s = profilesDisk();
+    s[pk] = { name: p.name || null, picture: p.picture || null, nip05: p.nip05 || null, lud16: p.lud16 || null,
+      about: p.about || null, banner: p.banner || null, eventAt: p.eventAt || 0, t: Date.now(),
+      ...(p.thumbFor === p.picture && p.thumb
+        ? { thumb: p.thumb, thumbFor: p.thumbFor, thumbPx: p.thumbPx || 0 } : {}),
+      ...(p.thumbFail ? { thumbFail: p.thumbFail, thumbFailAt: p.thumbFailAt || 0, thumbFails: p.thumbFails || 1,
+        thumbFailVersion: p.thumbFailVersion || 0 } : {}) };
+    if (!profFlush) profFlush = setTimeout(flushProfiles, 1500);
   }
   // A punk picture is OUR OWN art. Every coinos user who keeps the default
   // publishes https://v3.coinos.io/punks/N.webp as their nostr picture, and
@@ -4645,7 +4668,7 @@ export function messagesFeature(ctx) {
   // on screen. Once it has played, the box is the viewer's (no morph).
   function videoNode(url, { stable = false } = {}) {
     const v = h('video', { src: url, class: 'note-video', controls: true,
-      preload: autoplayOk() ? 'auto' : 'metadata', playsinline: true, muted: true,
+      preload: 'metadata', playsinline: true, muted: true, // play() in view fetches; a window of videos must not all stream
       style: stable ? 'width:100%;aspect-ratio:16/9;object-fit:contain' : undefined,
       onError: (e) => { if (!stable) { const b = e.target.parentElement; if (b) b.style.display = 'none'; } } });
     v.muted = true; // the property, not just the attribute: a script-made element autoplays only muted
@@ -8507,6 +8530,9 @@ export function messagesFeature(ctx) {
       threadCache.clear();
       follows = null; followsAt = 0; feed = null; feedAt = 0; relayLists = null;
       mutes = null; mutesAt = 0;
+      stCache = null; stAt = 0; // the next account's state, not this one's
+      if (profFlush) { clearTimeout(profFlush); flushProfiles(); } // this account's faces, written before the blob is dropped
+      profBlob = null;
       reacts.clear(); boosts.clear(); seenNoteEv.clear(); myReactEv.clear(); quoted.clear();
       noteCountsReady.clear();
       // what happened to THEIR posts stays with them — the next identity

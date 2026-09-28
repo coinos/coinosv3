@@ -3794,9 +3794,18 @@ export function messagesFeature(ctx) {
   const feedStates = new Map(); // id -> state
   const adhocFeeds = new Map(); // id -> definition, this session only
   let curFeedId = (() => { try { return localStorage.getItem(FEED_LS) || FOLLOWING; } catch { return FOLLOWING; } })();
-  const feedList = () => [{ id: FOLLOWING, name: t('feedFollowingName'), follows: true, builtin: true }, ...st().feeds];
+  // Two feeds everyone has: the people you follow, and everything the coinos
+  // relay carries. Each remembers its own relay choice in the state.
+  const EVERYTHING = 'all';
+  const feedList = () => {
+    const br = st().builtinRelays || {};
+    return [
+      { id: FOLLOWING, name: t('feedFollowingName'), follows: true, builtin: true, relays: br[FOLLOWING] || [] },
+      { id: EVERYTHING, name: t('feedFirehose'), follows: false, authors: [], packs: [], topics: [], all: true, builtin: true, relays: br[EVERYTHING] || [] },
+      ...st().feeds];
+  };
   function feedDef(id = curFeedId) {
-    if (id === FOLLOWING) return feedList()[0];
+    if (id === FOLLOWING || id === EVERYTHING) return feedList().find((f) => f.id === id);
     return st().feeds.find((f) => f.id === id) || adhocFeeds.get(id) || null;
   }
   const normTopic = (x) => String(x || '').trim().replace(/^#/, '').toLowerCase();
@@ -3903,7 +3912,19 @@ export function messagesFeature(ctx) {
     return out;
   }
   const feedTopics = (def = feedDef()) => [...new Set(((def && def.topics) || []).map(normTopic).filter(Boolean))].slice(0, 20);
-  const feedHasQuery = (def = feedDef()) => !!def && (feedAuthors(def).length > 0 || feedTopics(def).length > 0);
+  const feedHasQuery = (def = feedDef()) => !!def && (!!def.all || feedAuthors(def).length > 0 || feedTopics(def).length > 0);
+  // A feed's own relay list, when it has one, replaces the usual choice
+  // (the authors' outboxes, or the wide relays for a topic) everywhere the
+  // feed reads. Independent of what the feed asks for.
+  const FIREHOSE_RELAYS = ['wss://relay.coinos.io'];
+  const normRelay = (u) => {
+    let x = String(u || '').trim();
+    if (!x) return null;
+    if (!/^wss?:\/\//i.test(x)) x = 'wss://' + x;
+    try { const url = new URL(x); if (!/^wss?:$/.test(url.protocol) || !url.hostname) return null; return url.href.replace(/\/$/, ''); } catch { return null; }
+  };
+  const feedRelays = (def) => (def && Array.isArray(def.relays) && def.relays.length ? def.relays : null);
+  const feedRelaysOr = (def, usual) => feedRelays(def) || usual;
   const feedCacheKey = (id) => (id === FOLLOWING ? FEED_CACHE : FEED_CACHE + ':' + id);
   const feedDisk = () => typeof wallet.featureStateKey === 'function'
     ? createFeedCache(localStorage, wallet.featureStateKey(FEED_CACHE)) : null;
@@ -4174,10 +4195,10 @@ export function messagesFeature(ctx) {
   async function prefetchFeed(c) {
     const def = feedDef(c.id);
     const authors = feedAuthors(def).slice(0, REQ_AUTHORS), topics = feedTopics(def);
-    if (!authors.length && !topics.length) { c.status = 'ready'; return; }
+    if (!authors.length && !topics.length && !(def && def.all)) { c.status = 'ready'; return; }
     c.at = Date.now();
     try {
-      const events = await queryOn(NOTE_RELAYS, { kinds: [1], limit: FEED_PAGE,
+      const events = await queryOn(feedRelaysOr(def, def && def.all ? FIREHOSE_RELAYS : NOTE_RELAYS), { kinds: [1], limit: FEED_PAGE,
         ...(authors.length ? { authors } : {}), ...(topics.length ? { '#t': topics } : {}) }, 3000);
       if (c.stopped) return;
       await mergeFeed(events.filter((e) => e.kind === 1 && !isReply(e) && !hidden(e))
@@ -4225,11 +4246,11 @@ export function messagesFeature(ctx) {
   const hexList = (pks) => [...new Set(pks.filter((pk) => /^[0-9a-f]{64}$/i.test(pk || '')).map((pk) => pk.toLowerCase()))];
   // The timeline someone else sees: their follow list, read from the relays,
   // becomes the authors of a feed for this session.
-  function openFeedOf(pk, relays = []) {
-    const id = 'of:' + pk;
+  function openFeedOf(pk, relays = [], readFrom = []) {
+    const id = 'of:' + pk + (readFrom.length ? '@' + readFrom.join(',') : '');
     let def = adhocFeeds.get(id);
     if (!def) {
-      def = { id, name: '', follows: false, authors: [], packs: [], topics: [], of: pk, ofAt: 0 };
+      def = { id, name: '', follows: false, authors: [], packs: [], topics: [], of: pk, ofAt: 0, relays: readFrom };
       adhocFeeds.set(id, def);
       liveProfileOf(pk); // their name and face for the title
       queryOn([...new Set([...relays, ...PROFILE_RELAYS, ...NOTE_RELAYS])], { kinds: [3], authors: [pk] }, 6000)
@@ -4238,7 +4259,7 @@ export function messagesFeature(ctx) {
           const newest = (evs || []).sort((a, b) => b.created_at - a.created_at)[0];
           def.authors = newest ? hexList(newest.tags.filter((x) => x[0] === 'p').map((x) => x[1])) : [];
           def.ofAt = Date.now();
-          feedStates.delete(id); // whatever was built before the list was known
+          dropFeedState(id); // whatever was built before the list was known
           if (curFeedId === id) selectFeed(id);
           scheduleRepaint();
         });
@@ -4246,38 +4267,49 @@ export function messagesFeature(ctx) {
     showFeed(id);
   }
   // A follow pack (or someone's follow set: a pack by another name).
-  function openPackFeed(p) {
-    const id = 'pack:' + packKey(p);
-    if (!adhocFeeds.has(id)) adhocFeeds.set(id, { id, name: (packOf(p) || {}).title || t('feedPackName'), follows: false, authors: [], packs: [p], topics: [] });
+  function openPackFeed(p, readFrom = []) {
+    const id = 'pack:' + packKey(p) + (readFrom.length ? '@' + readFrom.join(',') : '');
+    if (!adhocFeeds.has(id)) adhocFeeds.set(id, { id, name: (packOf(p) || {}).title || t('feedPackName'), follows: false, authors: [], packs: [p], topics: [], relays: readFrom });
     const def = adhocFeeds.get(id);
     fetchPack(p).then((got) => {
       if (got && got.title) def.name = got.title;
       const c = feedStates.get(id);
-      if (c) { c.at = 0; if (c === feed) refreshFeed({ live: false }, c); else feedStates.delete(id); }
+      if (c) { c.at = 0; if (c === feed) refreshFeed({ live: false }, c); else dropFeedState(id); }
       scheduleRepaint();
     }).catch(() => {});
     showFeed(id);
   }
   // Any mix of people, packs and topics, carried in the URL itself.
+  const urlRelays = (q) => [...new Set((q.get('r') || '').split(',').map(normRelay).filter(Boolean))].slice(0, 12);
+  // Plain /feed: every post the coinos relay carries (or the relays named).
+  function openFirehose(readFrom = []) {
+    if (!readFrom.length && !isVisitor()) { showFeed(EVERYTHING); return; }
+    const id = 'all' + (readFrom.length ? '@' + readFrom.join(',') : ':visitor');
+    if (!adhocFeeds.has(id)) adhocFeeds.set(id, { id, name: t('feedFirehose'), follows: false, authors: [], packs: [], topics: [], all: true, relays: readFrom });
+    showFeed(id);
+  }
   function openQueryFeed(q) {
     const authors = hexList((q.get('p') || '').split(',').map((x) => parseNostrPubkey(x.trim()) || ''));
     const topics = [...new Set((q.get('t') || '').split(',').map(normTopic).filter(Boolean))];
     const packs = (q.get('pack') || '').split(',').map((x) => parsePackLink(x.trim())).filter(Boolean);
-    if (!authors.length && !topics.length && !packs.length) return false;
-    const sig = JSON.stringify([authors, topics, packs.map(packKey)]);
+    const relays = urlRelays(q);
+    if (!authors.length && !topics.length && !packs.length) { openFirehose(relays); return true; }
+    const sig = JSON.stringify([authors, topics, packs.map(packKey), relays]);
     let hsh = 5381; for (let i = 0; i < sig.length; i++) hsh = ((hsh * 33) ^ sig.charCodeAt(i)) >>> 0;
     const id = 'url:' + hsh.toString(36);
-    if (!adhocFeeds.has(id)) adhocFeeds.set(id, { id, name: (q.get('name') || '').trim().slice(0, 40) || t('feedSharedName'), follows: false, authors, packs, topics });
+    if (!adhocFeeds.has(id)) adhocFeeds.set(id, { id, name: (q.get('name') || '').trim().slice(0, 40) || t('feedSharedName'), follows: false, authors, packs, topics, relays });
     showFeed(id);
     return true;
   }
   function openFeedUrl(path, search) {
-    if (!path) { try { return openQueryFeed(new URLSearchParams(search)); } catch { return false; } }
-    if (/^t\//i.test(path)) { const tag = normTopic(decodeURIComponent(path.slice(2))); if (!tag) return false; openTopicFeed(tag); return true; }
+    let q; try { q = new URLSearchParams(search || ''); } catch { q = new URLSearchParams(); }
+    const readFrom = urlRelays(q);
+    if (!path) return openQueryFeed(q);
+    if (/^t\//i.test(path)) { const tag = normTopic(decodeURIComponent(path.slice(2))); if (!tag) return false; openTopicFeed(tag, readFrom); return true; }
     const pk = parseNostrPubkey(path);
-    if (pk) { let relays = []; try { relays = parseNostrRef(path.toLowerCase())?.relays || []; } catch {} openFeedOf(pk, relays); return true; }
+    if (pk) { let relays = []; try { relays = parseNostrRef(path.toLowerCase())?.relays || []; } catch {} openFeedOf(pk, relays, readFrom); return true; }
     const pack = /^naddr1/i.test(path) ? parsePackLink(path) : null;
-    if (pack) { openPackFeed(pack); return true; }
+    if (pack) { openPackFeed(pack, readFrom); return true; }
     return false;
   }
   // The URL a feed answers to. `share` also names the built-in Following
@@ -4285,22 +4317,70 @@ export function messagesFeature(ctx) {
   // came from a URL, so a saved feed is never doubled by its own link.
   function feedPath(def, { share = false } = {}) {
     if (!def) return null;
-    if (def.builtin) return share && mePk() ? '/feed/' + npubOf(mePk()) : null;
-    if (def.of) return '/feed/' + npubOf(def.of);
+    const r = feedRelays(def) ? '?r=' + encodeURIComponent(feedRelays(def).join(',')) : '';
+    if (def.all) return '/feed' + r;
+    if (def.builtin) return share && mePk() ? '/feed/' + npubOf(mePk()) + r : null;
+    if (def.of) return '/feed/' + npubOf(def.of) + r;
     const authors = def.authors || [], topics = feedTopics(def), packs = def.packs || [];
-    if (!authors.length && !packs.length && topics.length === 1) return '/feed/t/' + encodeURIComponent(topics[0]);
+    if (!authors.length && !packs.length && topics.length === 1) return '/feed/t/' + encodeURIComponent(topics[0]) + r;
     if (!authors.length && !topics.length && packs.length === 1) {
       const p = packs[0];
       const n = packNaddr(`${p.kind || PACK_KIND}:${p.pk}:${p.d}`);
-      if (n) return '/feed/' + n;
+      if (n) return '/feed/' + n + r;
     }
     if (!authors.length && !packs.length && !topics.length) return null;
     const q = new URLSearchParams();
+    if (feedRelays(def)) q.set('r', feedRelays(def).join(','));
     if (authors.length) q.set('p', authors.map((pk) => npubOf(pk)).join(','));
     if (topics.length) q.set('t', topics.join(','));
     if (packs.length) q.set('pack', packs.map((p) => packNaddr(`${p.kind || PACK_KIND}:${p.pk}:${p.d}`)).filter(Boolean).join(','));
     if (def.name && !def.builtin) q.set('name', def.name);
     return '/feed?' + q.toString();
+  }
+  // The relays a feed reads from: a list to add to and take from, kept on
+  // the feed (a session feed in memory, a saved one in the state, Following
+  // beside it). Changing it rebuilds the feed from those relays.
+  // Forget a feed's state so it is rebuilt; a fetch still in flight for the
+  // old one lands nowhere (it would otherwise fill the orphan, not the new).
+  const dropFeedState = (id) => { const c = feedStates.get(id); if (c) c.stopped = true; feedStates.delete(id); };
+  function setFeedRelays(def, relays) {
+    relays = [...new Set(relays.map(normRelay).filter(Boolean))].slice(0, 12);
+    if (def.builtin) { const s = st(); s.builtinRelays = { ...(s.builtinRelays || {}), [def.id]: relays }; save(s); }
+    else if (adhocFeeds.has(def.id)) def.relays = relays;
+    else { const s = st(); s.feeds = s.feeds.map((f) => (f.id === def.id ? { ...f, relays } : f)); save(s); }
+    dropFeedState(def.id);
+    try { wallet.saveFeatureState(feedCacheKey(def.id), []); } catch {}
+    if (curFeedId === def.id) selectFeed(def.id);
+    // the address bar carries the relays of a feed that came from a URL
+    if (adhocFeeds.has(def.id) && ui.chatOpen && ui.msgView === 'feed') { try { history.replaceState(history.state, '', feedPath(def) || '/'); } catch {} }
+  }
+  const usualRelays = (def) => (def.all ? FIREHOSE_RELAYS : (feedAuthors(def).length ? null : TOPIC_RELAYS));
+  function relayPanel(def) {
+    const e = ui.feedRelayEdit;
+    const list = feedRelays(def) || [];
+    const usual = usualRelays(def);
+    const add = () => {
+      const r = normRelay(e.input);
+      if (!r) { toast(t('feedRelayBad')); return; }
+      e.input = '';
+      setFeedRelays(def, [...(feedRelays(def) || usual || []), r]);
+      render();
+    };
+    return h('div', { class: 'card col', style: 'gap:8px;padding:10px 12px;background:var(--surface2)' },
+      h('div', { class: 'small muted' }, t('feedRelaysHint')),
+      ...(list.length ? list : (usual || [])).map((u) => h('div', { class: 'row gap6', style: 'align-items:center' },
+        h('span', { class: 'small mono grow', style: 'min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' }, u.replace(/^wss:\/\//, '')),
+        list.length
+          ? h('button', { class: 'btn-sm', type: 'button', 'aria-label': t('remove'), onClick: () => { setFeedRelays(def, list.filter((x) => x !== u)); render(); } }, '\u00d7')
+          : h('span', { class: 'small faint' }, t('feedRelayUsual')))),
+      !list.length && !usual ? h('div', { class: 'small faint' }, t('feedRelaysOutbox')) : null,
+      h('div', { class: 'row gap6' },
+        h('input', { type: 'text', class: 'grow', placeholder: t('feedRelayPh'), value: e.input, autocapitalize: 'none', autocomplete: 'off', spellcheck: 'false',
+          onInput: (ev) => { e.input = ev.target.value; }, onKeyDown: (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); add(); } } }),
+        h('button', { class: 'btn-sm', type: 'button', onClick: add }, t('feedRelayAdd'))),
+      h('div', { class: 'row gap6' },
+        list.length ? h('button', { class: 'btn-ghost btn-sm', type: 'button', onClick: () => { setFeedRelays(def, []); render(); } }, t('feedRelaysDefault')) : null,
+        h('button', { class: 'btn-sm', type: 'button', style: 'margin-left:auto', onClick: () => { ui.feedRelayEdit = null; render(); } }, t('feedRelaysDone'))));
   }
   async function shareFeed(def) {
     const path = feedPath(def, { share: true });
@@ -4323,12 +4403,12 @@ export function messagesFeature(ctx) {
   }
   // A topic straight from search or a #tag in a post: a feed for this
   // session (a saved single-topic feed with the same tag is reused).
-  function openTopicFeed(tag) {
+  function openTopicFeed(tag, relays = []) {
     tag = normTopic(tag);
     if (!tag) return;
-    const saved = st().feeds.find((f) => !f.follows && !(f.authors || []).length && feedTopics(f).length === 1 && feedTopics(f)[0] === tag);
-    const id = saved ? saved.id : 'topic:' + tag;
-    if (!saved) adhocFeeds.set(id, { id, name: '#' + tag, topics: [tag] });
+    const saved = relays.length ? null : st().feeds.find((f) => !f.follows && !(f.authors || []).length && feedTopics(f).length === 1 && feedTopics(f)[0] === tag);
+    const id = saved ? saved.id : 'topic:' + tag + (relays.length ? '@' + relays.join(',') : '');
+    if (!saved && !adhocFeeds.has(id)) adhocFeeds.set(id, { id, name: '#' + tag, topics: [tag], relays });
     ui.userSearch = null; ui.profilePk = null; ui.noteThread = null; ui.feedEdit = null;
     ui.chatOpen = true; ui.msgView = 'feed';
     switchFeed(id);
@@ -4588,14 +4668,16 @@ export function messagesFeature(ctx) {
     const tag = topics.length ? { '#t': topics } : {};
     let got = false;
     if (!authors.length) {
-      // topics alone: nobody's outbox to read, so the wide relays, one ask
-      if (!topics.length) return false;
-      const evs = await queryOn(TOPIC_RELAYS, { kinds: [1], ...tag, limit: FEED_LIMIT, ...extra }, 5000).catch(() => []);
+      // topics alone: nobody's outbox to read, so the wide relays, one ask;
+      // the firehose asks its relays for everything
+      if (!topics.length && !def.all) return false;
+      const evs = await queryOn(feedRelaysOr(def, def.all ? FIREHOSE_RELAYS : TOPIC_RELAYS), { kinds: [1], ...tag, limit: FEED_LIMIT, ...extra }, 5000).catch(() => []);
       if (await mergeFeed(evs, merge, c)) { got = true; scheduleRepaint(); }
       return got;
     }
-    await fetchRelayLists(authors);
-    const plan = outboxPlan(authors);
+    let plan;
+    if (feedRelays(def)) plan = [{ relays: feedRelays(def), authors }];
+    else { await fetchRelayLists(authors); plan = outboxPlan(authors); }
     await Promise.all(plan.flatMap(({ relays, authors: a }) => {
       const chunks = [];
       for (let i = 0; i < a.length; i += REQ_AUTHORS) chunks.push(a.slice(i, i + REQ_AUTHORS));
@@ -4770,8 +4852,9 @@ export function messagesFeature(ctx) {
     const topics = feedTopics(def), tag = topics.length ? { '#t': topics } : {};
     const on = (ev) => { mergeFeed([ev], { live: true }, c).then((ok) => { if (ok) scheduleRepaint(); }).catch(() => {}); };
     const authors = feedAuthors(def);
-    if (!authors.length) { feedUnsubs.push(subscribeOn(TOPIC_RELAYS, { kinds: [1], ...tag, since }, on)); return; }
-    for (const { relays, authors: a } of outboxPlan(authors))
+    if (!authors.length) { feedUnsubs.push(subscribeOn(feedRelaysOr(def, def.all ? FIREHOSE_RELAYS : TOPIC_RELAYS), { kinds: [1], ...tag, since }, on)); return; }
+    const plan = feedRelays(def) ? [{ relays: feedRelays(def), authors }] : outboxPlan(authors);
+    for (const { relays, authors: a } of plan)
       for (let i = 0; i < a.length; i += REQ_AUTHORS)
         feedUnsubs.push(subscribeOn(relays, { kinds: [1], authors: a.slice(i, i + REQ_AUTHORS), ...tag, since }, on));
   }
@@ -7195,19 +7278,24 @@ export function messagesFeature(ctx) {
           }),
           def.of ? avatar(def.of, 'chat-avatar mini', true) : null,
           h('h3', { style: 'margin:0;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' },
-            def.builtin ? t('feedTitle') : def.of ? t('feedOfTitle', { name: displayName(def.of) }) : def.name),
+            def.builtin && !def.all ? t('feedTitle') : def.of ? t('feedOfTitle', { name: displayName(def.of) }) : def.name),
           def.builtin || visitor ? null
             : adhocFeeds.has(def.id)
               ? h('button', { class: 'btn-sm', onClick: () => openFeedEditor(def) }, t('feedSaveAdhoc'))
               : h('button', { class: 'btn-sm', title: t('feedEdit'), 'aria-label': t('feedEdit'), onClick: () => openFeedEditor(def) }, '\u270e'),
+          h('button', {
+            class: 'btn-sm' + (feedRelays(def) ? ' on' : ''), title: t('feedRelays'), 'aria-label': t('feedRelays'), style: 'margin-left:auto;flex-shrink:0',
+            onClick: () => { ui.feedRelayEdit = ui.feedRelayEdit && ui.feedRelayEdit.id === def.id ? null : { id: def.id, input: '' }; render(); },
+            html: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:block"><circle cx="12" cy="12" r="2"/><path d="M16.2 7.8a6 6 0 0 1 0 8.4M7.8 16.2a6 6 0 0 1 0-8.4M19 5a10 10 0 0 1 0 14M5 19A10 10 0 0 1 5 5"/></svg>' }),
           feedPath(def, { share: true })
-            ? h('button', { class: 'btn-sm', title: t('feedShare'), 'aria-label': t('feedShare'), style: 'margin-left:auto;flex-shrink:0', onClick: () => shareFeed(def),
+            ? h('button', { class: 'btn-sm', title: t('feedShare'), 'aria-label': t('feedShare'), style: 'flex-shrink:0', onClick: () => shareFeed(def),
                 html: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:block"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.6" y1="13.5" x2="15.4" y2="17.5"/><line x1="15.4" y1="6.5" x2="8.6" y2="10.5"/></svg>' })
             : null,
           visitor ? null : h('button', {
-            class: 'btn-sm', style: (feedPath(def, { share: true }) ? '' : 'margin-left:auto;') + 'flex-shrink:0',
+            class: 'btn-sm', style: 'flex-shrink:0',
             onClick: () => { ui.profCompose = ui.profCompose == null ? (draftFor(POST_DRAFT) || '') : null; render(); },
           }, t('profNewPost'))),
+        ui.feedRelayEdit && ui.feedRelayEdit.id === def.id ? relayPanel(def) : null,
         visitor ? null : feedChips(),
         visitor ? null : postComposer(),
         def.of && !def.ofAt

@@ -115,7 +115,8 @@ try {
   check('a page with nothing to show stays a bare link', !!blank && blank.bareLink && !blank.card, JSON.stringify(blank));
   check('a picture link is still a picture, not a card', !!pic && pic.img && !pic.card, JSON.stringify(pic));
   check('the registrar was asked once per link', previewHits.filter((u) => u === 'https://news.example/story/1').length === 1 && !previewHits.some((u) => u.endsWith('.png')), JSON.stringify(previewHits));
-  const kept = await page.evaluate(() => JSON.parse(localStorage.getItem('coinos-link-previews') || '[]').length);
+  let kept = 0; // written behind, a second after the card was learned
+  for (let i = 0; i < 12 && !kept; i++) { kept = await page.evaluate(() => JSON.parse(localStorage.getItem('coinos-link-previews') || '[]').length); if (!kept) await sleep(300); }
   check('the card is remembered for next time', kept === 1, kept + ' kept');
   check('no page errors', errs.length === 0, errs.slice(0, 2).join(' | '));
 } finally { await browser.close(); server.stop(true); }

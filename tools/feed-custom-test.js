@@ -1,4 +1,4 @@
-// Custom feeds: Following is one feed among many. A new feed from the +
+// Custom feeds: Following (and Everything, the coinos relay) are two feeds among many. A new feed from the +
 // chip (people and/or topics), the filter it asks relays for, a tagged
 // post landing in it, switching back, a #tag in a post opening a topic
 // feed, and deleting a feed. No relays are contacted for real — the
@@ -106,7 +106,7 @@ try {
   await sleep(800);
   await page.evaluate(() => { const e = [...document.querySelectorAll('.item')].find((n) => /feed/i.test(n.textContent)); if (e) e.click(); });
   await sleep(1200);
-  check('the feed opens on Following, with a + chip', JSON.stringify(await chips()) === JSON.stringify(['*Following', '#gardenstr', '+']), JSON.stringify(await chips()));
+  check('the feed opens on Following, with a + chip', JSON.stringify(await chips()) === JSON.stringify(['*Following', 'Everything', '#gardenstr', '+']), JSON.stringify(await chips()));
 
   console.log('\n[a new feed: everyone I follow, on one topic]');
   await page.click('.feed-chip.add'); await sleep(300);
@@ -115,7 +115,7 @@ try {
   await page.click('input[type=checkbox]');
   await type('input[placeholder="#bitcoin #nostr"]', '#Bitcoin, lightning');
   await click('save'); await sleep(1500);
-  check('the new feed is on screen and selected', JSON.stringify(await chips()) === JSON.stringify(['Following', '#gardenstr', '*Coin talk', '+']), JSON.stringify(await chips()));
+  check('the new feed is on screen and selected', JSON.stringify(await chips()) === JSON.stringify(['Following', 'Everything', '#gardenstr', '*Coin talk', '+']), JSON.stringify(await chips()));
   const req = (await page.evaluate(() => window.__reqs)).find((f) => f['#t']);
   check('it asks relays for the follows AND the topics', !!req && req.authors?.includes(AUTHOR) && JSON.stringify(req['#t']) === JSON.stringify(['bitcoin', 'lightning']), JSON.stringify(req || null));
   const tagged = signed('fresh #bitcoin post', 0, [['t', 'bitcoin']]);
@@ -130,7 +130,7 @@ try {
   await page.evaluate(() => [...document.querySelectorAll('.feed-chip')].find((c) => c.textContent.trim() === 'Following').click()); await sleep(1200);
   check('Following again, with its own posts', (await chips())[0] === '*Following' && await waitText('plain post', 4000));
   await page.evaluate(() => { const a = [...document.querySelectorAll('.notes-feed a')].find((x) => x.textContent === '#bitcoin'); if (a) a.click(); }); await sleep(1200);
-  check('a #tag opens a topic feed of its own', JSON.stringify(await chips()) === JSON.stringify(['Following', '#gardenstr', 'Coin talk', '*#bitcoin', '+']) && await page.evaluate(() => !![...document.querySelectorAll('button')].find((b) => /save feed/i.test(b.textContent))), JSON.stringify(await chips()));
+  check('a #tag opens a topic feed of its own', JSON.stringify(await chips()) === JSON.stringify(['Following', 'Everything', '#gardenstr', 'Coin talk', '*#bitcoin', '+']) && await page.evaluate(() => !![...document.querySelectorAll('button')].find((b) => /save feed/i.test(b.textContent))), JSON.stringify(await chips()));
   const treq = (await page.evaluate(() => window.__reqs)).filter((f) => f['#t'] && !f.authors).pop();
   check('...asked for by topic alone', !!treq && JSON.stringify(treq['#t']) === JSON.stringify(['bitcoin']), JSON.stringify(treq || null));
 
@@ -159,14 +159,14 @@ try {
   await waitText('receive', 20000);
   await page.evaluate(() => { const b = [...document.querySelectorAll('button')].find((e) => /message/i.test(e.getAttribute('aria-label') || '')); if (b) b.click(); }); await sleep(800);
   await page.evaluate(() => { const e = [...document.querySelectorAll('.item')].find((n) => /feed/i.test(n.textContent)); if (e) e.click(); }); await sleep(1200);
-  check('the saved feeds are still there; the session topic is not', JSON.stringify(await chips()) === JSON.stringify(['*Following', '#gardenstr', 'Coin talk', 'Pack feed', '+']), JSON.stringify(await chips()));
+  check('the saved feeds are still there; the session topic is not', JSON.stringify(await chips()) === JSON.stringify(['*Following', 'Everything', '#gardenstr', 'Coin talk', 'Pack feed', '+']), JSON.stringify(await chips()));
   check('the home list shows the pack feed with its pack', await page.evaluate(() => { const b = document.querySelector('.chat-back'); if (b) b.click(); return !!b; }) && await waitText('test pack', 3000));
   await page.evaluate(() => { const e = [...document.querySelectorAll('.item')].find((n) => (n.querySelector('.chat-name') || {}).textContent === 'Feed'); if (e) e.click(); }); await sleep(800);
   await page.evaluate(() => [...document.querySelectorAll('.feed-chip')].find((c) => c.textContent.trim() === 'Coin talk').click()); await sleep(800);
   await page.evaluate(() => [...document.querySelectorAll('button')].find((b) => /edit feed/i.test(b.getAttribute('aria-label') || '')).click()); await sleep(400);
   check('the editor shows what was saved', await page.evaluate(() => document.querySelector('input[placeholder="#bitcoin #nostr"]').value === '#bitcoin #lightning' && document.querySelector('input[type=checkbox]').checked));
   await click('delete feed'); await sleep(1000);
-  check('deleting it lands back on Following', JSON.stringify(await chips()) === JSON.stringify(['*Following', '#gardenstr', 'Pack feed', '+']), JSON.stringify(await chips()));
+  check('deleting it lands back on Following', JSON.stringify(await chips()) === JSON.stringify(['*Following', 'Everything', '#gardenstr', 'Pack feed', '+']), JSON.stringify(await chips()));
   check('no page errors', errs.length === 0, errs.slice(0, 2).join(' | '));
 } finally { await browser.close(); server.stop(true); }
 console.log(ok ? '\n✅ feeds: Following is one of many' : '\n❌ failed');

@@ -228,6 +228,7 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .btn-primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
 .btn-ghost { background: transparent; }
 .btn-sm { padding: 7px 11px; font-size: 13px; border-radius: 9px; }
+.btn-sm.on { border-color: var(--accent); color: var(--accent); }
 .btn-block { width: 100%; display: block; }
 .btn-danger { color: var(--red); border-color: var(--red); background: var(--red-soft); }
 .iconbtn { padding: 9px 11px; line-height: 1; }

@@ -777,6 +777,11 @@ html.no-scroll { overflow: hidden; scrollbar-gutter: auto; }
   box-shadow: 0 3px 12px rgba(0, 0, 0, .28);
   animation: pill-in .18s ease-out;
 }
+/* the generic button hover (a light surface) and press (a 1px drop, which
+   REPLACED the centring transform and threw the pill half its width to the
+   right, out from under the pointer, so the tap never landed) stay off it */
+.feed-new-pill:hover { background: var(--accent-hover); color: var(--accent-fg); }
+.feed-new-pill:active { transform: translate(-50%, 1px); }
 /* the count bumps each time it changes: a fresh node per value replays it */
 .feed-new-pill .n { display: inline-block; min-width: 1.1em; text-align: center; animation: pill-bump .32s cubic-bezier(.2,.9,.3,1.4); }
 @keyframes pill-bump {

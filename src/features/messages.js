@@ -3916,7 +3916,13 @@ export function messagesFeature(ctx) {
   // A feed's own relay list, when it has one, replaces the usual choice
   // (the authors' outboxes, or the wide relays for a topic) everywhere the
   // feed reads. Independent of what the feed asks for.
-  const FIREHOSE_RELAYS = ['wss://relay.coinos.io'];
+  // Popular relays that answer a bare "everything" query (probed 2026-09-27;
+  // paid/search relays like nostr.wine and nostr.band answer nothing and are
+  // left out). The firehose reads a few of them by default.
+  const RELAY_PICKS = ['wss://relay.coinos.io', 'wss://relay.damus.io', 'wss://nos.lol', 'wss://relay.primal.net', 'wss://relay.snort.social',
+    'wss://nostr.mom', 'wss://nostr.bitcoiner.social', 'wss://eden.nostr.land', 'wss://nostr.land', 'wss://nostr.oxtr.dev',
+    'wss://relay.nostrplebs.com', 'wss://offchain.pub', 'wss://nostr21.com', 'wss://relay.nostr.net', 'wss://nostr-pub.wellorder.net'];
+  const FIREHOSE_RELAYS = ['wss://relay.coinos.io', 'wss://relay.damus.io', 'wss://nos.lol', 'wss://relay.primal.net'];
   const normRelay = (u) => {
     let x = String(u || '').trim();
     if (!x) return null;
@@ -4304,6 +4310,7 @@ export function messagesFeature(ctx) {
   function openFeedUrl(path, search) {
     let q; try { q = new URLSearchParams(search || ''); } catch { q = new URLSearchParams(); }
     const readFrom = urlRelays(q);
+    for (const r of readFrom) { try { resetRelay(r); } catch {} } // named in the link: tried even if it was sick
     if (!path) return openQueryFeed(q);
     if (/^t\//i.test(path)) { const tag = normTopic(decodeURIComponent(path.slice(2))); if (!tag) return false; openTopicFeed(tag, readFrom); return true; }
     const pk = parseNostrPubkey(path);
@@ -4345,6 +4352,7 @@ export function messagesFeature(ctx) {
   const dropFeedState = (id) => { const c = feedStates.get(id); if (c) c.stopped = true; feedStates.delete(id); };
   function setFeedRelays(def, relays) {
     relays = [...new Set(relays.map(normRelay).filter(Boolean))].slice(0, 12);
+    for (const r of relays) { try { resetRelay(r); } catch {} } // chosen by hand: tried again even if it was sick
     if (def.builtin) { const s = st(); s.builtinRelays = { ...(s.builtinRelays || {}), [def.id]: relays }; save(s); }
     else if (adhocFeeds.has(def.id)) def.relays = relays;
     else { const s = st(); s.feeds = s.feeds.map((f) => (f.id === def.id ? { ...f, relays } : f)); save(s); }
@@ -4357,29 +4365,52 @@ export function messagesFeature(ctx) {
   const usualRelays = (def) => (def.all ? FIREHOSE_RELAYS : (feedAuthors(def).length ? null : TOPIC_RELAYS));
   function relayPanel(def) {
     const e = ui.feedRelayEdit;
-    const list = feedRelays(def) || [];
+    const custom = feedRelays(def);
     const usual = usualRelays(def);
-    const add = () => {
+    const list = custom || usual || [];
+    const host = (u) => u.replace(/^wss?:\/\//, '');
+    const commit = (next) => { setFeedRelays(def, next); e.other = null; e.input = ''; render(); };
+    // each relay is a pick from the popular list (the one in place stays
+    // offered even when it isn't popular), or Other… for one typed in
+    const rowSelect = (u, i) => h('select', { class: 'grow', style: 'min-width:0', onChange: (ev) => {
+        const v = ev.target.value;
+        if (v === '__other') { e.other = u; e.input = ''; render(); return; }
+        const next = list.slice(); next[i] = v; commit(next);
+      } },
+      ...[...new Set([u, ...RELAY_PICKS])].filter((x) => x === u || !list.includes(x)).map((x) => h('option', { value: x, selected: x === u ? 'selected' : undefined }, host(x))),
+      h('option', { value: '__other' }, t('feedRelayOther')));
+    const inputRow = (onSave) => h('div', { class: 'row gap6' },
+      h('input', { type: 'text', class: 'grow', placeholder: t('feedRelayPh'), value: e.input, autocapitalize: 'none', autocomplete: 'off', spellcheck: 'false', autofocus: true,
+        onInput: (ev) => { e.input = ev.target.value; }, onKeyDown: (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); onSave(); } } }),
+      h('button', { class: 'btn-sm', type: 'button', onClick: onSave }, t('feedRelayAdd')),
+      h('button', { class: 'btn-sm', type: 'button', 'aria-label': t('back'), onClick: () => { e.other = null; render(); } }, '\u00d7'));
+    const saveOther = (i) => () => {
       const r = normRelay(e.input);
       if (!r) { toast(t('feedRelayBad')); return; }
-      e.input = '';
-      setFeedRelays(def, [...(feedRelays(def) || usual || []), r]);
-      render();
+      const next = list.slice(); if (i == null) next.push(r); else next[i] = r;
+      commit(next);
     };
     return h('div', { class: 'card col', style: 'gap:8px;padding:10px 12px;background:var(--surface2)' },
       h('div', { class: 'small muted' }, t('feedRelaysHint')),
-      ...(list.length ? list : (usual || [])).map((u) => h('div', { class: 'row gap6', style: 'align-items:center' },
-        h('span', { class: 'small mono grow', style: 'min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' }, u.replace(/^wss:\/\//, '')),
-        list.length
-          ? h('button', { class: 'btn-sm', type: 'button', 'aria-label': t('remove'), onClick: () => { setFeedRelays(def, list.filter((x) => x !== u)); render(); } }, '\u00d7')
-          : h('span', { class: 'small faint' }, t('feedRelayUsual')))),
+      ...list.map((u, i) => e.other === u
+        ? inputRow(saveOther(i))
+        : h('div', { class: 'row gap6', style: 'align-items:center' },
+            rowSelect(u, i),
+            h('button', { class: 'btn-sm', type: 'button', 'aria-label': t('remove'), onClick: () => commit(list.filter((_, j) => j !== i)) }, '\u00d7'))),
       !list.length && !usual ? h('div', { class: 'small faint' }, t('feedRelaysOutbox')) : null,
+      e.other === '__new'
+        ? inputRow(saveOther(null))
+        : h('select', { 'aria-label': t('feedRelayPick'), onChange: (ev) => {
+            const v = ev.target.value; ev.target.value = '';
+            if (!v) return;
+            if (v === '__other') { e.other = '__new'; e.input = ''; render(); return; }
+            commit([...list, v]);
+          } },
+            h('option', { value: '', selected: 'selected' }, t('feedRelayPick')),
+            ...RELAY_PICKS.filter((x) => !list.includes(x)).map((x) => h('option', { value: x }, host(x))),
+            h('option', { value: '__other' }, t('feedRelayOther'))),
       h('div', { class: 'row gap6' },
-        h('input', { type: 'text', class: 'grow', placeholder: t('feedRelayPh'), value: e.input, autocapitalize: 'none', autocomplete: 'off', spellcheck: 'false',
-          onInput: (ev) => { e.input = ev.target.value; }, onKeyDown: (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); add(); } } }),
-        h('button', { class: 'btn-sm', type: 'button', onClick: add }, t('feedRelayAdd'))),
-      h('div', { class: 'row gap6' },
-        list.length ? h('button', { class: 'btn-ghost btn-sm', type: 'button', onClick: () => { setFeedRelays(def, []); render(); } }, t('feedRelaysDefault')) : null,
+        custom ? h('button', { class: 'btn-ghost btn-sm', type: 'button', onClick: () => commit([]) }, t('feedRelaysDefault')) : null,
         h('button', { class: 'btn-sm', type: 'button', style: 'margin-left:auto', onClick: () => { ui.feedRelayEdit = null; render(); } }, t('feedRelaysDone'))));
   }
   async function shareFeed(def) {
@@ -5782,16 +5813,17 @@ export function messagesFeature(ctx) {
     s.add(first); s.add(ev.id);
   }
   const SPAM_DUPES = 5;
-  const isSpammer = (pk) => modOn('spam') && (spamBy.get(pk) || { size: 0 }).size >= SPAM_DUPES && !isFollowing(pk) && !isMe(pk);
+  const isSpammer = (pk) => modOn('spam') && (spamBy.get(pk) || { size: 0 }).size >= SPAM_DUPES && !trusted(pk) && !isMe(pk);
   const HASHTAG_MAX = 10;
   const hashtagSpam = (ev) => ev.kind === 1 && modOn('spam') && !isFollowing(ev.pubkey)
     && ((ev.tags || []).filter((x) => x[0] === 't').length > HASHTAG_MAX
       || (String(ev.content || '').match(/(^|\s)#[\p{L}\p{N}_]{2,}/gu) || []).length > HASHTAG_MAX);
   function hiddenWhy(ev) {
     if (!ev || !ev.pubkey || isMe(ev.pubkey)) return null;
-    const m = mutesNow();
-    if (m.set.has(ev.pubkey)) return 'muted';
-    if (ev.kind === 1) {
+    const bm = baselineMutes();
+    for (const m of bm ? [mutesNow(), bm] : [mutesNow()]) {
+      if (m.set.has(ev.pubkey)) return 'muted';
+      if (ev.kind !== 1) continue;
       if (m.threads.size && m.threads.has(rootIdOf(ev))) return 'thread';
       const text = String(ev.content || '').toLowerCase();
       if (m.words.length && m.words.some((w) => text.includes(w))) return 'word';
@@ -5801,14 +5833,14 @@ export function messagesFeature(ctx) {
       }
     }
     if (reportsNow().mine.has(ev.id)) return 'reported';
-    if (!isFollowing(ev.pubkey)) {
+    if (!trusted(ev.pubkey)) {
       if (isSpammer(ev.pubkey) || (modOn('spam') && spamDup.has(ev.id))) return 'spam';
       if (hashtagSpam(ev)) return 'hashtags';
     }
     return null;
   }
   const hidden = (ev) => !!hiddenWhy(ev);
-  const hiddenPk = (pk) => !!pk && !isMe(pk) && (isMuted(pk) || isSpammer(pk) || reportsNow().mine.has(pk));
+  const hiddenPk = (pk) => !!pk && !isMe(pk) && (isMuted(pk) || (baselineMutes() || { set: new Set() }).set.has(pk) || isSpammer(pk) || reportsNow().mine.has(pk));
   const visiblePks = (pks) => [...(pks || [])].filter((pk) => !hiddenPk(pk));
 
   // ---- reports (NIP-56 kind 1984) from the people you follow --------------
@@ -5834,9 +5866,8 @@ export function messagesFeature(ctx) {
     try { wallet.saveFeatureState(REPORTS, { ev: toObj(r.ev), pk: toObj(r.pk), mine: [...r.mine].slice(-500), at: r.at }); } catch {}
   }
   // A report typed 'other' says nothing anyone can act on and is ignored.
-  function noteReport(ev) {
-    const r = reportsNow();
-    const mine = myPubkeys().includes(ev.pubkey);
+  function noteReport(ev) { indexReport(reportsNow(), ev, myPubkeys().includes(ev.pubkey)); }
+  function indexReport(r, ev, mine) {
     const hex = (v) => /^[0-9a-f]{64}$/.test(v || '');
     let es = 0;
     for (const x of ev.tags || []) {
@@ -5880,16 +5911,78 @@ export function messagesFeature(ctx) {
   // folds everything they write, so it takes two follows to agree — one
   // mis-tapped "impersonation" on a well-known key used to fold their whole
   // timeline for everyone who followed the tapper.
+  // ---- a reader with no web of trust borrows coinos's -------------------
+  // A visitor, or a wallet that follows almost nobody yet, has no follows
+  // whose flags could fold anything (and a visitor no mute list at all), so
+  // the public feeds would show the relays raw. They get the moderation the
+  // coinos account gets: its mute list (visitors) and its follows' reports,
+  // read from the relays every few hours and kept on the device for every
+  // wallet. A wallet's own mutes always count too.
+  const CURATOR_PK = '98ae4da926c471c23fd12d1ebdd5839ba82917baa618e184e0c9916d93dcf4f7';
+  const BASELINE_KEY = 'coinos-mod-baseline';
+  const BASELINE_MS = 6 * 3600_000;
+  const BASELINE_MIN_FOLLOWS = 5;
+  let baseline = null; // { follows: Set, mutes (withSets), ev: Map, pk: Map, mine: Set, at }
+  let baselineSync = null;
+  function baselineNow() {
+    if (!baseline) {
+      let b = null;
+      try { b = JSON.parse(localStorage.getItem(BASELINE_KEY) || 'null'); } catch {}
+      const toMap = (o) => new Map(Object.entries(o || {}).map(([k, v]) => [k, new Set(v)]));
+      baseline = { follows: new Set((b && b.follows) || []), mutes: withSets({ tags: (b && b.mutes) || [], priv: [], content: '', at: 0 }),
+        ev: toMap(b && b.ev), pk: toMap(b && b.pk), mine: new Set(), at: (b && b.at) || 0 };
+    }
+    return baseline;
+  }
+  const usingBaseline = () => !mePk() || followsNow().set.size < BASELINE_MIN_FOLLOWS;
+  const baselineMutes = () => (mePk() ? null : baselineNow().mutes);
+  // someone a web of trust vouches for (the reader's own, or the borrowed
+  // one while their own is thin): exempt from the heuristics
+  const trusted = (pk) => isFollowing(pk) || (usingBaseline() && baselineNow().follows.has(pk));
+  async function syncBaseline() {
+    const b = baselineNow();
+    if (baselineSync || Date.now() - b.at < BASELINE_MS) return baselineSync;
+    baselineSync = (async () => {
+      try {
+        const evs = await queryOn(zapRelays(), { kinds: [3, 10000], authors: [CURATOR_PK] }, 6000).catch(() => []);
+        const newest = (k) => (evs || []).filter((e) => e.kind === k).sort((x, y) => y.created_at - x.created_at)[0];
+        const k3 = newest(3), k10 = newest(10000);
+        if (!k3) return; // the relays were away: keep what we have, ask again soon
+        const follows = hexList(k3.tags.filter((x) => x[0] === 'p').map((x) => x[1]));
+        const muteTags = k10 ? (k10.tags || []).filter((x) => ['p', 't', 'word', 'e'].includes(x[0])).slice(0, 2000) : b.mutes.tags;
+        const authors = [CURATOR_PK, ...follows].slice(0, FEED_AUTHORS_MAX);
+        const from = new Set(authors);
+        const r = { ev: new Map(), pk: new Map(), mine: new Set() };
+        await fetchRelayLists(authors);
+        const got = await Promise.all(outboxPlan(authors).flatMap(({ relays, authors: a }) => {
+          const chunks = [];
+          for (let i = 0; i < a.length; i += REQ_AUTHORS) chunks.push(a.slice(i, i + REQ_AUTHORS));
+          return chunks.map((chunk) => queryOn(relays, { kinds: [1984], authors: chunk, limit: 500 }, 5000).catch(() => []));
+        }));
+        for (const ev of got.flat()) if (ev && ev.kind === 1984 && from.has(ev.pubkey)) indexReport(r, ev, false);
+        baseline = { follows: new Set(follows), mutes: withSets({ tags: muteTags, priv: [], content: '', at: k10 ? k10.created_at : 0 }), ev: r.ev, pk: r.pk, mine: new Set(), at: Date.now() };
+        const toObj = (m) => Object.fromEntries([...m.entries()].slice(-1500).map(([k, v]) => [k, [...v].slice(0, 50)]));
+        try { localStorage.setItem(BASELINE_KEY, JSON.stringify({ follows, mutes: muteTags, ev: toObj(r.ev), pk: toObj(r.pk), at: baseline.at })); } catch {}
+        scheduleRepaint();
+      } catch {} finally { baselineSync = null; }
+    })();
+    return baselineSync;
+  }
   const PERSON_REPORTS_MIN = 2;
   function reportsOn(ev) {
     if (!ev || !ev.id || !modOn('reports') || isMe(ev.pubkey)) return null;
-    const r = reportsNow();
-    const f = followsNow().set;
-    const onPost = new Set(), onPerson = new Set();
-    for (const pk of r.ev.get(ev.id) || []) if (f.has(pk) && pk !== ev.pubkey) onPost.add(pk);
-    for (const pk of r.pk.get(ev.pubkey) || []) if (f.has(pk) && pk !== ev.pubkey) onPerson.add(pk);
-    if (!onPost.size && onPerson.size < PERSON_REPORTS_MIN) return null;
-    return [...new Set([...onPost, ...onPerson])];
+    const flagsFrom = (r, f) => {
+      const onPost = new Set(), onPerson = new Set();
+      for (const pk of r.ev.get(ev.id) || []) if (f.has(pk) && pk !== ev.pubkey) onPost.add(pk);
+      for (const pk of r.pk.get(ev.pubkey) || []) if (f.has(pk) && pk !== ev.pubkey) onPerson.add(pk);
+      if (!onPost.size && onPerson.size < PERSON_REPORTS_MIN) return null;
+      return [...new Set([...onPost, ...onPerson])];
+    };
+    const own = mePk() ? flagsFrom(reportsNow(), followsNow().set) : null;
+    if (own) return own;
+    if (!usingBaseline()) return null;
+    const b = baselineNow();
+    return flagsFrom(b, b.follows);
   }
   // A flagged post, folded: who flagged it, and a tap to see it anyway.
   function foldedRow(ev, by) {
@@ -7233,6 +7326,7 @@ export function messagesFeature(ctx) {
   function feedView() {
     syncFollowSets().catch(() => {}); // throttled inside
     syncReports().catch(() => {}); // likewise
+    if (usingBaseline()) syncBaseline()?.catch?.(() => {}); // a reader without a web of trust borrows one
     // Back/Forward restored another feed's id: catch up before painting
     if (ui.feedId && ui.feedId !== curFeedId && feedDef(ui.feedId)) selectFeed(ui.feedId);
     const c = feedNow();

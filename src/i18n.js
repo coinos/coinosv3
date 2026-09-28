@@ -257,6 +257,8 @@ const STR = {
     feedRelaysOutbox: 'Right now each person is read from the relays they publish to.',
     feedRelayPh: 'wss://relay.example.com',
     feedRelayAdd: 'Add',
+    feedRelayOther: 'Other…',
+    feedRelayPick: 'Add a relay…',
     feedRelayBad: 'That is not a relay address.',
     feedRelaysDefault: 'Back to the usual relays',
     feedRelaysDone: 'Done',

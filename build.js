@@ -376,7 +376,7 @@ async function pageHtml({ css, staging, pwa, scriptHtml }) {
 <meta name="color-scheme" content="light dark">
 <title>${staging ? 'Coinos Staging' : 'Coinos'}</title>
 <link rel="icon" href="${FAVICON}">
-<script>try{var t=localStorage.getItem('btc-wallet-theme');if(t!=='dark'&&t!=='light')t=matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';document.documentElement.dataset.theme=t;}catch(e){}</script>
+<script>try{var t=localStorage.getItem('btc-wallet-theme');if(t!=='dark'&&t!=='light')t=matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';document.documentElement.dataset.theme=t;var m=document.querySelector('meta[name="theme-color"]');if(m)m.setAttribute('content',t==='dark'?'#15171a':'#eef0f3');}catch(e){}</script>
 ${pwa ? PWA_HEAD : ''}<style>${css}</style>
 </head>
 <body>

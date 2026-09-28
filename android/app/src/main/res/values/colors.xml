@@ -1,8 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
   <color name="ic_launcher_background">#FFFFFF</color>
-  <!-- TWA system-bar colors: match the PWA's theme_color (#15171a) so the
-       status bar isn't the androidbrowserhelper default white. -->
-  <color name="statusBarColor">#15171A</color>
-  <color name="navigationBarColor">#15171A</color>
+  <!-- TWA system-bar colors, per system theme: the page background in
+       light mode (dark icons) and the PWA's theme_color in dark mode (light
+       icons). One dark colour for both used to give white nav icons over a
+       light page under gesture navigation. -->
+  <color name="statusBarColor">#EEF0F3</color>
+  <color name="navigationBarColor">#EEF0F3</color>
+  <color name="statusBarColorDark">#15171A</color>
+  <color name="navigationBarColorDark">#15171A</color>
 </resources>

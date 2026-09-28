@@ -386,7 +386,14 @@ function resolvedTheme() {
   return 'light';
 }
 function applyTheme() {
-  try { document.documentElement.dataset.theme = resolvedTheme(); } catch {}
+  try {
+    const th = resolvedTheme();
+    document.documentElement.dataset.theme = th;
+    // the browser's status bar (a PWA, or the Android app) takes its colour
+    // from here: the page background in light, the dark theme colour in dark
+    const meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) meta.setAttribute('content', th === 'dark' ? '#15171a' : '#eef0f3');
+  } catch {}
 }
 function toggleTheme() {
   try { localStorage.setItem(THEME_KEY, resolvedTheme() === 'dark' ? 'light' : 'dark'); } catch {}

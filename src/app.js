@@ -2534,8 +2534,18 @@ function brandHeader(withLock) {
           messagesBtn(),
           settingsBtn(),
           avatarMenu())
-      : null
+      : ui.pubProf && !acc ? visitorButtons() : null
   );
+}
+// A visitor on a public page (a feed, a profile, a thread): find anyone,
+// and the way in.
+function visitorButtons() {
+  return h('div', { class: 'row gap6', style: 'align-items:center' },
+    h('button', {
+      class: 'header-msgs', title: t('searchUsers'), 'aria-label': t('searchUsers'),
+      onClick: () => { featureHook('visitorSearch'); setTimeout(() => document.querySelector('.user-search-input')?.focus(), 60); },
+    }, h('span', { class: 'hm-ico', html: '<svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.35-4.35"/></svg>' })),
+    h('button', { class: 'btn-primary btn-sm', style: 'flex-shrink:0', onClick: () => featureHook('visitorSignIn') }, t('nlSignIn')));
 }
 
 // Settings tab — view the recovery phrase (+ passphrase) again (important for

@@ -470,6 +470,7 @@ export function messagesFeature(ctx) {
   // "No identity" while soft-locked means the keys left with the lock — say
   // that, not "signer disconnected" (which reads as a nostr-login problem).
   const noIdToast = () => {
+    if (signinAsk()) return; // no wallet at all: the way in, not a toast
     // A missing signer gets the reconnect screen, not a dead-end toast —
     // logging out and back in was the workaround nobody should need.
     if (!wallet.watchOnly && hook('nostrReconnectPrompt')) return;
@@ -5557,7 +5558,7 @@ export function messagesFeature(ctx) {
   // ourselves, and an instant path (Ark) or a Lightning fallback exists.
   // Your own posts and messages too: a zap to yourself is a harmless
   // round-trip, and one bar that behaves the same everywhere beats a special case.
-  const canZapPk = (pk) => !!pk && !!(hook('arkReady') || hook('canLnZap'));
+  const canZapPk = (pk) => !!pk && !isVisitor() && !!(hook('arkReady') || hook('canLnZap')); // a visitor's tap asks them in instead
   function zapNote(pk, ev, origin) {
     const npubStr = npubOf(pk);
     const def = ctx.zapDefaultSat ? ctx.zapDefaultSat() : 0;
@@ -6238,16 +6239,16 @@ export function messagesFeature(ctx) {
     const zapMine = !!((z && z.mine) || optimistic);
     const zapLabel = zapFlying ? t('zapSending') : zapSats ? t('zapTallyTitle', { n: zapSats.toLocaleString() }) : t('zapTitle');
     return h('div', { class: 'row note-acts' },
-      btn(I_REPLY, t('msgReply'), 0, false, () => replyToNote(ev)),
+      btn(I_REPLY, t('msgReply'), 0, false, () => { if (!signinAsk()) replyToNote(ev); }),
       btn(I_BOOST, t('postBoost'), boostN, iBoosted(ev.id), () => boostNote(ev).catch(() => {})),
-      btn(I_QUOTE, t('postQuote'), 0, false, () => quoteNote(ev)),
+      btn(I_QUOTE, t('postQuote'), 0, false, () => { if (!signinAsk()) quoteNote(ev); }),
       // tap to choose how you feel about it; tap again to take it back
       btn(mineReact ? postReactNode(mineReact) : I_HEART(false), t('postLike'), likeN, !!mineReact,
-        () => { if (mineReact) unreact(ev).catch(() => {}); else { ui.reactPick = ev; render(); } }),
+        () => { if (signinAsk()) return; if (mineReact) unreact(ev).catch(() => {}); else { ui.reactPick = ev; render(); } }),
       // always in the bar — the same row of buttons on every post, so nothing
       // shifts when a wallet comes online; without one it is just the number
       btn(I_ZAP, zapLabel, zapSats ? fmtSats(zapSats) : 0, zapMine,
-        zapHold && zapHold.onClick,
+        (zapHold && zapHold.onClick) || (isVisitor() ? () => signinAsk() : null),
         'note-zap' + (zapMine ? ' zapped' : '') + (zapFlying ? ' flying' : ''),
         zapHold && { ...zapHold, onClick: undefined }),
       // who did all that: a small chevron, always in place — dimmed until
@@ -7399,7 +7400,52 @@ export function messagesFeature(ctx) {
   // The sheets a post (or a person) can open: the ⋯ menu, the reaction
   // picker, the list picker. Every screen that shows a post draws them —
   // the thread and profile pages once left the ⋯ tap doing nothing.
-  const noteOverlays = () => [noteSheet(), reactPicker(), listPickSheet(), reportSheet()];
+  const noteOverlays = () => [noteSheet(), reactPicker(), listPickSheet(), reportSheet(), signinSheet()];
+  // ---- a visitor at the action bar ---------------------------------------
+  // Reading is free; zapping, replying, reacting and following take a
+  // wallet. A visitor who taps one gets the sign-in doors right there, and
+  // the page they were on is remembered so a sign-in lands back on it.
+  const RETURN_KEY = 'coinos-after-signin';
+  const rememberReturn = () => { try { sessionStorage.setItem(RETURN_KEY, location.pathname + location.search); } catch {} };
+  function signinAsk() {
+    if (!isVisitor()) return false;
+    rememberReturn();
+    ui.signinAsk = true;
+    render();
+    return true;
+  }
+  function toFrontDoor() {
+    rememberReturn();
+    ui.signinAsk = null; ui.pubProf = null; ui.chatOpen = false; ui.msgView = null;
+    ui.userSearch = null; ui.profilePk = null; ui.profOverThread = false; ui.noteThread = null; ui.feedRelayEdit = null;
+    render();
+    try { window.scrollTo({ top: 0 }); } catch {}
+  }
+  function signinSheet() {
+    if (!ui.signinAsk) return null;
+    const close = () => { ui.signinAsk = null; render(); };
+    return h('div', { class: 'confirm-pop-backdrop', onClick: (e) => { if (e.target === e.currentTarget) close(); } },
+      h('div', { class: 'card col msg-sheet', style: 'gap:12px' },
+        h('h3', { style: 'margin:0' }, t('askSignInTitle')),
+        h('div', { class: 'small muted' }, t('askSignInBody')),
+        hook('frontDoorSignin') || h('button', { class: 'btn-primary btn-block', onClick: toFrontDoor }, t('nlSignIn')),
+        h('button', { class: 'btn-block', onClick: toFrontDoor }, t('askSignInCreate')),
+        h('button', { class: 'btn-ghost btn-block', onClick: close }, t('askNotNow'))));
+  }
+  // Back to where the sign-in was asked for, once a wallet is open.
+  function returnAfterSignin() {
+    let back = null;
+    try { back = sessionStorage.getItem(RETURN_KEY); sessionStorage.removeItem(RETURN_KEY); } catch {}
+    if (!back) return;
+    setTimeout(() => {
+      try {
+        const [path, q] = back.split('?');
+        if (/^\/feed(\/|$)/i.test(path)) { openFeedUrl(path.replace(/^\/feed\/?/i, ''), q ? '?' + q : ''); return; }
+        const pk = parseNostrPubkey(path.replace(/^\//, ''));
+        if (pk) { ui.chatOpen = false; openProfile(pk); }
+      } catch {}
+    }, 0);
+  }
   function feedView() {
     syncFollowSets().catch(() => {}); // throttled inside
     syncReports().catch(() => {}); // likewise
@@ -8899,6 +8945,7 @@ export function messagesFeature(ctx) {
           if (ui.profOverThread && ui.profilePk) return profileScreen();
           if (ui.noteThread) return threadScreen();
           if (ui.profilePk) return profileScreen();
+          if (ui.userSearch) return userSearchScreen();
           if (ui.chatOpen && ui.msgView === 'feed') return h('div', { class: 'col', style: 'gap:16px' }, ctx.brandHeader(false), feedView());
         }
         return null;
@@ -8916,7 +8963,7 @@ export function messagesFeature(ctx) {
     // The header magnifier: search anyone on nostr, results open profiles.
     userSearchAvailable() { return true; },
     openUserSearch() {
-      ui.chatOpen = false;
+      if (!isVisitor()) ui.chatOpen = false; // a visitor's feed stays underneath, for Back
       ui.profilePk = null;
       ui.userSearch = { q: '', rows: null };
       warmSearch(); // the field is about to be typed into — open the pipes
@@ -8992,6 +9039,16 @@ export function messagesFeature(ctx) {
     identitySignedInNew() { setTimeout(() => seedNewIdentity({ onlyIfNoFollows: true }), 0); return true; },
     openProfile(pk) { openProfile(pk); return true; },
     openFeedOf(pk) { openFeedOf(pk); return true; },
+    // the visitor's header: search, and the way in
+    visitorSignIn() { toFrontDoor(); return true; },
+    visitorSearch() {
+      rememberReturn();
+      ui.profilePk = null; ui.noteThread = null; ui.profOverThread = false;
+      ui.userSearch = { q: '', rows: null };
+      warmSearch();
+      render();
+      return true;
+    },
     // a new language: the curated feeds were judged in the old one
     langChanged() {
       for (const c of [...feedStates.values()]) { const d = feedDef(c.id); if (d && d.curated) dropFeedState(c.id); }
@@ -9006,6 +9063,7 @@ export function messagesFeature(ctx) {
     avatarNode(pk, cls) { return avatar(pk, cls || 'chat-avatar mini', false); },
     init() {
       const session = ++feedWarmSession;
+      returnAfterSignin(); // a visitor who signed in from a feed or profile lands back on it
       // this wallet's cached faces, from its own namespace — the keys are
       // in place now, whatever the header asked for before
       profilesWarmed = false;

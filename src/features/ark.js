@@ -2328,7 +2328,10 @@ export function arkFeature(ctx) {
             h('tbody', {}, ...spend.map((v) => {
               const f = feeNowOf(v);
               const xf = exitFeeOf(v);
-              const due = !!(v.expiryHeight && tip && v.expiryHeight - tip <= 0);
+              const due = !!(v.expiryHeight && tip && v.expiryHeight - tip <= 0) || !!v.expiryRejected;
+              // expired and under the floor: nothing can renew it, so the
+              // last column offers to give it up
+              const lost = due && v.amountSat < 330;
               const toggle = () => { sel.has(v.id) ? sel.delete(v.id) : sel.add(v.id); render(); };
               return h('tr', {
                 class: 'clickable',
@@ -2338,7 +2341,9 @@ export function arkFeature(ctx) {
                 h('td', { class: 'num' }, fmtSats(v.amountSat), h('span', { class: 'small faint' }, ' sats')),
                 h('td', { class: 'num' + (due ? ' warn' : '') }, expiresOf(v)),
                 h('td', { class: 'num' }, xf == null ? '—' : fmtSats(xf), xf == null ? null : h('span', { class: 'small faint' }, ' sats')),
-                h('td', { class: 'num' }, renewChip(f)));
+                h('td', { class: 'num' }, lost
+                  ? h('button', { class: 'btn-sm', title: t('arkCoinForgetTitle'), onClick: (e) => { e.stopPropagation(); if (mgr.forgetVtxo(v.id)) { sel.delete(v.id); toast(t('arkCoinForgotten')); render(); } } }, t('arkCoinForget'))
+                  : renewChip(f)));
             }),
             // the coins in a round: greyed, no checkbox, their column says why
             ...pendingCoins.map((v) => h('tr', { class: 'coin-renewing', style: 'opacity:.6' },
@@ -3818,9 +3823,13 @@ export function arkFeature(ctx) {
       if (!wallet.watchOnly && ark && ark.balance) {
         let expiredSat = 0;
         try { expiredSat = ark.balance().expiredSat || 0; } catch {}
-        if (expiredSat > 0) lines.push({
+        // Expired dust (under the 330-sat floor) cannot be renewed or exited
+        // by anyone: no red warning over 21 sats, a quiet line and a Forget
+        // button on the Manage page instead.
+        if (expiredSat >= 330) lines.push({
           text: t('arkExpiredNotice', { amount: fmtSats(expiredSat) + ' sats' }), err: true, manage: true,
         });
+        else if (expiredSat > 0) lines.push({ text: t('arkExpiredDust', { amount: fmtSats(expiredSat) + ' sats' }), manage: true });
       }
       const depthNotice = exitDepthNotice();
       if (depthNotice) lines.push({ text: depthNotice, manage: true });

@@ -362,6 +362,21 @@ export class ArkManager {
     return true;
   }
 
+  // Give up a coin that has expired and is too small to renew (under the
+  // 330-sat output floor) or that the server has refused as expired: it is
+  // the server's now, in effect. Held as spent, quietly, so it stops
+  // counting and stops warning.
+  forgetVtxo(id) {
+    const v = this._vtxo(id);
+    if (!v || v.state !== 'spendable') return false;
+    const tip = this._tipH || 0;
+    if (!(v.expiryRejected || (tip && v.expiryHeight && v.expiryHeight <= tip))) return false;
+    v.state = 'spent';
+    v.forgotten = true;
+    this._save();
+    return true;
+  }
+
   balance() {
     const tip = this._tipH || 0;
     const sum = (st) => this.state.vtxos

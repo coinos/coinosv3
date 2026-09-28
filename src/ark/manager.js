@@ -1989,6 +1989,23 @@ export class ArkManager {
     const inputRecs = action.inputIds.map((id) => this._vtxo(id));
 
     if (action.step === 'created') {
+      // A set the round would refuse anyway is retired here, not resubmitted
+      // every sync: an input past its expiry (only the server's backstop can
+      // renew it now), or an output the fee leaves under the 330-sat dust
+      // floor (a 21-sat coin with a 150-sat fee sat "in progress" for days).
+      // Nothing was spent, so the inputs go back to spendable.
+      const tip = this._tipH || (await this.chain.tipHeight().catch(() => 0));
+      const inSat = inputRecs.reduce((n, v) => n + (v ? v.amountSat : 0), 0);
+      const expired = inputRecs.some((v) => v && v.expiryHeight && tip && v.expiryHeight <= tip);
+      if (expired || inSat - (action.feeSat || 0) < 330 || inputRecs.some((v) => !v)) {
+        for (const v of inputRecs) if (v && v.state === 'pending') v.state = 'spendable';
+        action.step = 'failed';
+        action.superseded = true; // no row: the renewal never began
+        action.lastError = expired ? 'an input has expired: only the server can renew it now'
+          : inputRecs.some((v) => !v) ? 'an input is no longer held' : 'the fee leaves less than the 330-sat minimum';
+        this._save();
+        return;
+      }
       const inputBytes = inputRecs.map((v) => vtxoBytesFromStr(v.bytes));
       await registerVtxoTransactions(this.arkUrl, inputBytes);
       let unlockHash;

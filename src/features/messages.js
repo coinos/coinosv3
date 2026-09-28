@@ -9088,6 +9088,13 @@ export function messagesFeature(ctx) {
     init() {
       const session = ++feedWarmSession;
       returnAfterSignin(); // a visitor who signed in from a feed or profile lands back on it
+      // /feed opened before the wallet restored made a visitor's session copy
+      // of Popular; with the wallet here, the built-in one takes over (two
+      // Popular chips otherwise)
+      if (adhocFeeds.has('all:visitor')) {
+        adhocFeeds.delete('all:visitor'); dropFeedState('all:visitor');
+        if (curFeedId === 'all:visitor') { ui.feedId = EVERYTHING; curFeedId = EVERYTHING; }
+      }
       // this wallet's cached faces, from its own namespace — the keys are
       // in place now, whatever the header asked for before
       profilesWarmed = false;

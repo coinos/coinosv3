@@ -5610,8 +5610,20 @@ export function messagesFeature(ctx) {
   // the main action, zapping this note with the new amount the second.
   function openZapSettings(pk, id, origin) {
     const cur = ctx.zapDefaultSat ? ctx.zapDefaultSat() : 0;
-    ui.zapSetup = { pk, npub: npubOf(pk), eventId: id, amount: String(cur || 21), origin, edit: true, sound: zapSoundOn() };
+    let scrollY = 0; try { scrollY = window.scrollY || 0; } catch {}
+    // the reader's place in the feed, to return to: the settings screen
+    // replaces the page, and the page comes back at its top otherwise
+    ui.zapSetup = { pk, npub: npubOf(pk), eventId: id, amount: String(cur || 21), origin, edit: true, sound: zapSoundOn(), scrollY };
     render();
+  }
+  // Leave the zap settings the way they were opened: the page repaints,
+  // then the window is put back where the reader was (the feed's windowing
+  // mounts the rows for that place on the scroll).
+  function closeZapSetup() {
+    const y = ui.zapSetup && ui.zapSetup.scrollY;
+    ui.zapSetup = null;
+    render();
+    if (y) { try { window.scrollTo(0, y); } catch {} }
   }
 
   // First ⚡ tap ever: pick the amount one time, then every zap is one tap.
@@ -5628,8 +5640,7 @@ export function messagesFeature(ctx) {
       const n = saved();
       if (!n) return;
       const { pk, npub, eventId } = s;
-      ui.zapSetup = null;
-      render();
+      closeZapSetup();
       markZapPending(eventId, n, s.origin);
       if (!hook('zapNpub', pk, npub, eventId, n) && !hook('lnZapNpub', pk, npub, eventId, n)) {
         settleZap(eventId, false);
@@ -5640,9 +5651,8 @@ export function messagesFeature(ctx) {
     const saveOnly = () => {
       const n = saved();
       if (!n) return;
-      ui.zapSetup = null;
       toast('⚡ ' + t('zapAmountSaved', { n: n.toLocaleString() }));
-      render();
+      closeZapSetup();
     };
     return h('div', { class: 'col', style: 'gap:16px' },
       ctx.brandHeader(false),
@@ -5659,7 +5669,7 @@ export function messagesFeature(ctx) {
           ? [h('button', { class: 'btn-primary btn-block', onClick: saveOnly }, t('save')),
             h('button', { class: 'btn-ghost btn-block', onClick: saveAndZap }, t('zapSetupSave'))]
           : h('button', { class: 'btn-primary btn-block', onClick: saveAndZap }, t('zapSetupSave'))),
-      h('button', { class: 'btn-ghost btn-block', onClick: () => { ui.zapSetup = null; render(); } }, t('back')));
+      h('button', { class: 'btn-ghost btn-block', onClick: closeZapSetup }, t('back')));
   }
 
   // One post as a feed row (avatar · name · time · body), twitter/jumble

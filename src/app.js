@@ -730,7 +730,7 @@ wallet.subscribe(scheduleRender);
 // lightbox: a full-screen photo is a place too — the phone's Back must close
 // it, not pop the screen under it (which once walked a viewer straight back
 // to the start page, so the photo's × then looked like a logout).
-const NAV_FIELDS = ['screen', 'tab', 'txDetail', 'arkMoveDetail', 'arkReconDetail', 'arkExitDetail', 'giftDetail', 'bump', 'giftMode', 'claimStep', 'chatOpen', 'msgView', 'msgCommunity', 'msgPeer', 'profilePk', 'profEdit', 'profEditFilled', 'profOverThread', 'settingsPage', 'nameEditOpen', 'noteThread', 'userSearch', 'zapSetup', 'hatShop', 'lightbox'];
+const NAV_FIELDS = ['screen', 'tab', 'txDetail', 'arkMoveDetail', 'arkReconDetail', 'arkExitDetail', 'giftDetail', 'bump', 'giftMode', 'claimStep', 'chatOpen', 'msgView', 'feedId', 'msgCommunity', 'msgPeer', 'profilePk', 'profEdit', 'profEditFilled', 'profOverThread', 'settingsPage', 'nameEditOpen', 'noteThread', 'userSearch', 'zapSetup', 'hatShop', 'lightbox'];
 function navSnapshot() {
   const s = {};
   for (const f of NAV_FIELDS) s[f] = ui[f] ?? null;
@@ -762,6 +762,8 @@ let restoringHistory = false; // true while applying a popstate (suppresses push
 const OWN_PATH = /^\/(nevent|note|npub)1[a-z0-9]+\/?$/i;
 function navUrl(snap) {
   try {
+    const fp = featureHook('navPath', snap); // a feed with a public address
+    if (fp) return fp;
     const th = snap.noteThread;
     if (snap.profilePk && (snap.profOverThread || !th)) return '/' + npubOf(snap.profilePk);
     if (th && th.focusId) {

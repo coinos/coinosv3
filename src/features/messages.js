@@ -529,7 +529,8 @@ export function messagesFeature(ctx) {
     if (repaintTimer) return;
     repaintTimer = setTimeout(() => {
       repaintTimer = null;
-      if (ui.screen === 'wallet') renderThreadStable();
+      // a visitor's public page (a profile, a thread, a feed) repaints too
+      if (ui.screen === 'wallet' || ui.pubProf) renderThreadStable();
     }, 80);
   };
 
@@ -1825,10 +1826,19 @@ export function messagesFeature(ctx) {
     // reserved app routes are never usernames — /chat is the public
     // community page (app.js routes it), and eating it here rewrote the URL
     // to / before that route ever saw it; a note reference is its own link
-    if (m && (['chat', 'pos'].includes(m[1]) || /^(note|nevent|naddr)1/i.test(m[1]))) return null;
+    if (m && (['chat', 'pos', 'feed'].includes(m[1]) || /^(note|nevent|naddr)1/i.test(m[1]))) return null;
     return m ? m[1] : null;
   })();
   if (urlProfile) { try { history.replaceState(null, '', '/'); } catch {} }
+  // /feed/<npub> is the timeline that person sees (their follows), /feed/<naddr>
+  // a follow pack or list, /feed/t/<tag> a topic, /feed?p=…&t=…&pack=… any mix.
+  // Public content: a visitor with no wallet reads it over the front door.
+  const urlFeed = (() => {
+    if (typeof location === 'undefined' || urlInvite) return null;
+    const m = location.pathname.match(/^\/feed(?:\/(.+?))?\/?$/i);
+    return m ? { path: m[1] || '', search: location.search || '' } : null;
+  })();
+  if (urlFeed) { try { history.replaceState(null, '', '/'); } catch {} }
   // /note1… and /nevent1… open the thread the same way — the NIP-89 handler
   // event for coinos points njump and friends here for notes, /<npub> for
   // people. Public content: shown over the front door without a wallet.
@@ -1856,6 +1866,15 @@ export function messagesFeature(ctx) {
   // visitor with no wallet the profile renders as a truly public page over
   // the unlock screen (ui.pubProf gates that surface) — nostr profiles are
   // public data, and Back lands on the app's own front door.
+  if (urlFeed) {
+    ui.pubProf = true; ui.chatOpen = true; ui.msgView = 'feed';
+    setTimeout(() => {
+      if (openFeedUrl(urlFeed.path, urlFeed.search)) return;
+      ui.pubProf = null; ui.chatOpen = false; ui.msgView = null; // not a feed we know: the front door
+      render();
+    }, 0);
+  }
+
   if (urlProfile) {
     // Claim the first paint synchronously: these are set before the boot
     // render, so the visitor sees a profile shell from the first frame —
@@ -3889,7 +3908,7 @@ export function messagesFeature(ctx) {
   const feedDisk = () => typeof wallet.featureStateKey === 'function'
     ? createFeedCache(localStorage, wallet.featureStateKey(FEED_CACHE)) : null;
   const saveFeedCache = (c) => {
-    if (adhocFeeds.has(c.id)) return; // a session feed leaves nothing behind
+    if (adhocFeeds.has(c.id) || isVisitor()) return; // a session feed leaves nothing behind
     try {
       const notes = c.notes.slice(0, FEED_STORE);
       const disk = feedDisk();
@@ -4170,12 +4189,15 @@ export function messagesFeature(ctx) {
       }
     }
   }
-  function switchFeed(id) {
+  // Make a feed the current one (no paint): Back/Forward through the
+  // history restores ui.feedId and the view catches up from here.
+  function selectFeed(id) {
     if (!feedDef(id)) return;
     if (id !== curFeedId) {
       curFeedId = id;
       if (!adhocFeeds.has(id)) { try { localStorage.setItem(FEED_LS, id); } catch {} }
     }
+    ui.feedId = id;
     stopFeedWatch();
     const c = feedNow();
     c.unseen = 0; c.shown = FEED_PAGE;
@@ -4184,8 +4206,110 @@ export function messagesFeature(ctx) {
     if (!c.booting) c.presentations.clear();
     watchFeed();
     refreshFeed({}, c);
+  }
+  function switchFeed(id) {
+    if (!feedDef(id)) return;
+    selectFeed(id);
     try { window.scrollTo({ top: 0 }); } catch {}
     render();
+  }
+  // ---- feeds anyone can open --------------------------------------------
+  // Every kind of feed has a URL, and a visitor with no wallet can read it.
+  const isVisitor = () => !wallet.mnemonic && !wallet.xpub && !wallet.xprv;
+  const showFeed = (id) => {
+    ui.userSearch = null; ui.profilePk = null; ui.profOverThread = false; ui.noteThread = null; ui.feedEdit = null;
+    ui.chatOpen = true; ui.msgView = 'feed';
+    if (ui.screen === 'wallet') ui.pubProf = null; // the wallet's chrome owns it
+    switchFeed(id);
+  };
+  const hexList = (pks) => [...new Set(pks.filter((pk) => /^[0-9a-f]{64}$/i.test(pk || '')).map((pk) => pk.toLowerCase()))];
+  // The timeline someone else sees: their follow list, read from the relays,
+  // becomes the authors of a feed for this session.
+  function openFeedOf(pk, relays = []) {
+    const id = 'of:' + pk;
+    let def = adhocFeeds.get(id);
+    if (!def) {
+      def = { id, name: '', follows: false, authors: [], packs: [], topics: [], of: pk, ofAt: 0 };
+      adhocFeeds.set(id, def);
+      liveProfileOf(pk); // their name and face for the title
+      queryOn([...new Set([...relays, ...PROFILE_RELAYS, ...NOTE_RELAYS])], { kinds: [3], authors: [pk] }, 6000)
+        .catch(() => [])
+        .then((evs) => {
+          const newest = (evs || []).sort((a, b) => b.created_at - a.created_at)[0];
+          def.authors = newest ? hexList(newest.tags.filter((x) => x[0] === 'p').map((x) => x[1])) : [];
+          def.ofAt = Date.now();
+          feedStates.delete(id); // whatever was built before the list was known
+          if (curFeedId === id) selectFeed(id);
+          scheduleRepaint();
+        });
+    }
+    showFeed(id);
+  }
+  // A follow pack (or someone's follow set: a pack by another name).
+  function openPackFeed(p) {
+    const id = 'pack:' + packKey(p);
+    if (!adhocFeeds.has(id)) adhocFeeds.set(id, { id, name: (packOf(p) || {}).title || t('feedPackName'), follows: false, authors: [], packs: [p], topics: [] });
+    const def = adhocFeeds.get(id);
+    fetchPack(p).then((got) => {
+      if (got && got.title) def.name = got.title;
+      const c = feedStates.get(id);
+      if (c) { c.at = 0; if (c === feed) refreshFeed({ live: false }, c); else feedStates.delete(id); }
+      scheduleRepaint();
+    }).catch(() => {});
+    showFeed(id);
+  }
+  // Any mix of people, packs and topics, carried in the URL itself.
+  function openQueryFeed(q) {
+    const authors = hexList((q.get('p') || '').split(',').map((x) => parseNostrPubkey(x.trim()) || ''));
+    const topics = [...new Set((q.get('t') || '').split(',').map(normTopic).filter(Boolean))];
+    const packs = (q.get('pack') || '').split(',').map((x) => parsePackLink(x.trim())).filter(Boolean);
+    if (!authors.length && !topics.length && !packs.length) return false;
+    const sig = JSON.stringify([authors, topics, packs.map(packKey)]);
+    let hsh = 5381; for (let i = 0; i < sig.length; i++) hsh = ((hsh * 33) ^ sig.charCodeAt(i)) >>> 0;
+    const id = 'url:' + hsh.toString(36);
+    if (!adhocFeeds.has(id)) adhocFeeds.set(id, { id, name: (q.get('name') || '').trim().slice(0, 40) || t('feedSharedName'), follows: false, authors, packs, topics });
+    showFeed(id);
+    return true;
+  }
+  function openFeedUrl(path, search) {
+    if (!path) { try { return openQueryFeed(new URLSearchParams(search)); } catch { return false; } }
+    if (/^t\//i.test(path)) { const tag = normTopic(decodeURIComponent(path.slice(2))); if (!tag) return false; openTopicFeed(tag); return true; }
+    const pk = parseNostrPubkey(path);
+    if (pk) { let relays = []; try { relays = parseNostrRef(path.toLowerCase())?.relays || []; } catch {} openFeedOf(pk, relays); return true; }
+    const pack = /^naddr1/i.test(path) ? parsePackLink(path) : null;
+    if (pack) { openPackFeed(pack); return true; }
+    return false;
+  }
+  // The URL a feed answers to. `share` also names the built-in Following
+  // feed (as this person's timeline); the address bar shows only feeds that
+  // came from a URL, so a saved feed is never doubled by its own link.
+  function feedPath(def, { share = false } = {}) {
+    if (!def) return null;
+    if (def.builtin) return share && mePk() ? '/feed/' + npubOf(mePk()) : null;
+    if (def.of) return '/feed/' + npubOf(def.of);
+    const authors = def.authors || [], topics = feedTopics(def), packs = def.packs || [];
+    if (!authors.length && !packs.length && topics.length === 1) return '/feed/t/' + encodeURIComponent(topics[0]);
+    if (!authors.length && !topics.length && packs.length === 1) {
+      const p = packs[0];
+      const n = packNaddr(`${p.kind || PACK_KIND}:${p.pk}:${p.d}`);
+      if (n) return '/feed/' + n;
+    }
+    if (!authors.length && !packs.length && !topics.length) return null;
+    const q = new URLSearchParams();
+    if (authors.length) q.set('p', authors.map((pk) => npubOf(pk)).join(','));
+    if (topics.length) q.set('t', topics.join(','));
+    if (packs.length) q.set('pack', packs.map((p) => packNaddr(`${p.kind || PACK_KIND}:${p.pk}:${p.d}`)).filter(Boolean).join(','));
+    if (def.name && !def.builtin) q.set('name', def.name);
+    return '/feed?' + q.toString();
+  }
+  async function shareFeed(def) {
+    const path = feedPath(def, { share: true });
+    if (!path) return;
+    const url = location.origin + path;
+    try {
+      if (navigator.share) await navigator.share({ url });
+      else { await navigator.clipboard.writeText(url); toast(t('copied')); }
+    } catch {}
   }
   // A follow list that changed means every feed built on it has the wrong
   // authors — the one on screen is rebuilt in place, not offered behind the
@@ -6844,6 +6968,8 @@ export function messagesFeature(ctx) {
                   class: 'btn-ghost', style: 'flex-shrink:0', title: t('listAddTo'), 'aria-label': t('listAddTo'),
                   onClick: () => { ui.listPick = pk; render(); },
                 }, '\u2630') : null)),
+      // The timeline they see: their follows as a feed, with a public URL.
+      mine ? null : h('button', { class: 'btn-ghost btn-block', onClick: () => openFeedOf(pk) }, t('profTheirFeed')),
       // The lists they curate (follow sets and packs): each opens as a feed.
       (() => {
         const c = listsFor(pk);
@@ -7024,9 +7150,12 @@ export function messagesFeature(ctx) {
   function feedView() {
     syncFollowSets().catch(() => {}); // throttled inside
     syncReports().catch(() => {}); // likewise
+    // Back/Forward restored another feed's id: catch up before painting
+    if (ui.feedId && ui.feedId !== curFeedId && feedDef(ui.feedId)) selectFeed(ui.feedId);
     const c = feedNow();
     c.opened = true;
     const def = feedDef();
+    const visitor = isVisitor();
     const authors = feedAuthors(def);
     const hasQuery = feedHasQuery(def);
     prepareFeedAhead(c);
@@ -7059,19 +7188,34 @@ export function messagesFeature(ctx) {
     return h('div', { class: 'card col chat-page', style: 'gap:10px' },
         h('div', { 'data-key': 'feed-notice', style: 'display:contents' }, pill),
         h('div', { class: 'row gap6', style: 'align-items:center' },
-          backBtn(() => { ui.msgView = 'home'; stopFeedWatch(); render(); }),
-          h('h3', { style: 'margin:0;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' }, def.builtin ? t('feedTitle') : def.name),
-          def.builtin ? null
+          backBtn(() => {
+            stopFeedWatch();
+            if (visitor) { ui.chatOpen = false; ui.msgView = null; ui.pubProf = null; } else ui.msgView = 'home';
+            render();
+          }),
+          def.of ? avatar(def.of, 'chat-avatar mini', true) : null,
+          h('h3', { style: 'margin:0;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' },
+            def.builtin ? t('feedTitle') : def.of ? t('feedOfTitle', { name: displayName(def.of) }) : def.name),
+          def.builtin || visitor ? null
             : adhocFeeds.has(def.id)
               ? h('button', { class: 'btn-sm', onClick: () => openFeedEditor(def) }, t('feedSaveAdhoc'))
               : h('button', { class: 'btn-sm', title: t('feedEdit'), 'aria-label': t('feedEdit'), onClick: () => openFeedEditor(def) }, '\u270e'),
-          h('button', {
-            class: 'btn-sm', style: 'margin-left:auto;flex-shrink:0',
+          feedPath(def, { share: true })
+            ? h('button', { class: 'btn-sm', title: t('feedShare'), 'aria-label': t('feedShare'), style: 'margin-left:auto;flex-shrink:0', onClick: () => shareFeed(def),
+                html: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:block"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.6" y1="13.5" x2="15.4" y2="17.5"/><line x1="15.4" y1="6.5" x2="8.6" y2="10.5"/></svg>' })
+            : null,
+          visitor ? null : h('button', {
+            class: 'btn-sm', style: (feedPath(def, { share: true }) ? '' : 'margin-left:auto;') + 'flex-shrink:0',
             onClick: () => { ui.profCompose = ui.profCompose == null ? (draftFor(POST_DRAFT) || '') : null; render(); },
           }, t('profNewPost'))),
-        feedChips(),
-        postComposer(),
-        !hasQuery
+        visitor ? null : feedChips(),
+        visitor ? null : postComposer(),
+        def.of && !def.ofAt
+          ? h('div', { class: 'row gap6', style: 'justify-content:center;align-items:center;padding:12px 0' },
+              h('span', { class: 'spinner sm' }), h('span', { class: 'small muted' }, t('feedOfLoading')))
+        : def.of && !hasQuery
+          ? h('div', { class: 'small muted', style: 'text-align:center;padding:12px 0' }, t('feedNoFollowsOf'))
+        : !hasQuery
           ? def.builtin
             ? h('div', { class: 'col', style: 'gap:8px' },
                 h('div', { class: 'small muted' }, t('feedNoFollows')),
@@ -8493,6 +8637,7 @@ export function messagesFeature(ctx) {
           if (ui.profOverThread && ui.profilePk) return profileScreen();
           if (ui.noteThread) return threadScreen();
           if (ui.profilePk) return profileScreen();
+          if (ui.chatOpen && ui.msgView === 'feed') return h('div', { class: 'col', style: 'gap:16px' }, ctx.brandHeader(false), feedView());
         }
         return null;
       }
@@ -8584,6 +8729,12 @@ export function messagesFeature(ctx) {
     // nobody yet — an established nostr user keeps their own list.
     identitySignedInNew() { setTimeout(() => seedNewIdentity({ onlyIfNoFollows: true }), 0); return true; },
     openProfile(pk) { openProfile(pk); return true; },
+    openFeedOf(pk) { openFeedOf(pk); return true; },
+    navPath(snap) {
+      if (!snap || !snap.chatOpen || snap.msgView !== 'feed' || snap.profilePk || snap.noteThread || snap.userSearch) return null;
+      const def = feedDef(snap.feedId || curFeedId);
+      return def && adhocFeeds.has(def.id) ? feedPath(def) : null;
+    },
     avatarNode(pk, cls) { return avatar(pk, cls || 'chat-avatar mini', false); },
     init() {
       const session = ++feedWarmSession;

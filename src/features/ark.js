@@ -2176,7 +2176,7 @@ export function arkFeature(ctx) {
     const inRound = new Set(renewing.flatMap((a) => a.inputIds || []));
     const pendingCoins = ((st && st.vtxos) || []).filter((v) => v.state === 'pending' && inRound.has(v.id));
     const tip = (mgr && mgr._tipH) || 0;
-    const back = () => { ui.arkCoinsPage = null; ui.arkCoinsSel = null; render(); };
+    const back = () => ctx.goBack(() => { ui.arkCoinsPage = null; ui.arkCoinsSel = null; }); // the page is a history entry now
     if (!spend.length && !pendingCoins.length) { ui.arkCoinsPage = null; return null; } // nothing left to manage
     if (!mgr) connectArk().then(() => render()).catch(() => {});
     const totalSat = spend.reduce((n, v) => n + v.amountSat, 0);
@@ -3349,7 +3349,7 @@ export function arkFeature(ctx) {
       .filter((a) => a.type === 'exit' && !['done', 'failed'].includes(a.step))
       .reduce((n, a) => n + a.amountSat, 0);
     const exits = arkExitStatusLines();
-    const back = () => { ui.arkExitPage = null; ui.arkError = ''; render(); };
+    const back = () => ctx.goBack(() => { ui.arkExitPage = null; ui.arkError = ''; });
     return h('div', { class: 'col', style: 'gap:16px' },
       h('div', { class: 'card col', style: 'gap:8px' },
         h('h3', { class: 'row gap6', style: 'align-items:center;margin:0' }, h('span', { html: ARK_ICON(18) }), t('arkExitPageTitle')),

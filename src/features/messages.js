@@ -5598,7 +5598,10 @@ export function messagesFeature(ctx) {
   function zapNote(pk, ev, origin) {
     const npubStr = npubOf(pk);
     const def = ctx.zapDefaultSat ? ctx.zapDefaultSat() : 0;
-    if (!def) { ui.zapSetup = { pk, npub: npubStr, eventId: ev.id, amount: '21', origin }; render(); return; }
+    if (!def) { // the first tap ever sets the amount; the reader's place is kept for the way back
+      let scrollY = 0; try { scrollY = window.scrollY || 0; } catch {}
+      ui.zapSetup = { pk, npub: npubStr, eventId: ev.id, amount: '21', origin, scrollY }; render(); return;
+    }
     markZapPending(ev.id, def, origin); // strike now; settlement only corrects the tally
     if (!hook('zapNpub', pk, npubStr, ev.id, def) && !hook('lnZapNpub', pk, npubStr, ev.id, def)) {
       settleZap(ev.id, false);

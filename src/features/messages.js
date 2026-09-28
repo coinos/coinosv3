@@ -678,8 +678,27 @@ export function messagesFeature(ctx) {
   const THUMB_VERSION = 1;
   const thumbing = new Set();
   const thumbQueue = new Map();
+  // Hosts that serve pictures without CORS headers (primal's blossom,
+  // cdn.nostrcheck.me, most personal sites): the browser refuses the bytes to
+  // a fetch and prints a red line per face while the <img> paints fine. No
+  // thumbnail is to be had there, so after a second quick refusal the host
+  // is left alone for a week rather than asked about every new face.
+  const NOCORS_KEY = 'coinos-thumb-nocors';
+  const NOCORS_MS = 7 * 24 * 3600_000;
+  let noCors = null; // host -> { n, until }
+  const noCorsNow = () => { if (!noCors) { try { noCors = JSON.parse(localStorage.getItem(NOCORS_KEY) || '{}'); } catch { noCors = {}; } } return noCors; };
+  const hostOf = (u) => { try { return new URL(u).hostname; } catch { return ''; } };
+  const noCorsHost = (u) => { const h = noCorsNow()[hostOf(u)]; return !!h && h.n >= 2 && Date.now() < h.until; };
+  const noteNoCors = (u) => {
+    const host = hostOf(u); if (!host) return;
+    const m = noCorsNow(); const cur = m[host] || { n: 0 };
+    m[host] = { n: cur.n + 1, until: Date.now() + NOCORS_MS };
+    if (Object.keys(m).length > 200) delete m[Object.keys(m)[0]];
+    try { localStorage.setItem(NOCORS_KEY, JSON.stringify(m)); } catch {}
+  };
   function makeThumb(pk, p) {
     if (!p || !p.picture || typeof document === 'undefined') return;
+    if (noCorsHost(p.picture)) return; // a host that won't hand over bytes; the <img> shows it anyway
     // thumbPx: a thumbnail made when the circles were smaller is too soft for
     // today's, so it's remade once. The old one keeps painting until then.
     if (p.thumbFor === p.picture && p.thumbPx === THUMB_PX) return;
@@ -729,6 +748,7 @@ export function messagesFeature(ctx) {
     // CORS bookkeeping at all.
     (async () => {
       let bmp = null;
+      const t0 = Date.now();
       try {
         // the browser's cache is welcome: the face was just painted from this
         // very URL, and 'reload' re-downloaded every original (38 MB in one
@@ -748,7 +768,11 @@ export function messagesFeature(ctx) {
         if (data.length > THUMB_MAX) data = c.toDataURL('image/webp', 0.5); // a busy picture, leaned on harder
         if (data.length > THUMB_MAX) throw new Error('too big');
         done({ thumb: data, thumbFor: url, thumbPx: THUMB_PX });
-      } catch { failed(); } finally { try { bmp && bmp.close(); } catch {} }
+      } catch (e) {
+        // a quick TypeError is the CORS refusal (a dead host takes longer)
+        if (e && e.name === 'TypeError' && Date.now() - t0 < 4000) noteNoCors(url);
+        failed();
+      } finally { try { bmp && bmp.close(); } catch {} }
     })();
   }
 

@@ -3399,7 +3399,11 @@ export function arkFeature(ctx) {
         new Promise((r) => setTimeout(r, 800)),
       ]);
     },
-    screenView() { return ui.arkCoinsPage ? arkCoinsPage() : ui.arkExitPage ? arkExitPage() : null; },
+    // the wallet's own pages keep the top nav: these are pages, not takeovers
+    screenView() {
+      const page = ui.arkCoinsPage ? arkCoinsPage() : ui.arkExitPage ? arkExitPage() : null;
+      return page ? h('div', { class: 'col', style: 'gap:16px' }, ctx.brandHeader(true), page) : null;
+    },
     receiveTakeover() {
       const offboarded = arkOffboardedScreen();
       if (offboarded) return offboarded;

@@ -77,6 +77,12 @@ try {
     JSON.stringify(await page.evaluate(() => { const v = document.querySelector('.note-video-box video'); return v && { paused: v.paused, t: v.currentTime, err: v.error && v.error.code, ready: v.readyState }; })));
   await page.evaluate(() => document.querySelector('.note-video-box .vid-sound').click()); await sleep(500);
   check('Unmute turns the sound on, and the button leaves (the player\'s own controls carry mute)', await page.evaluate(() => { const v = document.querySelector('.note-video-box video'); const b = document.querySelector('.note-video-box .vid-sound'); return !v.muted && !b; }));
+  // the box rebuilt from scratch (the row re-rendered by hand, the way a
+  // window remount or a quote load would) comes back loud, with no button
+  await page.evaluate(() => { const box = document.querySelector('.note-video-box'); const row = box.closest('.row'); row.remove(); });
+  await page.evaluate(() => { const b = [...document.querySelectorAll('button')].find((n) => /dark mode/i.test(n.textContent)); if (b) { b.click(); b.click(); } }); await sleep(800);
+  check('a rebuilt box keeps the sound on for the session', await waitFor(() => { const v = document.querySelector('.note-video-box video'); return v && !v.muted && !document.querySelector('.note-video-box .vid-sound'); }, 6000),
+    JSON.stringify(await page.evaluate(() => { const v = document.querySelector('.note-video-box video'); return v && { muted: v.muted, btn: !!document.querySelector('.note-video-box .vid-sound') }; })));
   await page.evaluate(() => window.scrollTo(0, 1000)); await sleep(700);
   check('scrolled away, it pauses', await waitFor(() => { const v = document.querySelector('.note-video-box video'); return v && v.paused; }, 4000));
 

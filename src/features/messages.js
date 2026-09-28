@@ -5087,21 +5087,32 @@ export function messagesFeature(ctx) {
   }
   // An inline video, in a box with the sound button; plays on its own while
   // on screen. Once it has played, the box is the viewer's (no morph).
+  // A clip the reader turned the sound on for stays that way for the session,
+  // however its box is rebuilt: a repaint pairing children differently, the
+  // window unmounting the row and mounting it again, a quoted note loading.
+  // Pinning the box alone left every one of those a muted restart.
+  const unmutedClips = new Set();
   function videoNode(url, { stable = false } = {}) {
+    const loud = unmutedClips.has(url);
     const v = h('video', { src: url, class: 'note-video', controls: true,
-      preload: 'metadata', playsinline: true, muted: true, // play() in view fetches; a window of videos must not all stream
+      preload: 'metadata', playsinline: true, muted: loud ? undefined : true, // play() in view fetches; a window of videos must not all stream
       style: stable ? 'width:100%;aspect-ratio:16/9;object-fit:contain' : undefined,
       onError: (e) => { if (!stable) { const b = e.target.parentElement; if (b) b.style.display = 'none'; } } });
-    v.muted = true; // the property, not just the attribute: a script-made element autoplays only muted
+    v.muted = !loud; // the property, not just the attribute: a script-made element autoplays only muted
     const box = h('div', { class: 'note-video-box' }, v);
-    const btn = soundBtn(() => {
+    if (loud) box._skipMorph = true;
+    const btn = loud ? null : soundBtn(() => {
       v.muted = false;
+      unmutedClips.add(url);
       box._skipMorph = true; // the box is the viewer's now: no repaint rebuilds it muted
       if (v.paused) v.play().catch(() => {});
       btn.remove(); // the player's own controls carry mute from here
     });
-    v.onvolumechange = () => { if (!v.muted && btn.isConnected) btn.remove(); }; // unmuted from the native control: same
-    box.append(btn);
+    v.onvolumechange = () => {
+      if (!v.muted) { unmutedClips.add(url); if (btn && btn.isConnected) btn.remove(); } // unmuted from the native control: same
+      else unmutedClips.delete(url); // muted again from the control: the next box starts quiet
+    };
+    if (btn) box.append(btn);
     // Off screen, a muted preview lets go of its media entirely (a paused
     // player keeps buffering the whole file — a scroll past ten clips
     // streamed seventy megabytes); back in view it reattaches and plays

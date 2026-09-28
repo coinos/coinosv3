@@ -75,8 +75,8 @@ try {
   check('it is muted, and the button offers Unmute', await page.evaluate(() => { const v = document.querySelector('.note-video-box video'); const b = document.querySelector('.note-video-box .vid-sound'); return v.muted && /unmute/i.test(b.textContent); }));
   check('on screen, it plays by itself', await waitFor(() => { const v = document.querySelector('.note-video-box video'); return v && !v.paused && v.currentTime > 0; }, 8000),
     JSON.stringify(await page.evaluate(() => { const v = document.querySelector('.note-video-box video'); return v && { paused: v.paused, t: v.currentTime, err: v.error && v.error.code, ready: v.readyState }; })));
-  await page.evaluate(() => document.querySelector('.note-video-box .vid-sound').click()); await sleep(200);
-  check('Unmute turns the sound on and offers Mute', await page.evaluate(() => { const v = document.querySelector('.note-video-box video'); const b = document.querySelector('.note-video-box .vid-sound'); return !v.muted && /^\S+ mute$/i.test(b.textContent.trim()); }));
+  await page.evaluate(() => document.querySelector('.note-video-box .vid-sound').click()); await sleep(500);
+  check('Unmute turns the sound on, and the button leaves (the player\'s own controls carry mute)', await page.evaluate(() => { const v = document.querySelector('.note-video-box video'); const b = document.querySelector('.note-video-box .vid-sound'); return !v.muted && !b; }));
   await page.evaluate(() => window.scrollTo(0, 1000)); await sleep(700);
   check('scrolled away, it pauses', await waitFor(() => { const v = document.querySelector('.note-video-box video'); return v && v.paused; }, 4000));
 

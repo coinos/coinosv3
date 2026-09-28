@@ -15,7 +15,7 @@
 import {
   subscribeOn, publishOn, queryOn, fetchInboxRelays, relayAlive, liveRelayList, resetRelay,
   npubOf, neventOf, parseNostrPubkey, parseNostrRef, generateSecretKey, getPublicKey, finalizeEvent, nip44,
-  PROFILE_RELAYS, openWrapsOffthread, unwrapDMsOffthread,
+  PROFILE_RELAYS, openWrapsOffthread, unwrapDMsOffthread, verifyEventsAsync,
 } from '../nostr.js';
 import {
   channelKey, channelStream, channelEpoch, channelIsPrivate, controlKey, guestbookKey, openWrap, wrapRumor, rumorWithId,
@@ -32,6 +32,7 @@ import { saveInbox } from '../dm-inbox.js';
 import { mergeFeedWindow } from '../feed-window.js';
 import { createThreadStore } from '../thread-cache.js';
 import { createFeedCache, FEED_CACHE_POSTS } from '../feed-cache.js';
+import { PUBLIC_FEED_RELAYS, popularCandidates } from '../popular-feed.js';
 import { makeSearcher, resultRows, fallbackAvatar, warmSearch, punkImageUrl, punkSmallUrl } from '../recipient-search.js';
 import { getNetwork } from '../api.js';
 import { decodeBolt11 } from '../ark/lightning.js';
@@ -3948,7 +3949,7 @@ export function messagesFeature(ctx) {
   const RELAY_PICKS = ['wss://relay.coinos.io', 'wss://relay.damus.io', 'wss://nos.lol', 'wss://relay.primal.net', 'wss://relay.snort.social',
     'wss://nostr.mom', 'wss://nostr.bitcoiner.social', 'wss://eden.nostr.land', 'wss://nostr.land', 'wss://nostr.oxtr.dev',
     'wss://relay.nostrplebs.com', 'wss://offchain.pub', 'wss://nostr21.com', 'wss://relay.nostr.net', 'wss://nostr-pub.wellorder.net'];
-  const FIREHOSE_RELAYS = ['wss://relay.coinos.io', 'wss://relay.damus.io', 'wss://nos.lol', 'wss://relay.primal.net'];
+  const FIREHOSE_RELAYS = PUBLIC_FEED_RELAYS;
   const normRelay = (u) => {
     let x = String(u || '').trim();
     if (!x) return null;
@@ -3966,10 +3967,38 @@ export function messagesFeature(ctx) {
   // latest reactions, reposts and zaps, counted per post by distinct
   // people, then the posts enough people touched. Older pages walk the
   // reactions back in time. The prose and language tests run at the door.
-  const POPULAR_MIN = 2;
   const POPULAR_ASK = 600; // reactions per round
   const curateFeed = (evs) => { const lang = getLang(); return evs.filter((e) => !isMachinePost(e.content) && inLanguage(e.content, lang)); };
   async function popularPass(extra, merge, c, def) {
+    // Only the default public feed shares a snapshot. Custom relays and older
+    // pages keep their own queries. A static/offline install falls back quickly.
+    if (extra.until == null && !feedRelays(def)) {
+      try {
+        const response = await fetch('/api/feed', { signal: AbortSignal.timeout(1500) });
+        if (!response.ok || !response.headers.get('content-type')?.includes('application/json')) throw new Error('No feed cache');
+        const data = await response.json();
+        if (data.version !== 1 || !Number.isFinite(data.generatedAt) || Date.now() - data.generatedAt > 86400_000
+          || !Array.isArray(data.notes) || data.notes.length > 240 || !Array.isArray(data.profiles) || data.profiles.length > 240
+          || !Number.isFinite(data.popUntil)) throw new Error('Invalid feed cache');
+        const events = [...data.notes, ...data.profiles];
+        // HTTP is another untrusted source: retain the relay signature checks.
+        const valid = await verifyEventsAsync(events);
+        if (c.stopped) return false;
+        const posts = data.notes.filter((e, i) => valid[i] && e.kind === 1);
+        const usable = curateFeed(posts).filter((e) => !isReply(e) && !hidden(e));
+        if (usable.length) {
+          warmProfiles();
+          for (let i = 0; i < data.profiles.length; i++) {
+            const e = data.profiles[i];
+            if (valid[data.notes.length + i] && e.kind === 0) applyProfile(e.pubkey, e);
+          }
+          c.popUntil = c.popUntil || data.popUntil;
+          const got = await mergeFeed(posts, { ...merge, immediate: true }, c);
+          if (got) scheduleRepaint();
+          return got; // already-known posts also count as a successful cache hit
+        }
+      } catch {} // relay path also covers snapshots with no posts in this language
+    }
     const relays = feedRelaysOr(def, FIREHOSE_RELAYS);
     const wide = [...new Set([...relays, ...NOTE_RELAYS])];
     let until = extra.until != null && c.popUntil ? c.popUntil - 1 : undefined;
@@ -3977,19 +4006,15 @@ export function messagesFeature(ctx) {
     for (let round = 0; round < 3 && !c.stopped; round++) {
       const re = await queryOn(wide, { kinds: [6, 7, 9735], limit: POPULAR_ASK, ...(until ? { until } : {}) }, 4500).catch(() => []);
       if (!re.length) break;
-      const counts = new Map();
-      for (const r of re) {
-        const who = r.kind === 9735 ? ((r.tags.find((x) => x[0] === 'P') || [])[1] || r.pubkey) : r.pubkey;
-        for (const x of r.tags) if (x[0] === 'e' && /^[0-9a-f]{64}$/.test(x[1] || '')) (counts.get(x[1]) || counts.set(x[1], new Set()).get(x[1])).add(who);
-      }
+      const candidates = popularCandidates(re);
       const oldest = Math.min(...re.map((r) => r.created_at));
       c.popUntil = c.popUntil && until ? Math.min(c.popUntil, oldest) : (c.popUntil || oldest);
       until = oldest - 1;
-      const ids = [...counts.entries()].filter(([, s]) => s.size >= POPULAR_MIN).sort((a, b) => b[1].size - a[1].size).slice(0, 80).map(([id]) => id);
+      const ids = candidates.ids;
       if (!ids.length) continue;
       const asks = [];
       for (let i = 0; i < ids.length; i += 40) asks.push(queryOn(wide, { ids: ids.slice(i, i + 40) }, 4500).catch(() => []));
-      const posts = (await Promise.all(asks)).flat().filter((e) => e && e.kind === 1 && (counts.get(e.id) || new Set()).size - (counts.get(e.id)?.has(e.pubkey) ? 1 : 0) >= POPULAR_MIN);
+      const posts = (await Promise.all(asks)).flat().filter(candidates.qualifies);
       if (c.stopped) return got;
       if (await mergeFeed(posts, merge, c)) { got = true; scheduleRepaint(); }
       if (got && round >= 0 && (c.notes.length >= FEED_PAGE || extra.until != null)) break;
@@ -4707,6 +4732,19 @@ export function messagesFeature(ctx) {
     }
     if (c.booting) await c.boot;
     if (c.stopped) return false;
+    if (opts.immediate && !c.notes.length && !opts.catchup) {
+      // The public snapshot already contains verified posts and profiles.
+      // Paint text now using the same progressive rows as the local cache;
+      // slow media/quotes must not hold the whole first page behind a spinner.
+      c.booting = true;
+      admitFeed(add, c);
+      c.boot = notesReady(c.notes.slice(0, FEED_PAGE)).finally(() => {
+        c.booting = false;
+        if (!c.stopped && c === feed) scheduleRepaint();
+      });
+      scheduleRepaint();
+      return true;
+    }
     await notesReady(add);
     if (c.stopped) return false;
     for (const e of add) staged.delete(e.id);
@@ -5095,11 +5133,12 @@ export function messagesFeature(ctx) {
     v.muted = true; // the property, not just the attribute: a script-made element autoplays only muted
     const box = h('div', { class: 'note-video-box' }, v);
     const btn = soundBtn(() => {
-      v.muted = !v.muted;
-      btn.setSound(!v.muted);
-      if (!v.muted) { box._skipMorph = true; if (v.paused) v.play().catch(() => {}); }
+      v.muted = false;
+      box._skipMorph = true; // the box is the viewer's now: no repaint rebuilds it muted
+      if (v.paused) v.play().catch(() => {});
+      btn.remove(); // the player's own controls carry mute from here
     });
-    v.onvolumechange = () => btn.setSound(!v.muted); // the native control's own mute keeps the button honest
+    v.onvolumechange = () => { if (!v.muted && btn.isConnected) btn.remove(); }; // unmuted from the native control: same
     box.append(btn);
     // Off screen, a muted preview lets go of its media entirely (a paused
     // player keeps buffering the whole file — a scroll past ten clips
@@ -7248,13 +7287,12 @@ export function messagesFeature(ctx) {
                   class: (isFollowing(pk) ? 'btn-ghost ' : '') + 'grow', disabled: followsPub,
                   onClick: () => toggleFollow(pk),
                 }, isFollowing(pk) ? t('feedFollowing') : t('feedFollow')),
-                // ...or into one of your lists (a feed of people)
-                myPubkeys().length ? h('button', {
-                  class: 'btn-ghost', style: 'flex-shrink:0', title: t('listAddTo'), 'aria-label': t('listAddTo'),
-                  onClick: () => { ui.listPick = pk; render(); },
-                }, '\u2630') : null)),
+              )),
       // The timeline they see: their follows as a feed, with a public URL.
-      mine ? null : h('button', { class: 'btn-ghost btn-block', onClick: () => openFeedOf(pk) }, t('profTheirFeed')),
+      mine ? null : h('div', { class: 'row gap6' },
+        h('button', { class: 'btn-ghost grow', onClick: () => openFeedOf(pk) }, t('profTheirFeed')),
+        // ...or into one of your lists (a feed of people)
+        myPubkeys().length ? h('button', { class: 'btn-ghost grow', 'aria-label': t('listAddTo'), onClick: () => { ui.listPick = pk; render(); } }, '\u2630 ' + t('listAddTo')) : null),
       // The lists they curate (follow sets and packs): each opens as a feed.
       (() => {
         const c = listsFor(pk);

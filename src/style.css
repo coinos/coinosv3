@@ -766,10 +766,9 @@ html.no-scroll { overflow: hidden; scrollbar-gutter: auto; }
    when tapped. Fixed, not sticky: the feed is the page scroller, and a
    sticky element inside the card would scroll away with the card. */
 .feed-new-pill {
-  /* The header scrolls away with the page, so this rides at the very top of
-     the window — floating over a post for the moment it is there beats
-     sitting in the middle of one. */
-  position: fixed; top: calc(env(safe-area-inset-top, 0px) + 10px);
+  /* Rides at the bottom of the window, where a thumb already is; the tap
+     takes the reader up to the new posts. */
+  position: fixed; bottom: calc(env(safe-area-inset-bottom, 0px) + 18px);
   left: 50%; transform: translateX(-50%);
   z-index: 30; width: auto; padding: 7px 16px; border-radius: 999px;
   background: var(--accent); color: var(--accent-fg); border: none;
@@ -789,7 +788,7 @@ html.no-scroll { overflow: hidden; scrollbar-gutter: auto; }
   to { transform: scale(1); opacity: 1; }
 }
 @keyframes pill-in {
-  from { opacity: 0; transform: translate(-50%, -8px); }
+  from { opacity: 0; transform: translate(-50%, 8px); }
   to { opacity: 1; transform: translate(-50%, 0); }
 }
 

@@ -457,6 +457,7 @@ const STR = {
     arkFeeChain: 'On-chain fee',
     arkFeeService: 'Service fee',
     arkCoinsExpired: 'expired',
+    noteForeignKind: 'A kind {kind} event this app doesn’t show.',
     arkExpiredDust: '{amount} has expired and is too small to renew. You can forget it from the Manage page.',
     arkCoinForget: 'Forget',
     arkCoinForgetTitle: 'Give this coin up: it has expired and is too small to renew or exit.',

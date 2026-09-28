@@ -4240,6 +4240,76 @@ export function messagesFeature(ctx) {
     mediaWarming.set(url, task);
     return task;
   };
+  // ---- link previews --------------------------------------------------
+  // A plain link in a post becomes the card its page describes (Open Graph:
+  // title, a line, a picture), fetched through the registrar because a
+  // browser can't read another site's HTML. Warmed with the rest of a post
+  // so the row arrives whole; remembered across sessions, a few hundred at
+  // a time, so a feed you've seen paints its cards at once.
+  const PREVIEW_API = 'https://names.coinos.io/preview?url=';
+  const PREVIEW_KEEP = 400;
+  const previews = new Map(); // url -> { title, description, image, site } | null (nothing there)
+  const previewWarming = new Map();
+  try {
+    for (const [u, m] of JSON.parse(localStorage.getItem('coinos-link-previews') || '[]')) previews.set(u, m);
+  } catch {}
+  let previewFlush = null;
+  const savePreviews = () => {
+    if (previewFlush) return;
+    previewFlush = setTimeout(() => {
+      previewFlush = null;
+      const rows = [...previews].filter(([, m]) => m).slice(-PREVIEW_KEEP);
+      try { localStorage.setItem('coinos-link-previews', JSON.stringify(rows)); } catch {}
+    }, 1000);
+  };
+  const previewable = (url) => /^https?:\/\//i.test(url) && !youtubeId(url)
+    && !/\.(png|jpe?g|gif|webp|avif|mp4|webm|mov|m4v|mp3|m4a|ogg|wav|pdf|zip)(\?[^\s]*)?$/i.test(url);
+  const warmPreview = (url) => {
+    if (!url || previews.has(url) || typeof fetch === 'undefined') return Promise.resolve();
+    if (previewWarming.has(url)) return previewWarming.get(url);
+    const task = (async () => {
+      let meta = null;
+      try {
+        const r = await fetch(PREVIEW_API + encodeURIComponent(url), { signal: AbortSignal.timeout(READY_MS) });
+        const j = r.ok ? await r.json() : null;
+        if (j && (j.title || j.image)) meta = { title: j.title || '', description: j.description || '', image: j.image || '', site: j.site || '' };
+      } catch { return; } // asked again another time: the registrar was away, not the page
+      previews.set(url, meta);
+      if (meta) { savePreviews(); if (meta.image) await warmMedia(meta.image); }
+    })().finally(() => previewWarming.delete(url));
+    previewWarming.set(url, task);
+    return task;
+  };
+  // the first two plain links of a post (a wall of links is a list, not cards)
+  function notePreviewUrls(content) {
+    const urls = [];
+    for (const part of String(content || '').split(NOTE_SPLIT)) {
+      if (!part || urls.length >= 2) continue;
+      const md = MD_PARTS.exec(part);
+      const url = md ? md[3] : (/^https?:\/\//i.test(part) ? part : null);
+      if (url && !(md && md[1]) && previewable(url) && !PACK_LINK_RE.test(url)) urls.push(url);
+    }
+    return urls;
+  }
+  function linkCard(url, pv) {
+    let host = '';
+    try { host = new URL(url).hostname.replace(/^www\./, ''); } catch {}
+    const size = pv.image ? (feedPaint ? feedMedia(pv.image) : mediaReady.get(pv.image)) : null;
+    return h('a', {
+      class: 'link-card', href: url, target: '_blank', rel: 'noopener noreferrer',
+      onClick: (e) => e.stopPropagation(),
+    },
+      pv.image ? h('img', {
+        class: 'link-thumb', src: pv.image, alt: '', loading: 'lazy',
+        width: size?.width, height: size?.height,
+        style: size && size.width && size.height ? 'aspect-ratio:' + size.width + '/' + size.height : undefined,
+        onError: (e) => { e.target.style.display = 'none'; },
+      }) : null,
+      h('div', { class: 'link-meta' },
+        h('div', { class: 'link-title' }, pv.title || host),
+        pv.description ? h('div', { class: 'link-desc small muted' }, pv.description) : null,
+        h('div', { class: 'link-site small faint' }, pv.site || host)));
+  }
   function noteMediaUrls(content) {
     const urls = [];
     for (const part of String(content || '').split(NOTE_SPLIT)) {
@@ -4266,6 +4336,7 @@ export function messagesFeature(ctx) {
   }
   async function noteReady(ev, deadline = Date.now() + READY_MS, depth = 0) {
     const tasks = [warmAvatar(ev.pubkey, deadline), ...noteMediaUrls(ev.content).map(warmMedia),
+      ...notePreviewUrls(ev.content).map(warmPreview),
       ...[...emojiTagMap(ev.tags).values()].map(warmMedia)];
     for (const part of String(ev.content || '').split(NOTE_SPLIT)) {
       if (/^(nostr:|@?)(npub|nprofile)1/i.test(part)) {
@@ -4873,6 +4944,15 @@ export function messagesFeature(ctx) {
       });
     }
     if (youtubeId(url)) return youtubeEmbed(url, youtubeId(url));
+    if (!label && previewable(url)) {
+      // a frozen feed row keeps the card (or the bare link) it first painted
+      let pv = previews.get(url) || null;
+      if (feedPaint) {
+        if (!feedPaint.media.has('pv:' + url)) feedPaint.media.set('pv:' + url, pv);
+        pv = feedPaint.media.get('pv:' + url);
+      }
+      if (pv) return linkCard(url, pv);
+    }
     const shown = label || (url.length > 64 ? url.slice(0, 61) + '…' : url);
     return h('a', { href: url, target: '_blank', rel: 'noopener noreferrer' }, shown);
   }

@@ -27,6 +27,7 @@ import { HDKey } from '@scure/bip32';
 import { mnemonicToSeedSync } from '@scure/bip39';
 import { lnBackend } from '../bridge/ln.js';
 import { ArkManager } from '../src/ark/manager.js';
+import { fetchPreview } from './preview.js';
 import { decodeAddress } from '../src/ark/proto.js';
 import { decodeNoffer } from '../src/noffer.js';
 import { decodeBolt11 } from '../src/ark/lightning.js';
@@ -847,6 +848,7 @@ setInterval(() => { drainWebhooks().catch(() => {}); }, 30_000);
 
 // crude per-IP limiter
 const rate = new Map();
+const previews = new Map(); // url -> { meta, until }
 function rateOk(ip, limit = 10) {
   const now = Date.now();
   const arr = (rate.get(ip) || []).filter((t) => t > now - 60_000);
@@ -980,6 +982,27 @@ Bun.serve({
         return json({ payments, count: payments.length });
       }
       return json({ error: 'not found' }, 404);
+    }
+
+    // A link in a post, as the card its page describes for itself (Open
+    // Graph). Cached a day either way: a page with nothing to show is asked
+    // again only after an hour. Public data; the CDN may cache it too.
+    if (url.pathname === '/preview' && req.method === 'GET') {
+      if (!rateOk(ip, 120)) return json({ error: 'rate limited' }, 429);
+      const target = (url.searchParams.get('url') || '').trim();
+      if (!/^https?:\/\/\S{4,2000}$/.test(target)) return json({ error: 'bad url' }, 400);
+      const now = Date.now();
+      let hit = previews.get(target);
+      if (!hit || now > hit.until) {
+        const meta = await fetchPreview(target).catch(() => null);
+        hit = { meta, until: now + (meta ? 24 : 1) * 3600_000 };
+        previews.set(target, hit);
+        if (previews.size > 5000) previews.delete(previews.keys().next().value);
+      }
+      return new Response(JSON.stringify(hit.meta || {}), {
+        headers: { 'content-type': 'application/json', 'access-control-allow-origin': '*',
+          'cache-control': 'public, max-age=' + (hit.meta ? 86400 : 3600) },
+      });
     }
 
     if (url.pathname === '/health') {

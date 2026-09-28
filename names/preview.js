@@ -45,10 +45,12 @@ async function publicUrl(str) {
   return u;
 }
 
+const ENTITIES = { amp: '&', quot: '"', apos: "'", lt: '<', gt: '>', nbsp: ' ', ndash: '–', mdash: '—', hellip: '…',
+  lsquo: '‘', rsquo: '’', ldquo: '“', rdquo: '”', laquo: '«', raquo: '»', copy: '©', reg: '®', trade: '™', middot: '·', bull: '•', euro: '€', pound: '£' };
 const decodeEntities = (s) => String(s || '')
-  .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCodePoint(parseInt(h, 16)))
-  .replace(/&#(\d+);/g, (_, d) => String.fromCodePoint(Number(d)))
-  .replace(/&(amp|quot|apos|lt|gt|nbsp);/g, (_, e) => ({ amp: '&', quot: '"', apos: "'", lt: '<', gt: '>', nbsp: ' ' })[e]);
+  .replace(/&#x([0-9a-f]+);/gi, (_, h) => { try { return String.fromCodePoint(parseInt(h, 16)); } catch { return ''; } })
+  .replace(/&#(\d+);/g, (_, d) => { try { return String.fromCodePoint(Number(d)); } catch { return ''; } })
+  .replace(/&([a-z]+);/gi, (m, e) => ENTITIES[e.toLowerCase()] ?? m);
 const tidy = (s, max) => decodeEntities(s).replace(/\s+/g, ' ').trim().slice(0, max);
 
 // Every <meta> in the head, whichever way its attributes are ordered.

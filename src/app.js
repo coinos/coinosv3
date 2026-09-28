@@ -557,7 +557,7 @@ function imageViewer() {
   return h('div', {
     class: 'lightbox', onClick: close,
     role: 'dialog', 'aria-modal': 'true',
-  }, h('img', { src: ui.lightbox, alt: '', onClick: (e) => e.stopPropagation() }),
+  }, h('img', { src: ui.lightbox, alt: '', onClick: (e) => { e.stopPropagation(); close(); } }), // a tap on the picture closes it too: the × is small and far
      // stop the bubble: the backdrop closes too, and two pops walk out of the room
      h('button', { class: 'lightbox-x', 'aria-label': t('close'), onClick: (e) => { e.stopPropagation(); close(); } }, '\u00d7'));
 }
@@ -2821,6 +2821,7 @@ function languagePicker() {
         setLang(code);
         await loadLocale(code); // fetch the locale's strings before re-rendering
         applyDir();
+        featureHook('langChanged');
         render();
       },
     },
@@ -5574,7 +5575,7 @@ const ctx = {
     wallet.saveFeatureState('prefs', p);
     try { wallet.saveCache(); } catch {}
   },
-  brandHeader, activeAccount, setAccounts: (list) => { accounts = list; },
+  brandHeader, languagePicker, activeAccount, setAccounts: (list) => { accounts = list; },
   getAccounts: () => accounts,
   claimTargets, enterWallet, activateAccount, commitAccount,
   // cross-feature calls (e.g. gifts asking the ark feature for ark-gift

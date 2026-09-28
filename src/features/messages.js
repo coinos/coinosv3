@@ -38,7 +38,8 @@ import { decodeBolt11 } from '../ark/lightning.js';
 import { hexToBytes, bytesToHex } from '@noble/hashes/utils';
 import { sha256 } from '@noble/hashes/sha256';
 import { base64urlnopad } from '@scure/base';
-import { t } from '../i18n.js';
+import { t, getLang } from '../i18n.js';
+import { inLanguage, isMachinePost } from '../lang-guess.js';
 import { animateZap, warmZapSound } from '../zap-animation.js';
 import { SIGNER_SILENT } from '../dm.js';
 
@@ -3801,7 +3802,7 @@ export function messagesFeature(ctx) {
     const br = st().builtinRelays || {};
     return [
       { id: FOLLOWING, name: t('feedFollowingName'), follows: true, builtin: true, relays: br[FOLLOWING] || [] },
-      { id: EVERYTHING, name: t('feedFirehose'), follows: false, authors: [], packs: [], topics: [], all: true, builtin: true, relays: br[EVERYTHING] || [] },
+      { id: EVERYTHING, name: t('feedPopular'), follows: false, authors: [], packs: [], topics: [], all: true, curated: true, builtin: true, relays: br[EVERYTHING] || [] },
       ...st().feeds];
   };
   function feedDef(id = curFeedId) {
@@ -3930,6 +3931,46 @@ export function messagesFeature(ctx) {
     try { const url = new URL(x); if (!/^wss?:$/.test(url.protocol) || !url.hostname) return null; return url.href.replace(/\/$/, ''); } catch { return null; }
   };
   const feedRelays = (def) => (def && Array.isArray(def.relays) && def.relays.length ? def.relays : null);
+  // ---- curation for the public firehose --------------------------------
+  // Everything a relay carries is mostly noise: machine output, every
+  // language at once, posts nobody read. Popular keeps a post when it reads
+  // as prose in the reader's language and at least two people reacted,
+  // replied, reposted or zapped it — one batch ask per page, remembered.
+  // A brand-new post has no reactions yet (of 73 fresh English posts on the
+  // four relays, one had two), so Popular starts from the other end: the
+  // latest reactions, reposts and zaps, counted per post by distinct
+  // people, then the posts enough people touched. Older pages walk the
+  // reactions back in time. The prose and language tests run at the door.
+  const POPULAR_MIN = 2;
+  const POPULAR_ASK = 600; // reactions per round
+  const curateFeed = (evs) => { const lang = getLang(); return evs.filter((e) => !isMachinePost(e.content) && inLanguage(e.content, lang)); };
+  async function popularPass(extra, merge, c, def) {
+    const relays = feedRelaysOr(def, FIREHOSE_RELAYS);
+    const wide = [...new Set([...relays, ...NOTE_RELAYS])];
+    let until = extra.until != null && c.popUntil ? c.popUntil - 1 : undefined;
+    let got = false;
+    for (let round = 0; round < 3 && !c.stopped; round++) {
+      const re = await queryOn(wide, { kinds: [6, 7, 9735], limit: POPULAR_ASK, ...(until ? { until } : {}) }, 4500).catch(() => []);
+      if (!re.length) break;
+      const counts = new Map();
+      for (const r of re) {
+        const who = r.kind === 9735 ? ((r.tags.find((x) => x[0] === 'P') || [])[1] || r.pubkey) : r.pubkey;
+        for (const x of r.tags) if (x[0] === 'e' && /^[0-9a-f]{64}$/.test(x[1] || '')) (counts.get(x[1]) || counts.set(x[1], new Set()).get(x[1])).add(who);
+      }
+      const oldest = Math.min(...re.map((r) => r.created_at));
+      c.popUntil = c.popUntil && until ? Math.min(c.popUntil, oldest) : (c.popUntil || oldest);
+      until = oldest - 1;
+      const ids = [...counts.entries()].filter(([, s]) => s.size >= POPULAR_MIN).sort((a, b) => b[1].size - a[1].size).slice(0, 80).map(([id]) => id);
+      if (!ids.length) continue;
+      const asks = [];
+      for (let i = 0; i < ids.length; i += 40) asks.push(queryOn(wide, { ids: ids.slice(i, i + 40) }, 4500).catch(() => []));
+      const posts = (await Promise.all(asks)).flat().filter((e) => e && e.kind === 1 && (counts.get(e.id) || new Set()).size - (counts.get(e.id)?.has(e.pubkey) ? 1 : 0) >= POPULAR_MIN);
+      if (c.stopped) return got;
+      if (await mergeFeed(posts, merge, c)) { got = true; scheduleRepaint(); }
+      if (got && round >= 0 && (c.notes.length >= FEED_PAGE || extra.until != null)) break;
+    }
+    return got;
+  }
   const feedRelaysOr = (def, usual) => feedRelays(def) || usual;
   const feedCacheKey = (id) => (id === FOLLOWING ? FEED_CACHE : FEED_CACHE + ':' + id);
   const feedDisk = () => typeof wallet.featureStateKey === 'function'
@@ -4203,6 +4244,12 @@ export function messagesFeature(ctx) {
     const authors = feedAuthors(def).slice(0, REQ_AUTHORS), topics = feedTopics(def);
     if (!authors.length && !topics.length && !(def && def.all)) { c.status = 'ready'; return; }
     c.at = Date.now();
+    if (def && def.curated) {
+      try { await popularPass({}, {}, c, def); } catch {} finally {
+        if (!c.stopped) { c.status = 'ready'; if (c === feed && ui.chatOpen && ui.msgView === 'feed') { scheduleRepaint(); watchFeed(); } }
+      }
+      return;
+    }
     try {
       const events = await queryOn(feedRelaysOr(def, def && def.all ? FIREHOSE_RELAYS : NOTE_RELAYS), { kinds: [1], limit: FEED_PAGE,
         ...(authors.length ? { authors } : {}), ...(topics.length ? { '#t': topics } : {}) }, 3000);
@@ -4288,10 +4335,13 @@ export function messagesFeature(ctx) {
   // Any mix of people, packs and topics, carried in the URL itself.
   const urlRelays = (q) => [...new Set((q.get('r') || '').split(',').map(normRelay).filter(Boolean))].slice(0, 12);
   // Plain /feed: every post the coinos relay carries (or the relays named).
-  function openFirehose(readFrom = []) {
-    if (!readFrom.length && !isVisitor()) { showFeed(EVERYTHING); return; }
-    const id = 'all' + (readFrom.length ? '@' + readFrom.join(',') : ':visitor');
-    if (!adhocFeeds.has(id)) adhocFeeds.set(id, { id, name: t('feedFirehose'), follows: false, authors: [], packs: [], topics: [], all: true, relays: readFrom });
+  // /feed is Popular: everything the relays carry, curated (no machine
+  // posts, the reader's language, and only what someone reacted to).
+  // /feed/all is the same relays raw.
+  function openFirehose(readFrom = [], { raw = false } = {}) {
+    if (!raw && !readFrom.length && !isVisitor()) { showFeed(EVERYTHING); return; }
+    const id = (raw ? 'raw' : 'all') + (readFrom.length ? '@' + readFrom.join(',') : ':visitor');
+    if (!adhocFeeds.has(id)) adhocFeeds.set(id, { id, name: raw ? t('feedFirehose') : t('feedPopular'), follows: false, authors: [], packs: [], topics: [], all: true, curated: !raw, relays: readFrom });
     showFeed(id);
   }
   function openQueryFeed(q) {
@@ -4312,6 +4362,7 @@ export function messagesFeature(ctx) {
     const readFrom = urlRelays(q);
     for (const r of readFrom) { try { resetRelay(r); } catch {} } // named in the link: tried even if it was sick
     if (!path) return openQueryFeed(q);
+    if (/^all$/i.test(path)) { openFirehose(readFrom, { raw: true }); return true; }
     if (/^t\//i.test(path)) { const tag = normTopic(decodeURIComponent(path.slice(2))); if (!tag) return false; openTopicFeed(tag, readFrom); return true; }
     const pk = parseNostrPubkey(path);
     if (pk) { let relays = []; try { relays = parseNostrRef(path.toLowerCase())?.relays || []; } catch {} openFeedOf(pk, relays, readFrom); return true; }
@@ -4325,7 +4376,7 @@ export function messagesFeature(ctx) {
   function feedPath(def, { share = false } = {}) {
     if (!def) return null;
     const r = feedRelays(def) ? '?r=' + encodeURIComponent(feedRelays(def).join(',')) : '';
-    if (def.all) return '/feed' + r;
+    if (def.all) return (def.curated ? '/feed' : '/feed/all') + r;
     if (def.builtin) return share && mePk() ? '/feed/' + npubOf(mePk()) + r : null;
     if (def.of) return '/feed/' + npubOf(def.of) + r;
     const authors = def.authors || [], topics = feedTopics(def), packs = def.packs || [];
@@ -4619,9 +4670,16 @@ export function messagesFeature(ctx) {
     if (!staged) feedStaged.set(c, staged = new Set());
     const known = new Set([...c.notes, ...(c.catchup || []), ...(c.deferred || [])].map((e) => e.id));
     for (const e of evs || []) noteForSpam(e);
-    const add = (evs || []).filter((e) => e.kind === 1 && !isReply(e) && !hidden(e)
+    let add = (evs || []).filter((e) => e.kind === 1 && !isReply(e) && !hidden(e)
       && !known.has(e.id) && !staged.has(e.id) && known.add(e.id) && staged.add(e.id));
     if (!add.length) return false;
+    const def = feedDef(c.id);
+    if (def && def.curated) {
+      const kept = curateFeed(add);
+      for (const e of add) if (!kept.includes(e)) staged.delete(e.id);
+      add = kept;
+      if (!add.length) return false;
+    }
     if (c.booting) await c.boot;
     if (c.stopped) return false;
     await notesReady(add);
@@ -4698,11 +4756,13 @@ export function messagesFeature(ctx) {
     const authors = feedAuthors(def), topics = feedTopics(def);
     const tag = topics.length ? { '#t': topics } : {};
     let got = false;
+    if (def.curated) return popularPass(extra, merge, c, def);
     if (!authors.length) {
       // topics alone: nobody's outbox to read, so the wide relays, one ask;
       // the firehose asks its relays for everything
       if (!topics.length && !def.all) return false;
-      const evs = await queryOn(feedRelaysOr(def, def.all ? FIREHOSE_RELAYS : TOPIC_RELAYS), { kinds: [1], ...tag, limit: FEED_LIMIT, ...extra }, 5000).catch(() => []);
+      const relays = feedRelaysOr(def, def.all ? FIREHOSE_RELAYS : TOPIC_RELAYS);
+      const evs = await queryOn(relays, { kinds: [1], ...tag, limit: FEED_LIMIT, ...extra }, 5000).catch(() => []);
       if (await mergeFeed(evs, merge, c)) { got = true; scheduleRepaint(); }
       return got;
     }
@@ -4883,6 +4943,7 @@ export function messagesFeature(ctx) {
     const topics = feedTopics(def), tag = topics.length ? { '#t': topics } : {};
     const on = (ev) => { mergeFeed([ev], { live: true }, c).then((ok) => { if (ok) scheduleRepaint(); }).catch(() => {}); };
     const authors = feedAuthors(def);
+    if (def.curated) { const iv = setInterval(() => { if (c === feed && ui.chatOpen && ui.msgView === 'feed') refreshFeed({ force: true, live: true }, c).catch(() => {}); }, 120_000); feedUnsubs.push(() => clearInterval(iv)); return; }
     if (!authors.length) { feedUnsubs.push(subscribeOn(feedRelaysOr(def, def.all ? FIREHOSE_RELAYS : TOPIC_RELAYS), { kinds: [1], ...tag, since }, on)); return; }
     const plan = feedRelays(def) ? [{ relays: feedRelays(def), authors }] : outboxPlan(authors);
     for (const { relays, authors: a } of plan)
@@ -5021,12 +5082,28 @@ export function messagesFeature(ctx) {
     // from the start. A clip the reader unmuted keeps its place instead.
     watchPlayer(v,
       () => {
-        if (!v.getAttribute('src') && !v.getAttribute('data-lazy-src')) v.setAttribute('src', url);
+        box._inView = true;
+        clearTimeout(box._release);
+        if (!v.getAttribute('src') && !v.getAttribute('data-lazy-src')) {
+          v.setAttribute('src', url);
+          v.addEventListener('loadedmetadata', () => { v.style.minHeight = ''; }, { once: true });
+        }
         if (v.paused) v.play().then(() => { box._skipMorph = true; }).catch(() => {});
       },
       () => {
+        box._inView = false;
         if (!v.paused) v.pause();
-        if (v.muted && box._skipMorph) { try { v.removeAttribute('src'); v.load(); } catch {} }
+        if (!(v.muted && box._skipMorph)) return;
+        // Let go a moment later, and hold the box at its height meanwhile:
+        // an instant release collapsed a tall clip the reader had just
+        // scrolled past, and the page jumped under their thumb.
+        clearTimeout(box._release);
+        box._release = setTimeout(() => {
+          if (box._inView || !v.isConnected) return;
+          const hgt = v.getBoundingClientRect().height;
+          if (hgt > 0) v.style.minHeight = hgt + 'px';
+          try { v.removeAttribute('src'); v.load(); } catch {}
+        }, 2500);
       });
     return box;
   }
@@ -7420,6 +7497,9 @@ export function messagesFeature(ctx) {
           : c.end && visible.length && !(c.win && c.win.bottom) && c.shown >= visible.length
             ? h('div', { class: 'small faint feed-foot', style: 'text-align:center;padding:10px 0' }, t('feedEnd'))
             : null,
+        // the reader's language, right where a curated feed is judged by it
+        ctx.languagePicker ? h('div', { class: 'row gap6 feed-lang', 'data-key': 'feed-lang', style: 'justify-content:center;align-items:center;padding:6px 0 2px' },
+          h('span', { class: 'small muted' }, t('feedLangLabel')), ctx.languagePicker()) : null,
         ...noteOverlays());
   }
 
@@ -8912,6 +8992,12 @@ export function messagesFeature(ctx) {
     identitySignedInNew() { setTimeout(() => seedNewIdentity({ onlyIfNoFollows: true }), 0); return true; },
     openProfile(pk) { openProfile(pk); return true; },
     openFeedOf(pk) { openFeedOf(pk); return true; },
+    // a new language: the curated feeds were judged in the old one
+    langChanged() {
+      for (const c of [...feedStates.values()]) { const d = feedDef(c.id); if (d && d.curated) dropFeedState(c.id); }
+      if (feedDef(curFeedId)?.curated) selectFeed(curFeedId);
+      return true;
+    },
     navPath(snap) {
       if (!snap || !snap.chatOpen || snap.msgView !== 'feed' || snap.profilePk || snap.noteThread || snap.userSearch) return null;
       const def = feedDef(snap.feedId || curFeedId);

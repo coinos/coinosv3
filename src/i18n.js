@@ -251,6 +251,8 @@ const STR = {
     feedPackName: 'Follow pack',
     profTheirFeed: 'Their timeline',
     feedFirehose: 'Everything',
+    feedPopular: 'Popular',
+    feedLangLabel: 'Language',
     feedRelays: 'Relays',
     feedRelaysHint: 'Posts are read from these relays. What the feed asks for stays the same.',
     feedRelayUsual: 'usual',

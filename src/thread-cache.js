@@ -4,12 +4,15 @@
 const KEY = 'btc-wallet-note-threads';
 const MAX_THREADS = 12;
 const MAX_EVENTS = 160;
+const MAX_QUOTES = 24; // posts quoted inside the thread, so a reload paints them too
 const MAX_BYTES = 1_000_000; // JSON code units; at most about 2 MB in storage
 const validNote = (e) => e?.kind === 1 && typeof e.id === 'string'
   && /^[0-9a-f]{64}$/.test(e.id) && typeof e.pubkey === 'string'
   && /^[0-9a-f]{64}$/.test(e.pubkey) && typeof e.content === 'string'
   && Number.isFinite(e.created_at) && Array.isArray(e.tags)
   && e.tags.every((t) => Array.isArray(t) && t.every((v) => typeof v === 'string'));
+// A quote can be any kind of event (a poll, an article…), not only a note.
+const validQuote = (e) => Number.isSafeInteger(e?.kind) && e.kind >= 0 && validNote({ ...e, kind: 1 });
 const savedNote = ({ id, pubkey, kind, created_at, content, tags }) => ({ id, pubkey, kind, created_at, content, tags });
 const savedProfile = (p) => {
   if (!p || typeof p !== 'object') return null;
@@ -46,7 +49,7 @@ export function createThreadStore(storage) {
     find(id) {
       return read().find((c) => c.rootId === id || c.replies.some((e) => e.id === id)) || null;
     },
-    save(thread, focusId, profiles = {}, counts = {}) {
+    save(thread, focusId, profiles = {}, counts = {}, quotes = []) {
       if (!validNote(thread.root)) return;
       const events = new Map([thread.root, ...thread.replies.filter(validNote)].map((e) => [e.id, e]));
       const keep = new Map([[thread.root.id, thread.root]]);
@@ -65,7 +68,9 @@ export function createThreadStore(storage) {
         visit(e.id);
       }
       const previous = read().find((c) => c.rootId === thread.root.id);
-      const authors = [...new Set([...keep.values()].map((e) => e.pubkey))].slice(0, 24);
+      const quoteMap = new Map([...(previous?.quotes || []), ...quotes].filter(validQuote).map((e) => [e.id, e]));
+      const kept = [...quoteMap.values()].slice(-MAX_QUOTES);
+      const authors = [...new Set([...keep.values(), ...kept].map((e) => e.pubkey))].slice(0, 24 + MAX_QUOTES);
       const faces = {};
       for (const pk of authors) {
         const fresh = savedProfile(profiles[pk]);
@@ -83,7 +88,8 @@ export function createThreadStore(storage) {
       }
       const entry = { rootId: thread.root.id, root: savedNote(thread.root),
         profiles: faces, counts: tallies,
-        replies: [...keep.values()].filter((e) => e.id !== thread.root.id).map(savedNote) };
+        replies: [...keep.values()].filter((e) => e.id !== thread.root.id).map(savedNote),
+        quotes: kept.map(savedNote) };
       const entries = [entry, ...read().filter((c) => c.rootId !== entry.rootId)].slice(0, MAX_THREADS);
       let json = JSON.stringify(entries);
       while (json.length > MAX_BYTES && entries.length > 1) { entries.pop(); json = JSON.stringify(entries); }

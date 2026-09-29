@@ -19,7 +19,7 @@ check('a fresh store restores full content and tags by any viewed event', () => 
   const long = { ...reply, content: 'x'.repeat(5000), tags: [...reply.tags, ['emoji', 'wave', 'https://example.com/wave.png']] };
   store.save({ root, replies: [parent, long] }, long.id);
   const restored = createThreadStore(storage).find(long.id);
-  assert.deepEqual(restored, { rootId: root.id, root, profiles: {}, counts: {}, replies: [long, parent] });
+  assert.deepEqual(restored, { rootId: root.id, root, profiles: {}, counts: {}, replies: [long, parent], quotes: [] });
   assert.equal(store.find(parent.id).root.id, root.id);
 });
 check('thread authors keep their names and local avatar thumbnails across reloads', () => {
@@ -35,6 +35,12 @@ check('thread action totals are present before relay refresh and survive a conte
   store.save({ root, replies: [parent, reply] }, reply.id, {}, { [reply.id]: { likes: 29, boosts: 7, sats: 210 } });
   store.save({ root, replies: [parent, reply] }, reply.id);
   assert.deepEqual(createThreadStore(storage).find(reply.id).counts[reply.id], { likes: 29, boosts: 7, sats: 210 });
+});
+check('posts quoted inside the thread are restored with it, and a later save keeps them', () => {
+  const q = note(77), poll = { ...note(78), kind: 1068 }; // a quote can be any kind
+  store.save({ root, replies: [parent, reply] }, reply.id, {}, {}, [q, poll]);
+  store.save({ root, replies: [parent, reply] }, reply.id); // a relay refresh with no quotes resolved yet
+  assert.deepEqual(createThreadStore(storage).find(reply.id).quotes, [q, poll]);
 });
 check('a large thread retains the selected reply and its ancestors', () => {
   const siblings = Array.from({ length: 200 }, (_, i) => note(1000 + i, [['e', root.id, '', 'root']]));

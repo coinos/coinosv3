@@ -5310,6 +5310,9 @@ export function messagesFeature(ctx) {
       const evs = await queryOn(relays, { ids: [ref.id] }, 4500).catch(() => []);
       c.ev = (evs || [])[0] || c.ev || null;
       c.status = c.ev ? 'ready' : 'missing';
+      // the open thread quotes it: keep it with the thread for the next reload
+      const th = c.ev && ui.noteThread && threadCache.get(ui.noteThread.rootId);
+      if (th && th.root) persistThread(th);
       scheduleRepaint();
     })();
     return c;
@@ -6525,7 +6528,21 @@ export function messagesFeature(ctx) {
       const p = profiles.get(ev.pubkey);
       if (p && (p.name || p.picture)) faces[ev.pubkey] = p;
     }
-    threadStore.save(c, c.focusId, faces, c.counts);
+    // quoted posts inside the thread ride along, so a reload paints them
+    // instead of a "Fetching note…" spinner
+    const quotes = [];
+    for (const ev of [c.root, ...c.replies]) {
+      for (const m of (ev.content || '').matchAll(/nostr:((?:note|nevent)1[a-z0-9]+)/gi)) {
+        const ref = parseNostrRef(m[1].toLowerCase());
+        const q = ref && ref.type === 'event' && quoted.get(ref.id);
+        if (q && q.ev) {
+          quotes.push(q.ev);
+          const p = profiles.get(q.ev.pubkey);
+          if (p && (p.name || p.picture)) faces[q.ev.pubkey] = p;
+        }
+      }
+    }
+    threadStore.save(c, c.focusId, faces, c.counts, quotes);
   };
   function persistThreadProfile(pk) {
     const c = ui.noteThread && threadCache.get(ui.noteThread.rootId);
@@ -6597,6 +6614,7 @@ export function messagesFeature(ctx) {
         }
       }
     }
+    for (const q of stored?.quotes || []) if (!quoted.get(q.id)?.ev) quoted.set(q.id, { status: 'ready', ev: q, at: Date.now() });
     const rootId = stored?.rootId || requestedRootId;
     c = { status: stored ? 'ready' : 'loading', rootId, focusId: seed.id,
       root: stored?.root || (seed.id === rootId ? seed : null), replies: stored?.replies || [], counts: stored?.counts || {} };

@@ -15,7 +15,7 @@ const wallet = { xpub: 'test-wallet', loaded: true, nostrRelays: () => [],
 let feature;
 function render() { if (feature) morphChildren(document.querySelector('#app'), [feature.screenView() || h('div', { class: 'wallet-screen' }, 'Wallet'), feature.bottomNav()]); }
 feature = messagesFeature({ h, ui, wallet, render, toast() {}, hook: name => name === 'unreadMessages' ? 1 : null, brandHeader: () => h('div', { style: 'height:60px' }, 'Coinos') });
-window.test = { ui, wallet, render, async feed() {
+window.test = { ui, wallet, render, get feature() { return feature; }, async feed() {
   ui.chatOpen = true; ui.msgView = 'feed'; ui.noteThread = null;
   await feature.testSeed(Array.from({length:20}, (_, i) => ({ id: i.toString(16).padStart(64,'0'), pubkey:author, kind:1, tags:[], created_at:Math.floor(Date.now()/1000)-i,
     content: 'A post in the feed. Scroll to keep Home, messages and notifications within reach. '.repeat(3) })));
@@ -26,7 +26,7 @@ await test.feed();
 const bundle = await Bun.build({ entrypoints: ['nav-test-entry'], target: 'browser', plugins: [{ name: 'nav-test', setup(build) {
   build.onResolve({filter:/^nav-test-entry$/},()=>({path:'entry',namespace:'nav-test'}));
   build.onLoad({filter:/.*/,namespace:'nav-test'},()=>({contents:entry,loader:'js',resolveDir:process.cwd()}));
-  build.onLoad({filter:/src\/features\/messages\.js$/},async({path})=>({loader:'js',contents:(await Bun.file(path).text()).replace("id: 'messages',", "id: 'messages', testSeed: async (notes) => { const c = feedNow(); await c.boot; Object.assign(c, { notes, status: 'ready', booting: false, end: true, shown: 20 }); }, testUnseen: () => { feed.unseen = 2; },")}));
+  build.onLoad({filter:/src\/features\/messages\.js$/},async({path})=>({loader:'js',contents:(await Bun.file(path).text()).replace("id: 'messages',", "id: 'messages', testSeed: async (notes) => { const c = feedNow(); await c.boot; Object.assign(c, { notes, status: 'ready', booting: false, end: true, shown: 20 }); }, testUnseen: () => { feed.unseen = 2; }, testChats: (n, m) => { stCache = null; if (m != null) st().communities = Array.from({ length: m }, (_, i) => ({ ...COMMUNITY, community_id: (i + 1).toString(16).padStart(64, 'd'), name: 'Room ' + i })); threads.clear(); for (let i = 0; i < n; i++) { const peer = (i + 1).toString(16).padStart(64, 'c'); threads.set(peer, new Map([['r' + i, { rumor: { id: 'r' + i, kind: 14, pubkey: peer, tags: [], content: 'hi ' + i, created_at: 1700000000 - i }, mine: false }]])); } },")}));
   build.onLoad({filter:/src\/nostr\.js$/},async({path})=>({loader:'js',contents:(await Bun.file(path).text())
     .replace('export async function queryOn(relays, filter, maxWait = 1500) {','export async function queryOn(relays, filter, maxWait = 1500) { return [];')
     .replace(/export function subscribeOn\(([^)]*)\) \{/,'export function subscribeOn($1) { return () => {};')}));
@@ -60,6 +60,17 @@ try {
   await page.waitForFunction(()=>test.ui.msgView==='home' && !!document.querySelector('.app-bottom-nav'));
   assert((await page.evaluate(()=>document.body.innerText)).includes('Messages'),'chat list renders');
   assert(await page.$eval('.app-nav-button:nth-child(2)',e=>e.getAttribute('aria-current')==='page'),'messages marked active');
+  const rows=()=>page.evaluate(()=>{const ls=[...document.querySelectorAll('.chat-page > .list')];return ls.map(l=>l.querySelectorAll('.chat-thread-row').length);});
+  const links=()=>page.$$eval('.chat-page > button.linklike',els=>els.map(e=>e.textContent));
+  await page.evaluate(()=>{const m={};const orig=test.wallet.loadFeatureState;test.wallet.loadFeatureState=(k,d)=>k==='messages'?m:orig(k,d);test.feature.testChats(4,4);test.render();});
+  await page.waitForFunction(()=>document.querySelectorAll('.chat-page .chat-thread-row').length>=8);
+  assert.deepEqual(await rows(),[4,4]); assert.deepEqual(await links(),['Show all 5 communities'],'four DMs show whole; five communities are gated');
+  await page.evaluate(()=>{test.feature.testChats(9);test.render();});
+  assert.deepEqual(await rows(),[4,4]); assert.deepEqual(await links(),['Show all 9 conversations','Show all 5 communities']);
+  await page.$$eval('.chat-page > button.linklike',els=>els.forEach(e=>e.click()));
+  assert.deepEqual(await rows(),[9,5]); assert.deepEqual(await links(),['Show fewer','Show fewer']);
+  await page.$$eval('.chat-page > button.linklike',els=>els.forEach(e=>e.click()));
+  assert.deepEqual(await rows(),[4,4],'show fewer folds both lists back');
   await page.evaluate(()=>{test.ui.msgView='dm';test.ui.msgPeer='b'.repeat(64);test.render();});
   await page.waitForSelector('.chat-card');
   assert(await page.evaluate(()=>document.querySelector('.chat-card').getBoundingClientRect().bottom <= document.querySelector('.app-bottom-nav').getBoundingClientRect().top),'conversation and composer fit above bottom nav');
@@ -84,5 +95,5 @@ try {
   await page.tap('.app-nav-button:nth-child(2)');
   assert(await page.evaluate(()=>!test.ui.chatOpen && test.ui.msgView===null),'visitor reaches sign-in screen');
   assert.deepEqual(errors,[]);
-  console.log('✓ Global nav works across feed, chat list, conversations, notifications, threads and wallet; Feed restores the feed; composer remains above nav; visitor entry and narrow layout work');
+  console.log('✓ Global nav works across feed, chat list, conversations, notifications, threads and wallet; Feed restores the feed; composer remains above nav; visitor entry and narrow layout work; DMs and communities cap at four behind Show all');
 } finally { await page.close(); if (remote) await browser.disconnect(); else await browser.close(); server.stop(true); }

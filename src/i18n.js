@@ -425,6 +425,7 @@ const STR = {
     msgNoDms: 'No conversations yet.',
     msgShowAllDms: 'Show all {n} conversations',
     msgShowFewerDms: 'Show fewer',
+    msgShowAllCommunities: 'Show all {n} communities',
     msgNoDmsYet: 'No messages yet. Say hi!',
     msgDmPlaceholder: 'Message',
     msgDmEncrypted: 'Private message · end-to-end encrypted',

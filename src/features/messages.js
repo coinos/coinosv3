@@ -8244,11 +8244,10 @@ export function messagesFeature(ctx) {
             ? h('div', { class: 'list' }, resultRows(h, dmSearch.rows, (r) => openThread(r.pk), (pk, node) => hook('wrapAvatar', pk, node)))
             : h('div', { class: 'small muted' }, t('msgNoMatches'))));
     }
-    // A long DM history must not bury the communities below it: past a
-    // handful, the rest waits behind "show all". (No cap for barely-over —
-    // a "show 2 more" button costs more than the rows it hides.)
-    const DM_PREVIEW = 5;
-    const shownDms = (ui.msgAllDms || dmRows.length <= DM_PREVIEW + 2) ? dmRows : dmRows.slice(0, DM_PREVIEW);
+    // A long DM history must not bury the communities below it: past four,
+    // the rest waits behind "show all". Communities get the same cap.
+    const LIST_PREVIEW = 4;
+    const shownDms = ui.msgAllDms ? dmRows : dmRows.slice(0, LIST_PREVIEW);
     kids.push(
       dmRows.length
         ? h('div', { class: 'list' }, shownDms.map(({ peer, last, unread }) =>
@@ -8268,7 +8267,7 @@ export function messagesFeature(ctx) {
     if (shownDms.length < dmRows.length)
       kids.push(h('button', { class: 'linklike small', onClick: () => { ui.msgAllDms = true; render(); } },
         t('msgShowAllDms', { n: dmRows.length })));
-    else if (ui.msgAllDms && dmRows.length > DM_PREVIEW + 2)
+    else if (ui.msgAllDms && dmRows.length > LIST_PREVIEW)
       kids.push(h('button', { class: 'linklike small', onClick: () => { ui.msgAllDms = false; render(); } },
         t('msgShowFewerDms')));
 
@@ -8305,7 +8304,9 @@ export function messagesFeature(ctx) {
           value: ui.msgNewName || '', onInput: (e) => { ui.msgNewName = e.target.value; },
         }),
         h('button', { class: 'btn-sm', onClick: () => createCommunity(ui.msgNewName || '') }, t('msgCreate'))));
-    kids.push(h('div', { class: 'list' }, communities().map((jm) => {
+    const allRooms = communities();
+    const shownRooms = ui.msgAllRooms ? allRooms : allRooms.slice(0, LIST_PREVIEW);
+    kids.push(h('div', { class: 'list' }, shownRooms.map((jm) => {
       const room = rooms.get(jm.community_id);
       const name = room?.folded?.metadata?.name || jm.name;
       // Last session's settled count anchors the number: while the guestbook
@@ -8329,6 +8330,12 @@ export function messagesFeature(ctx) {
       // the row's own centring puts the dot mid-height, off the edge
       unread ? h('i', { class: 'thread-dot' }) : null);
     })));
+    if (shownRooms.length < allRooms.length)
+      kids.push(h('button', { class: 'linklike small', onClick: () => { ui.msgAllRooms = true; render(); } },
+        t('msgShowAllCommunities', { n: allRooms.length })));
+    else if (ui.msgAllRooms && allRooms.length > LIST_PREVIEW)
+      kids.push(h('button', { class: 'linklike small', onClick: () => { ui.msgAllRooms = false; render(); } },
+        t('msgShowFewerDms')));
 
     return h('div', { class: 'card col chat-page', style: 'gap:10px' }, ...kids);
   }

@@ -5346,6 +5346,7 @@ export function messagesFeature(ctx) {
       const evs = await queryOn(relays, { ids: [ref.id] }, 4500).catch(() => []);
       c.ev = (evs || [])[0] || c.ev || null;
       c.status = c.ev ? 'ready' : 'missing';
+      if (c.ev) cacheNotifNotes([c.ev]);
       // the open thread quotes it: keep it with the thread for the next reload
       const th = c.ev && ui.noteThread && threadCache.get(ui.noteThread.rootId);
       if (th && th.root) persistThread(th);
@@ -8983,6 +8984,7 @@ export function messagesFeature(ctx) {
   const NOTIF_KEEP = 150;
   let notif = null;      // { status, items }
   let notifAt = 0, notifUnsub = null;
+  const notifNoteAsking = new Set();
   const notifSeen = () => st().notifSeen || 0;
   // Notifications are about the IDENTITY, not the wallet: the stored list
   // remembers whose it is, and another identity on the same wallet starts
@@ -8993,7 +8995,17 @@ export function messagesFeature(ctx) {
       const s = st();
       const stored = (!s.notifsPk || s.notifsPk === identityPk()) ? (s.notifs || []) : [];
       notif = { status: stored.length ? 'ready' : 'loading', items: stored };
+      // Reply events and the notes reactions/zaps point at ride beside their
+      // notification rows. Seed the in-memory note caches synchronously, so
+      // opening Notifications after a reload never paints "Fetching note…".
+      const noteCache = s.notifNotesPk === identityPk() ? (s.notifNoteCache || {}) : {};
+      for (const note of Object.values(noteCache)) {
+        if (!note || !note.id) continue;
+        notifNotes.set(note.id, note);
+        quoted.set(note.id, { status: 'ready', ev: note, at: Date.now() });
+      }
       warmNotifFaces(stored);
+      warmNotifNotes(stored);
       refreshNotifs();
     }
     return notif;
@@ -9010,6 +9022,58 @@ export function messagesFeature(ctx) {
     for (const pk of pks) { notifWarmed.add(pk); liveProfileOf(pk); }
     const deadline = Date.now() + READY_MS;
     for (const pk of pks) warmAvatar(pk, deadline).catch(() => {});
+  }
+  // Keep only what rendering and opening a thread need. Signatures and relay
+  // metadata make this cache unnecessarily large; the relays remain the
+  // source of truth whenever the live notification refresh runs.
+  const savedNotifNote = (ev) => ev && ev.id ? ({
+    id: ev.id, pubkey: ev.pubkey, kind: ev.kind, created_at: ev.created_at,
+    content: ev.content || '', tags: ev.tags || [],
+  }) : null;
+  function persistNotifs() {
+    if (!notif) return;
+    const wanted = new Set();
+    for (const x of notif.items) {
+      const id = x.what === 'reply' || x.what === 'mention' ? x.id : x.target;
+      if (id) wanted.add(id);
+    }
+    const notes = {};
+    for (const id of wanted) if (notifNotes.has(id)) notes[id] = savedNotifNote(notifNotes.get(id));
+    const s2 = st();
+    s2.notifs = notif.items; s2.notifsPk = identityPk();
+    s2.notifNoteCache = notes; s2.notifNotesPk = identityPk();
+    save(s2);
+  }
+  function cacheNotifNotes(evs) {
+    if (!notif || !(evs || []).length) return false;
+    const byId = new Map((evs || []).filter((ev) => ev && ev.id).map((ev) => [ev.id, savedNotifNote(ev)]));
+    let changed = false;
+    const wanted = new Set();
+    for (const x of notif.items) wanted.add(x.what === 'reply' || x.what === 'mention' ? x.id : x.target);
+    for (const [id, note] of byId) {
+      if (!wanted.has(id) || notifNotes.has(id)) continue;
+      notifNotes.set(id, note);
+      quoted.set(id, { status: 'ready', ev: note, at: Date.now() });
+      changed = true;
+    }
+    if (changed) persistNotifs();
+    return changed;
+  }
+  // Old notification rows did not carry their note. Upgrade them in one
+  // bounded batch while the bell/chat home is visible, before the user opens
+  // the page. New rows take the same path as soon as they arrive.
+  function warmNotifNotes(items) {
+    const ids = [...new Set((items || [])
+      .filter((x) => x && x.target && x.what !== 'reply' && x.what !== 'mention' && !notifNotes.has(x.target))
+      .map((x) => x.target).filter((id) => !notifNoteAsking.has(id)))].slice(0, NOTIF_KEEP);
+    if (!ids.length) return;
+    for (const id of ids) notifNoteAsking.add(id);
+    (async () => {
+      const got = [];
+      for (let i = 0; i < ids.length; i += 60)
+        got.push(...await queryOn(zapRelays(), { ids: ids.slice(i, i + 60) }, 4500).catch(() => []));
+      if (cacheNotifNotes(got)) scheduleRepaint();
+    })().finally(() => { for (const id of ids) notifNoteAsking.delete(id); });
   }
   // What an event says happened, or null if it isn't about you after all.
   function notifItem(ev) {
@@ -9057,11 +9121,12 @@ export function messagesFeature(ctx) {
       kept.push(x);
     }
     c.items = kept.slice(0, NOTIF_KEEP);
-    // the rows already say who; a reply row also wants its reader-facing text,
-    // which it carries — the events themselves are not kept
-    const s2 = st(); s2.notifs = c.items; s2.notifsPk = identityPk(); save(s2);
-    // a reply is a note we can open straight away; keep it in hand
+    // Keep the small notification rows and one deduplicated copy of each note
+    // they show. A reply is also a note we can open straight away.
     for (const ev of evs) if (ev.kind === 1) notifNotes.set(ev.id, ev);
+    cacheNotifNotes(evs);
+    warmNotifNotes(c.items);
+    persistNotifs();
     return true;
   }
   const notifNotes = new Map(); // reply id -> event, for opening the thread

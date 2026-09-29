@@ -5075,7 +5075,7 @@ export function messagesFeature(ctx) {
   }
   // The corner button: what it says is the state it would switch to.
   function soundBtn(onClick) {
-    const btn = h('button', { class: 'vid-sound', type: 'button', onClick: (e) => { e.stopPropagation(); e.preventDefault(); onClick(); } });
+    const btn = h('button', { class: 'vid-sound', type: 'button', onClick: (e) => { e.stopPropagation(); e.preventDefault(); onClick(e.currentTarget); } });
     btn.setSound = (on) => {
       btn.classList.toggle('on', !!on);
       btn.textContent = (on ? '\u{1F50A} ' : '\u{1F507} ') + (on ? t('videoMute') : t('videoUnmute'));
@@ -5101,12 +5101,17 @@ export function messagesFeature(ctx) {
     v.muted = !loud; // the property, not just the attribute: a script-made element autoplays only muted
     const box = h('div', { class: 'note-video-box' }, v);
     if (loud) box._skipMorph = true;
-    const btn = loud ? null : soundBtn(() => {
-      v.muted = false;
+    const btn = loud ? null : soundBtn((button) => {
+      // Morphing copies handlers from a fresh tree onto the live button.
+      // Resolve its player at tap time instead of changing a detached video.
+      const liveBox = button.closest('.note-video-box');
+      const player = liveBox?.querySelector('video');
+      if (!player) return;
+      player.muted = false;
       unmutedClips.add(url);
-      box._skipMorph = true; // the box is the viewer's now: no repaint rebuilds it muted
-      if (v.paused) v.play().catch(() => {});
-      btn.remove(); // the player's own controls carry mute from here
+      liveBox._skipMorph = true; // the box is the viewer's now: no repaint rebuilds it muted
+      if (player.paused) player.play().catch(() => {});
+      button.remove(); // the player's own controls carry mute from here
     });
     v.onvolumechange = () => {
       if (!v.muted) { unmutedClips.add(url); if (btn && btn.isConnected) btn.remove(); } // unmuted from the native control: same

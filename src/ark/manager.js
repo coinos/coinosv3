@@ -853,7 +853,23 @@ export class ArkManager {
       : 'insufficient ark balance';
   }
 
+  // A server refusal naming an expired input marks that coin; the payment
+  // then goes again on the remaining coins instead of surfacing an error the
+  // user would only answer by tapping again. Each refusal names one coin.
+  async _retryExpired(attempt) {
+    for (let i = 0; ; i++) {
+      const action = await attempt();
+      if (!(action.step === 'failed' && action.expiryRetry) || i >= 4) return action;
+    }
+  }
+
   async send(addrString, amountSat) {
+    const action = await this._retryExpired(() => this._sendOnce(addrString, amountSat));
+    if (action.step !== 'done') throw new Error(action.error || 'Ark payment did not complete');
+    return action.id;
+  }
+
+  async _sendOnce(addrString, amountSat) {
     const dest = decodeAddress(addrString);
     if (dest.arkId !== hex.encode(arkIdFromServerPubkey(this.serverPub))) {
       throw new Error('address belongs to a different ark server');
@@ -887,8 +903,7 @@ export class ArkManager {
     this.state.actions.push(action);
     this._save();
     await this._driveSend(action);
-    if (action.step !== 'done') throw new Error(action.error || 'Ark payment did not complete');
-    return action.id;
+    return action;
   }
 
   // pre-multi-input actions carried the single part in flat fields
@@ -931,7 +946,7 @@ export class ArkManager {
           if (spent) this.reconcile().catch(() => {});
           action.step = 'failed';
           action.error = e.message;
-          this._recordExpiryRejection(action);
+          if (this._recordExpiryRejection(action)) { action.expiryRetry = true; this._save(); return; }
           this._movement({ type: 'send', amountSat: action.amountSat, status: 'failed', detail: e.message, to: action.destAddress });
           this._save();
           return;
@@ -1089,7 +1104,11 @@ export class ArkManager {
 
   // Pay a bolt11 or bolt12 invoice with ark funds. Returns the action id;
   // drive to a terminal step ('done' | 'failed') via driveLn()/sync.
-  async payLnInvoice(invoice, { amountSat: userAmountSat, routingFeeSat } = {}) {
+  async payLnInvoice(invoice, opts = {}) {
+    return (await this._retryExpired(() => this._payLnInvoiceOnce(invoice, opts))).id;
+  }
+
+  async _payLnInvoiceOnce(invoice, { amountSat: userAmountSat, routingFeeSat } = {}) {
     const dec = decodeLnInvoice(invoice);
     const expectNet = { bitcoin: 'mainnet', regtest: 'regtest', signet: 'signet', testnet: 'testnet' }[this.info.network];
     // a null network is a bolt12 on a chain we don't recognize (custom
@@ -1143,7 +1162,7 @@ export class ArkManager {
     this.state.actions.push(action);
     this._save();
     await this._driveLnPay(action);
-    return action.id;
+    return action;
   }
 
   // pre-multi-input ln-pay actions carried the single part in flat fields
@@ -1215,7 +1234,7 @@ export class ArkManager {
           if (spent) this.reconcile().catch(() => {});
           action.step = 'failed';
           action.error = e.message;
-          this._recordExpiryRejection(action);
+          if (this._recordExpiryRejection(action)) { action.expiryRetry = true; this._save(); return; }
           // "already in progress" means another device of this wallet is
           // paying this very invoice — that payment's row is the history,
           // a failed row beside it would read as a lost zap.

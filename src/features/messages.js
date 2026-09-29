@@ -3472,9 +3472,6 @@ export function messagesFeature(ctx) {
   // only runs once a wallet opens.
   if (typeof window !== 'undefined') {
     window.addEventListener('scroll', () => {
-      // Update just the navigation visibility; scrolling must not repaint posts.
-      const nav = document.querySelector('.feed-bottom-nav');
-      if (nav) nav.hidden = window.scrollY < 160;
       if (!ui.profilePk && (!(ui.chatOpen && ui.msgView === 'feed') || ui.noteThread)) return;
       windowScrolled(ui.profilePk ? notesCache.get(ui.profilePk) : feed);
       // back at the top by yourself: the new posts are under your eyes, so
@@ -7534,7 +7531,6 @@ export function messagesFeature(ctx) {
     }, h('span', { html: icon(paths) }), h('span', {}, label));
     return h('nav', {
       class: 'feed-bottom-nav', 'data-key': 'feed-bottom-nav', 'aria-label': t('feedTitle'),
-      hidden: typeof window === 'undefined' || window.scrollY < 160,
     },
       button(t('home'), '<path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1z"/>', jumpToNew),
       button(t('msgDmsTitle'), '<path d="M21 11.5a8.4 8.4 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.4 8.4 0 0 1-3.8-.9L3 21l1.9-5.7a8.4 8.4 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.4 8.4 0 0 1 3.8-.9h.5a8.5 8.5 0 0 1 8 8z"/>', () => {
@@ -7546,6 +7542,12 @@ export function messagesFeature(ctx) {
         if (signinAsk()) return;
         stopFeedWatch(); openNotifs();
         window.scrollTo({ top: 0 });
+      }),
+      button(t('settingsWallet'), '<path d="M20 8V5H5a2 2 0 0 0 0 4h16v11H5a2 2 0 0 1-2-2V7"/><path d="M21 12h-5v5h5"/><path d="M17 14.5h.01"/>', () => {
+        if (isVisitor()) { toFrontDoor(); return; }
+        stopFeedWatch();
+        ui.chatOpen = false; ui.msgView = null; ui.tab = 'receive';
+        render(); window.scrollTo({ top: 0 });
       }));
   }
   function feedView() {

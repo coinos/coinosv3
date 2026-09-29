@@ -2970,6 +2970,14 @@ function goHome() {
     ui.addrScan = false;
     ui.arkMoveOpen = false;
     ui.nameEditOpen = null;
+    // ...and every other page the history tracks (the vtxo list, a
+    // transaction's detail, the hat shop, a lightbox…): home is home,
+    // whatever was open. The chat's own position is kept for its next visit.
+    for (const f of NAV_FIELDS) {
+      if (['screen', 'tab', 'msgView', 'msgCommunity', 'msgPeer', 'feedId'].includes(f)) continue;
+      ui[f] = ['chatOpen', 'giftMode', 'profEditFilled', 'profOverThread'].includes(f) ? false : null;
+    }
+    ui.arkCoinsSel = null; ui.pos = null; ui.feedEdit = null; ui.feedMenu = null;
     ui.tab = wallet.offline ? 'settings' : 'history';
     ui.draft = null;
     ui.sendResult = null;

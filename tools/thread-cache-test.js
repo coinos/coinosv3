@@ -84,7 +84,8 @@ try {
   const { messagesFeature } = await import(path);
   let requests = [], waiting = [];
   globalThis.__threadQuery = (filter) => {
-    if (filter.kinds?.includes(1) && (filter.ids || filter['#e'])) {
+    // root lookups by id carry no kind (a root can be a poll); reply queries are kind 1
+    if (filter.ids || (filter.kinds?.includes(1) && filter['#e'])) {
       requests.push(filter);
       return new Promise((resolve) => waiting.push({ filter, resolve }));
     }

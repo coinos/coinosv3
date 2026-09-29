@@ -768,6 +768,24 @@ html.no-scroll { overflow: hidden; scrollbar-gutter: auto; }
 .quote-card.clickable { cursor: pointer; }
 .quote-card.clickable:hover { border-color: var(--line-strong); }
 .quote-loading { flex-direction: row; align-items: center; gap: 8px; }
+/* A poll (NIP-88): each option a row with its share of the vote as a bar
+   behind the label. Only the bar's width changes as votes arrive, so the
+   post never changes height under the reader. */
+.poll { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.poll-opt {
+  position: relative; overflow: hidden; display: flex; align-items: center; gap: 8px;
+  width: 100%; min-height: 40px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 10px;
+  background: var(--surface2); color: inherit; font: inherit; text-align: left; cursor: pointer;
+}
+.poll-opt.static { cursor: inherit; min-height: 34px; padding: 6px 10px; }
+.poll-opt:not(.static):hover { border-color: var(--line-strong); }
+.poll-opt.mine { border-color: var(--accent); }
+.poll-bar { position: absolute; inset: 0 auto 0 0; background: var(--line); transition: width .3s ease; pointer-events: none; }
+.poll-opt.mine .poll-bar { background: var(--line-strong); }
+.poll-label { position: relative; flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.poll-opt.mine .poll-label { font-weight: 600; }
+.poll-pct { position: relative; font-variant-numeric: tabular-nums; color: var(--muted); font-size: 14px; }
+.poll-foot { margin-top: 2px; }
 /* Posts that landed while you were reading further down. Floats over the
    feed near the top, out of the way of the thumb, and takes you up to them
    when tapped. Fixed, not sticky: the feed is the page scroller, and a

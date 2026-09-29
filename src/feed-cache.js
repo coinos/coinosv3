@@ -3,7 +3,7 @@ export const FEED_CACHE_POSTS = 30;
 const MAX_FEEDS = 4, MAX_UNITS = 256_000, MAX_AGE = 7 * 86400_000;
 export function createFeedCache(storage, prefix, now = Date.now) {
   const keyOf = (id) => id === 'following' ? prefix : prefix + ':' + id;
-  const valid = (e) => e?.kind === 1 && typeof e.id === 'string' && typeof e.pubkey === 'string'
+  const valid = (e) => (e?.kind === 1 || e?.kind === 1068) && typeof e.id === 'string' && typeof e.pubkey === 'string'
     && typeof e.content === 'string' && Number.isFinite(e.created_at) && Array.isArray(e.tags);
   function compact(notes) {
     const kept = []; let size = 0;

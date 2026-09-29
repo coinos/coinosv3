@@ -446,6 +446,8 @@ export function messagesFeature(ctx) {
     if (wallet.nostr && wallet.nostr.sk) return { pubkey: wallet.nostr.pk, signer: wallet.nostr.sk };
     return null;
   }
+  // what a feed or a profile lists: notes, and polls (NIP-88)
+  const FEED_KINDS = [1, 1068];
   const myPubkeys = () => {
     const pks = [];
     const id = hook('nostrLoginIdentity');
@@ -3461,7 +3463,7 @@ export function messagesFeature(ctx) {
       : { status: 'loading', notes: seed };
     notesCache.set(pk, c);
     (async () => {
-      const evs = await queryOn(await notesRelays(pk), { kinds: [1], authors: [pk], limit: 30 }, 4500);
+      const evs = await queryOn(await notesRelays(pk), { kinds: FEED_KINDS, authors: [pk], limit: 30 }, 4500);
       const seen = new Set();
       const fresh = (evs || [])
         .filter((e) => !seen.has(e.id) && seen.add(e.id))
@@ -3507,7 +3509,7 @@ export function messagesFeature(ctx) {
     render();
     try {
       const evs = await queryOn(await notesRelays(pk),
-        { kinds: [1], authors: [pk], limit: 30, until: oldest.created_at - 1 }, 4500);
+        { kinds: FEED_KINDS, authors: [pk], limit: 30, until: oldest.created_at - 1 }, 4500);
       const seen = new Set(c.notes.map((e) => e.id));
       const older = (evs || [])
         .filter((e) => !seen.has(e.id) && seen.add(e.id))
@@ -4290,10 +4292,10 @@ export function messagesFeature(ctx) {
       return;
     }
     try {
-      const events = await queryOn(feedRelaysOr(def, def && def.all ? FIREHOSE_RELAYS : NOTE_RELAYS), { kinds: [1], limit: FEED_PAGE,
+      const events = await queryOn(feedRelaysOr(def, def && def.all ? FIREHOSE_RELAYS : NOTE_RELAYS), { kinds: FEED_KINDS, limit: FEED_PAGE,
         ...(authors.length ? { authors } : {}), ...(topics.length ? { '#t': topics } : {}) }, 3000);
       if (c.stopped) return;
-      await mergeFeed(events.filter((e) => e.kind === 1 && !isReply(e) && !hidden(e))
+      await mergeFeed(events.filter((e) => FEED_KINDS.includes(e.kind) && !isReply(e) && !hidden(e))
         .sort((a, b) => b.created_at - a.created_at).slice(0, FEED_PAGE), {}, c);
     } catch {} finally {
       if (!c.stopped) {
@@ -4744,7 +4746,7 @@ export function messagesFeature(ctx) {
     if (!staged) feedStaged.set(c, staged = new Set());
     const known = new Set([...c.notes, ...(c.catchup || []), ...(c.deferred || [])].map((e) => e.id));
     for (const e of evs || []) noteForSpam(e);
-    let add = (evs || []).filter((e) => e.kind === 1 && !isReply(e) && !hidden(e)
+    let add = (evs || []).filter((e) => FEED_KINDS.includes(e.kind) && !isReply(e) && !hidden(e)
       && !known.has(e.id) && !staged.has(e.id) && known.add(e.id) && staged.add(e.id));
     if (!add.length) return false;
     const def = feedDef(c.id);
@@ -4872,7 +4874,7 @@ export function messagesFeature(ctx) {
       // the firehose asks its relays for everything
       if (!topics.length && !def.all) return false;
       const relays = feedRelaysOr(def, def.all ? FIREHOSE_RELAYS : TOPIC_RELAYS);
-      const evs = await queryOn(relays, { kinds: [1], ...tag, limit: FEED_LIMIT, ...extra }, 5000).catch(() => []);
+      const evs = await queryOn(relays, { kinds: FEED_KINDS, ...tag, limit: FEED_LIMIT, ...extra }, 5000).catch(() => []);
       if (await mergeFeed(evs, merge, c)) { got = true; scheduleRepaint(); }
       return got;
     }
@@ -4883,7 +4885,7 @@ export function messagesFeature(ctx) {
       const chunks = [];
       for (let i = 0; i < a.length; i += REQ_AUTHORS) chunks.push(a.slice(i, i + REQ_AUTHORS));
       return chunks.map(async (chunk) => {
-        const evs = await queryOn(relays, { kinds: [1], authors: chunk, ...tag, limit: FEED_LIMIT, ...extra }, 5000).catch(() => []);
+        const evs = await queryOn(relays, { kinds: FEED_KINDS, authors: chunk, ...tag, limit: FEED_LIMIT, ...extra }, 5000).catch(() => []);
         if (await mergeFeed(evs, merge, c)) { got = true; scheduleRepaint(); }
       });
     }));
@@ -5054,11 +5056,11 @@ export function messagesFeature(ctx) {
     const on = (ev) => { mergeFeed([ev], { live: true }, c).then((ok) => { if (ok) scheduleRepaint(); }).catch(() => {}); };
     const authors = feedAuthors(def);
     if (def.curated) { const iv = setInterval(() => { if (c === feed && ui.chatOpen && ui.msgView === 'feed') refreshFeed({ force: true, live: true }, c).catch(() => {}); }, 120_000); feedUnsubs.push(() => clearInterval(iv)); return; }
-    if (!authors.length) { feedUnsubs.push(subscribeOn(feedRelaysOr(def, def.all ? FIREHOSE_RELAYS : TOPIC_RELAYS), { kinds: [1], ...tag, since }, on)); return; }
+    if (!authors.length) { feedUnsubs.push(subscribeOn(feedRelaysOr(def, def.all ? FIREHOSE_RELAYS : TOPIC_RELAYS), { kinds: FEED_KINDS, ...tag, since }, on)); return; }
     const plan = feedRelays(def) ? [{ relays: feedRelays(def), authors }] : outboxPlan(authors);
     for (const { relays, authors: a } of plan)
       for (let i = 0; i < a.length; i += REQ_AUTHORS)
-        feedUnsubs.push(subscribeOn(relays, { kinds: [1], authors: a.slice(i, i + REQ_AUTHORS), ...tag, since }, on));
+        feedUnsubs.push(subscribeOn(relays, { kinds: FEED_KINDS, authors: a.slice(i, i + REQ_AUTHORS), ...tag, since }, on));
   }
   function stopFeedWatch() {
     for (const u of feedUnsubs) { try { u(); } catch {} }
@@ -5379,7 +5381,8 @@ export function messagesFeature(ctx) {
       h('div', { class: 'note-text', style: 'white-space:pre-wrap;overflow-wrap:anywhere' },
         // one level deep only: a quote of a quote of a quote is a rabbit
         // hole, and the inner one stays a link you can follow
-        ...noteBody(ev.content, depth + 1, emojiTagMap(ev.tags))));
+        ...noteBody(ev.content, depth + 1, emojiTagMap(ev.tags))),
+      ev.kind === POLL ? pollBox(ev, { interactive: false }) : null);
   }
 
   // One URL, rendered as whatever it points at. `isImage` is markdown saying
@@ -5853,6 +5856,108 @@ export function messagesFeature(ctx) {
   }
 
   // React with whichever emoji was picked (NIP-25 takes any content).
+  // ---- polls (NIP-88) -------------------------------------------------------
+  // A kind 1068 poll is its question (content) plus ["option", id, label]
+  // tags; votes are kind 1018 events e-tagging it with ["response", id].
+  // Each person's LATEST vote counts (one option unless the poll says
+  // "multiplechoice"), and nothing cast after its endsAt.
+  const POLL = 1068, POLL_VOTE = 1018;
+  const pollOptions = (ev) => ev.tags.filter((x) => x[0] === 'option' && x[1] != null && x[2])
+    .map((x) => ({ id: String(x[1]), label: String(x[2]) }));
+  const pollMulti = (ev) => (ev.tags.find((x) => x[0] === 'polltype') || [])[1] === 'multiplechoice';
+  const pollEnds = (ev) => { const v = Number((ev.tags.find((x) => x[0] === 'endsAt') || [])[1]); return Number.isFinite(v) && v > 0 ? v : 0; };
+  const pollEnded = (ev) => !!pollEnds(ev) && Date.now() / 1000 > pollEnds(ev);
+  const pollRelays = async (ev) => [...new Set([
+    ...ev.tags.filter((x) => x[0] === 'relay' && /^wss?:\/\//i.test(x[1] || '')).map((x) => x[1]),
+    ...(await noteRelaysFor(ev).catch(() => zapRelays())),
+  ])].slice(0, 12);
+  const pollVotes = new Map(); // poll id -> { at, loaded, loading, by: Map(pk -> { t, ids }) }
+  function pollState(ev) {
+    let st = pollVotes.get(ev.id);
+    if (!st) { st = { at: 0, loaded: false, loading: false, by: new Map() }; pollVotes.set(ev.id, st); }
+    return st;
+  }
+  function pollCount(poll, v) {
+    const st = pollState(poll);
+    const ends = pollEnds(poll);
+    if (ends && v.created_at > ends) return;
+    const prev = st.by.get(v.pubkey);
+    if (prev && prev.t >= v.created_at) return;
+    const valid = new Set(pollOptions(poll).map((o) => o.id));
+    let ids = [...new Set(v.tags.filter((x) => x[0] === 'response').map((x) => String(x[1])))].filter((id) => valid.has(id));
+    if (!pollMulti(poll)) ids = ids.slice(0, 1);
+    st.by.set(v.pubkey, { t: v.created_at, ids });
+  }
+  // Votes are asked for when a poll is painted, and again a minute on.
+  function pollTally(ev) {
+    const st = pollState(ev);
+    if (!st.loading && Date.now() - st.at > 60_000) {
+      st.loading = true; st.at = Date.now();
+      (async () => {
+        const evs = await queryOn(await pollRelays(ev), { kinds: [POLL_VOTE], '#e': [ev.id], limit: 1000 }, 5000).catch(() => []);
+        for (const v of evs || []) if (v.kind === POLL_VOTE) pollCount(ev, v);
+      })().finally(() => { st.loading = false; st.loaded = true; scheduleRepaint(); });
+    }
+    return st;
+  }
+  async function votePoll(poll, optId) {
+    if (pollEnded(poll)) return;
+    const id = await requireIdentity();
+    const st = pollState(poll);
+    const prev = st.by.get(id.pubkey);
+    const mine = prev?.ids || [];
+    const ids = pollMulti(poll) ? (mine.includes(optId) ? mine.filter((x) => x !== optId) : [...mine, optId]) : [optId];
+    if (!pollMulti(poll) && mine[0] === optId) return;
+    const partial = {
+      kind: POLL_VOTE, content: '',
+      // strictly newer than our last vote, or relays and counters keep the old one
+      created_at: Math.max(Math.floor(Date.now() / 1000), (prev?.t || 0) + 1),
+      tags: [['e', poll.id], ['p', poll.pubkey], ...ids.map((x) => ['response', x]), CLIENT_TAG],
+    };
+    const evt = id.signer instanceof Uint8Array ? finalizeEvent(partial, id.signer) : await id.signer.signEvent(partial);
+    pollCount(poll, evt); // counted on screen before the relays answer
+    render();
+    const ok = await publishOn(await pollRelays(poll), evt).catch(() => false);
+    if (!ok) toast(t('msgSendFailed'));
+  }
+  // The options as rows with their share of the vote. In a quote card
+  // (`interactive` off) they are a picture of the poll — the tap opens it.
+  function pollBox(ev, { interactive = true } = {}) {
+    const opts = pollOptions(ev);
+    if (!opts.length) return null;
+    const st = pollTally(ev);
+    const counts = new Map(opts.map((o) => [o.id, 0]));
+    let voters = 0;
+    for (const v of st.by.values()) {
+      if (!v.ids.length) continue;
+      voters++;
+      for (const x of v.ids) counts.set(x, (counts.get(x) || 0) + 1);
+    }
+    const mine = new Set(myPubkeys().flatMap((pk) => st.by.get(pk)?.ids || []));
+    const ended = pollEnded(ev);
+    const canVote = interactive && !ended;
+    const shown = st.loaded || voters > 0;
+    const foot = [
+      shown ? t(voters === 1 ? 'pollVoter' : 'pollVoters', { n: voters }) : null,
+      pollMulti(ev) ? t('pollMulti') : null,
+      ended ? t('pollEnded') : pollEnds(ev) ? t('pollEndsAt', { when: new Date(pollEnds(ev) * 1000).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) }) : null,
+    ].filter(Boolean).join(' \u00b7 ');
+    return h('div', { class: 'poll' },
+      ...opts.map((o) => {
+        const n = counts.get(o.id) || 0;
+        const pct = voters ? Math.round((n / voters) * 100) : 0;
+        return h(canVote ? 'button' : 'div', {
+          class: 'poll-opt' + (mine.has(o.id) ? ' mine' : '') + (canVote ? '' : ' static'),
+          type: canVote ? 'button' : undefined,
+          onClick: canVote ? (e) => { e.stopPropagation(); votePoll(ev, o.id).catch(() => {}); } : undefined,
+        },
+          h('span', { class: 'poll-bar', style: 'width:' + (shown ? pct : 0) + '%' }),
+          h('span', { class: 'poll-label' }, (mine.has(o.id) ? '\u2713 ' : '') + o.label),
+          shown ? h('span', { class: 'poll-pct' }, pct + '%') : null);
+      }),
+      foot ? h('div', { class: 'small faint poll-foot' }, foot) : null);
+  }
+
   async function reactTo(ev, emoji) {
     const id = await requireIdentity();
     const relays = await noteRelaysFor(ev);
@@ -6495,7 +6600,7 @@ export function messagesFeature(ctx) {
     // An event of a kind this app has no renderer for (a chess game, kind
     // 64, reached through a reaction to it) is shown as what its author's
     // client said it is (NIP-31 alt), never as raw content dressed as a post.
-    const foreign = ev.kind !== 1 && ev.kind !== 30023;
+    const foreign = ev.kind !== 1 && ev.kind !== 30023 && ev.kind !== POLL;
     const altText = foreign ? ((ev.tags.find((x) => x[0] === 'alt') || [])[1] || t('noteForeignKind', { kind: ev.kind })) : null;
     const isReply = !foreign && ev.tags.some((x) => x[0] === 'e');
     const canZap = canZapPk(pk);
@@ -6545,6 +6650,7 @@ export function messagesFeature(ctx) {
         foreign
           ? h('div', { class: 'note-text small muted', style: 'white-space:pre-wrap;overflow-wrap:anywhere' }, (ev.kind === 64 ? '\u265f ' : '') + altText)
           : h('div', { class: 'note-text', style: 'white-space:pre-wrap;overflow-wrap:anywhere' }, ...noteBody(ev.content, 0, emojiTagMap(ev.tags))),
+        ev.kind === POLL ? pollBox(ev) : null,
         pending ? null : noteActions(pk, ev, { canZap }),
         !pending && whoOpen(ev.id) ? whoPanel(ev) : null));
   }
@@ -6667,7 +6773,7 @@ export function messagesFeature(ctx) {
       };
       let relays = await relaysFor(c.root || seed);
       const [roots, replies] = await Promise.all([
-        c.root ? Promise.resolve([]) : queryOn(relays, { kinds: [1], ids: [rootId] }, 4000),
+        c.root ? Promise.resolve([]) : queryOn(relays, { ids: [rootId] }, 4000), // a root can be a poll
         queryOn(relays, { kinds: [1], '#e': [rootId], limit: 80 }, 4500),
       ]);
       if (!c.root) c.root = (roots || [])[0] || null;
@@ -6681,7 +6787,7 @@ export function messagesFeature(ctx) {
         if (up === top.id) break;
         relays = [...new Set([...relays, ...(await relaysFor(top))])].slice(0, 14);
         const [ups, more] = await Promise.all([
-          queryOn(relays, { kinds: [1], ids: [up] }, 4000),
+          queryOn(relays, { ids: [up] }, 4000),
           queryOn(relays, { kinds: [1], '#e': [up], limit: 80 }, 4500),
         ]);
         const upNote = (ups || [])[0];

@@ -7680,7 +7680,9 @@ export function messagesFeature(ctx) {
       ...items.map((f) => h('button', {
         class: 'feed-chip' + (f.id === curFeedId ? ' on' : ''), type: 'button', 'data-key': 'chip:' + f.id,
         onClick: () => switchFeed(f.id),
-      }, f.name)),
+        // someone's timeline carries the person, not a name — an empty
+        // label left a blank black pill
+      }, f.of ? t('feedOfTitle', { name: displayName(f.of) }) : f.name || feedSummary(f))),
       h('button', { class: 'feed-chip add', type: 'button', title: t('feedNew'), 'aria-label': t('feedNew'), onClick: () => openFeedEditor(null) }, '+'));
   }
   // The sheets a post (or a person) can open: the ⋯ menu, the reaction

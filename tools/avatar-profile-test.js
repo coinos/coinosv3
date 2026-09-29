@@ -68,6 +68,14 @@ try {
     back = await page.evaluate(() => ({ y: window.scrollY, feed: !!document.querySelector('.notes-feed') }));
   }
   check('back returns to the feed where the reader was', back.feed && Math.abs(back.y - feedY) < 60, 'scrollY ' + back.y + ' vs ' + feedY);
+
+  // "Their timeline" from the profile: its chip names it (it was a blank pill)
+  await page.evaluate(() => { const r = [...document.querySelectorAll('.notes-feed .note-avatar')].find((n) => n.closest('[data-key]')?.innerText.includes('Bob Poster')); r.click(); });
+  await sleep(1000);
+  await click('their timeline');
+  await sleep(1500);
+  const chip = await page.evaluate(() => document.querySelector('.feed-chip.on')?.textContent || null);
+  check('someone’s timeline has a labelled chip', !!chip && /Bob Poster/.test(chip), JSON.stringify(chip));
 } finally { await browser.close(); server.stop(true); }
 console.log(ok ? '\n✅ a face opens its profile at the top' : '\n❌ failed');
 process.exit(ok ? 0 : 1);

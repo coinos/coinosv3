@@ -4832,7 +4832,7 @@ function destReady(a) {
 
 // Recipient search under the destination input: usernames and npubs resolve
 // to candidates with avatars; picking one runs the same path as pasting.
-const sendSearch = { rows: null, sync: null };
+const sendSearch = { rows: null, sync: null, pick: null, el: null };
 let sendRevealTimer = null;
 // With the phone keyboard up, the space under the recipient field is scarce —
 // park the field at the top of the view so the candidate list gets what's
@@ -4882,12 +4882,19 @@ function recipientRow(s, r, i) {
   };
   // The suggestions panel gets the same imperative treatment — see the
   // sendSearcher note: a render between key repeats kills backspace-hold.
-  const suggest = i === 0 ? h('div', { class: 'list send-suggest', style: 'display:none', 'data-fresh': '1' }) : null;
+  // One panel for the life of the page, rows rebuilt only when the results
+  // change: a background render must not swap the row under the pointer
+  // (a fresh node drops :hover, and the highlight blinked on every tick).
+  // data-fresh still installs this exact node wherever the morph lands it.
+  const suggest = i === 0 ? (sendSearch.el ||= h('div', { class: 'list send-suggest', style: 'display:none', 'data-fresh': '1' })) : null;
   const syncSuggest = () => {
     if (!suggest) return;
-    const show = sendSearch.rows && sendSearch.rows.length && searchable(r.address);
-    suggest.replaceChildren(...(show ? resultRows(h, sendSearch.rows, pickRecipient, (pk, node) => featureHook('wrapAvatar', pk, node)) : []));
-    suggest.style.display = show ? '' : 'none';
+    const show = !!(sendSearch.rows && sendSearch.rows.length && searchable(r.address));
+    const rows = show ? sendSearch.rows : null;
+    if (suggest._rows === rows) return;
+    suggest._rows = rows;
+    suggest.replaceChildren(...(rows ? resultRows(h, rows, (cand) => sendSearch.pick(cand), (pk, node) => featureHook('wrapAvatar', pk, node)) : []));
+    suggest.style.display = rows ? '' : 'none';
   };
   if (i === 0) sendSearch.sync = syncSuggest;
 
@@ -4982,6 +4989,7 @@ function recipientRow(s, r, i) {
     ) : null
   );
   syncCheck();
+  if (i === 0) sendSearch.pick = pickRecipient; // the persistent rows call this render's
   syncSuggest();
   return row;
 }

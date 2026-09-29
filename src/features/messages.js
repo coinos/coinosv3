@@ -4299,7 +4299,7 @@ export function messagesFeature(ctx) {
     ui.feedId = id;
     stopFeedWatch();
     const c = feedNow();
-    c.unseen = 0; c.shown = FEED_PAGE;
+    c.unseen = 0; c.fresh = null; c.shown = FEED_PAGE;
     admitFeed(c.deferred || [], c, true);
     // An already warmed feed can paint synchronously on entry.
     if (!c.booting) c.presentations.clear();
@@ -4683,8 +4683,43 @@ export function messagesFeature(ctx) {
     }
     const prev = feedPaint;
     feedPaint = presentation;
-    try { return keyed(noteRow(ev.pubkey, ev, displayName(ev.pubkey)), ev.id); }
+    try {
+      const row = keyed(noteRow(ev.pubkey, ev, displayName(ev.pubkey)), ev.id);
+      if (c.fresh && c.fresh.has(ev.id)) { row.classList.add('note-fresh'); watchFresh(c); }
+      return row;
+    }
     finally { feedPaint = prev; }
+  }
+
+  // New posts stay tinted until they've been in view for FRESH_SEEN_MS: a
+  // row at least half on screen (or filling most of it) starts its clock,
+  // leaving view stops it. Seen, it loses the tint in place — no repaint.
+  const FRESH_SEEN_MS = 2000;
+  let freshObserver = null;
+  const freshTimers = new Map();
+  function watchFresh(c) {
+    if (typeof IntersectionObserver === 'undefined') return;
+    freshObserver ||= new IntersectionObserver((entries) => {
+      for (const en of entries) {
+        const el = en.target, id = el.getAttribute('data-key');
+        const inView = en.isIntersecting && (en.intersectionRatio >= 0.5 || en.intersectionRect.height >= window.innerHeight * 0.5);
+        if (inView && !freshTimers.has(id)) {
+          freshTimers.set(id, setTimeout(() => {
+            freshTimers.delete(id);
+            if (!el.isConnected) return;
+            feed?.fresh?.delete(id);
+            el.classList.remove('note-fresh');
+            freshObserver.unobserve(el);
+          }, FRESH_SEEN_MS));
+        } else if (!inView && freshTimers.has(id)) {
+          clearTimeout(freshTimers.get(id)); freshTimers.delete(id);
+        }
+      }
+    }, { threshold: [0, 0.5, 1] });
+    // after the paint, when the row nodes are the mounted ones
+    requestAnimationFrame(() => {
+      for (const el of document.querySelectorAll('.notes-feed > .row.note-fresh')) freshObserver.observe(el);
+    });
   }
 
   // Posts at the door: filtered in synchronously, so the same note from a
@@ -4740,20 +4775,56 @@ export function messagesFeature(ctx) {
     for (const id of c.presentations.keys()) if (!retained.has(id)) c.presentations.delete(id);
     saveFeedCache(c);
     if (rows.length) {
-      c.unseen = (c.unseen || 0) + result.added.filter((e) => e.created_at > topBefore).length;
+      const fresh = result.added.filter((e) => e.created_at > topBefore);
+      c.unseen = (c.unseen || 0) + fresh.length;
+      c.fresh ||= new Set();
+      for (const e of fresh) c.fresh.add(e.id);
       holdScroll(render);
     }
   }
 
-  // The pill's tap: the posts are already in, so this just goes up to them.
-  // Reaching the top by yourself clears it too (see the scroll listener).
+  // The pill's tap: the posts are already in, so this just goes up to them —
+  // to the OLDEST of them, the one right above where you were reading, so
+  // you read on upward through the rest. Reaching the top by yourself clears
+  // the pill too (see the scroll listener).
   function jumpToNew() {
     const c = feed;
     if (!c) return;
     admitFeed(c.deferred || [], c, true);
     c.unseen = 0;
     render();
-    glideToTop();
+    const list = c.winList ? c.winList() : [];
+    let i = -1;
+    for (let j = list.length - 1; j >= 0; j--) if (c.fresh && c.fresh.has(list[j].id)) { i = j; break; }
+    if (i < 0) { glideToTop(); return; }
+    glideToPost(c, list, i);
+  }
+  // Scroll so post i's top sits just under the top of the window. A row
+  // outside the rendered window is placed from the height cache first, then
+  // corrected once it's mounted.
+  function glideToPost(c, list, i) {
+    const id = list[i].id, MARGIN = 8;
+    const find = () => document.querySelector('.notes-feed > [data-key="' + CSS.escape(id) + '"]');
+    try {
+      const H = window.innerHeight || 800;
+      if (!find() && c.heights) {
+        let sum = 0, n = 0;
+        for (const v of c.heights.values()) { sum += v; n++; }
+        const avg = n ? sum / n : 200;
+        let y = 0;
+        for (let j = 0; j < i; j++) y += (c.heights.get(list[j].id) || avg) + ROW_GAP;
+        window.scrollTo(0, Math.max(0, (c.listTop || 0) + y - MARGIN));
+        render();
+      }
+      const el = find();
+      if (!el) { glideToTop(); return; }
+      const target = Math.max(0, window.scrollY + el.getBoundingClientRect().top - MARGIN);
+      const reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      if (reduce) { window.scrollTo({ top: target }); return; }
+      // a long way off: close most of the distance in one step, glide the rest
+      if (Math.abs(window.scrollY - target) > H * 2) window.scrollTo({ top: target + Math.sign(window.scrollY - target) * H * 2 });
+      requestAnimationFrame(() => { try { window.scrollTo({ top: target, behavior: 'smooth' }); } catch { window.scrollTo(0, target); } });
+    } catch { glideToTop(); }
   }
   // Up to the new posts as a glide, not a cut: an instant scrollTo read as a
   // page refresh. A long way down, most of the distance is closed in one

@@ -903,6 +903,15 @@ html.no-scroll { overflow: hidden; scrollbar-gutter: auto; }
   border-left: none; border-right: none; border-radius: 0;
   box-shadow: none;
 }
+/* A post that arrived while you were reading wears a tint until it has been
+   on screen a couple of seconds; then it fades to the plain page. The side
+   shadows carry the tint through the list's padding to its edges. */
+.notes-feed > .row { transition: background-color .9s ease, box-shadow .9s ease; }
+.notes-feed > .row.note-fresh {
+  --fresh-bg: color-mix(in srgb, var(--green) 9%, var(--paper));
+  background-color: var(--fresh-bg);
+  box-shadow: -14px 0 0 var(--fresh-bg), 14px 0 0 var(--fresh-bg);
+}
 
 
 /* Inline move-money panel on the balance card. */

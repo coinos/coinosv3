@@ -555,6 +555,29 @@ export function messagesFeature(ctx) {
     profilesWarmed = true;
     const cached = profilesDisk();
     for (const [pk, p] of Object.entries(cached)) if (!profiles.has(pk)) profiles.set(pk, p);
+    // someone known to have no face paints their punk from the first frame,
+    // instead of a blank circle that turns into one when the relays answer
+    for (const [pk, t] of Object.entries(facelessDisk())) {
+      if (!profiles.has(pk)) profiles.set(pk, { name: null, picture: null, t, miss: 1 });
+    }
+  }
+  // People with no face: no kind 0 on two asks running, or one naming
+  // nothing. Kept apart from the profile blob (whose 150 rows are for real
+  // faces) as a small pubkey -> time map; one found with a face leaves it.
+  const FACELESS_MAX = 1000;
+  let facelessBlob = null, facelessFlush = null;
+  const facelessDisk = () => (facelessBlob ||= wallet.loadFeatureState('profilesFaceless', {}) || {});
+  function markFaceless(pk, on) {
+    const s = facelessDisk();
+    if (on ? s[pk] : !s[pk]) return;
+    if (on) s[pk] = Date.now(); else delete s[pk];
+    if (facelessFlush) return;
+    facelessFlush = setTimeout(() => {
+      facelessFlush = null;
+      const keys = Object.keys(s);
+      if (keys.length > FACELESS_MAX) for (const k of keys.sort((a, b) => s[a] - s[b]).slice(0, keys.length - FACELESS_MAX)) delete s[k];
+      wallet.saveFeatureState('profilesFaceless', s);
+    }, 500);
   }
   // The persisted profile blob (names, faces, thumbnails) lives parsed in
   // memory and is written back once per burst: a batch of thirty profiles
@@ -592,9 +615,10 @@ export function messagesFeature(ctx) {
     wallet.saveFeatureState('profiles', s);
   }
   function persistProfile(pk, p) {
-    // A faceless answer is not a fact worth writing down — persisting
-    // {name:null, picture:null} rows only evicts real faces from the cap and
-    // spreads a cold-relay miss across sessions.
+    // A faceless answer is not a fact worth writing down here — persisting
+    // {name:null, picture:null} rows only evicts real faces from the cap.
+    // (It goes on the faceless list instead.)
+    if (p && p.eventAt) markFaceless(pk, !p.name && !p.picture);
     if (!p || (!p.name && !p.picture)) return;
     const s = profilesDisk();
     s[pk] = { name: p.name || null, picture: p.picture || null, nip05: p.nip05 || null, lud16: p.lud16 || null,
@@ -927,7 +951,11 @@ export function messagesFeature(ctx) {
       for (const pk of pks) {
         if (found.has(pk)) continue;
         const prev = profiles.get(pk);
-        profiles.set(pk, { ...(prev || {}), t: Date.now(), miss: ((prev && prev.miss) || 0) + 1 });
+        const miss = ((prev && prev.miss) || 0) + 1;
+        profiles.set(pk, { ...(prev || {}), t: Date.now(), miss });
+        // twice running: not a cold relay, they have none (never someone
+        // whose face we do know)
+        if (miss >= 2 && !(prev && (prev.name || prev.picture))) markFaceless(pk, true);
       }
       scheduleRepaint();
     } finally {

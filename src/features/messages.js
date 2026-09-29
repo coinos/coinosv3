@@ -7455,7 +7455,25 @@ export function messagesFeature(ctx) {
   // The sheets a post (or a person) can open: the ⋯ menu, the reaction
   // picker, the list picker. Every screen that shows a post draws them —
   // the thread and profile pages once left the ⋯ tap doing nothing.
-  const noteOverlays = () => [noteSheet(), reactPicker(), listPickSheet(), reportSheet(), signinSheet()];
+  const noteOverlays = () => [noteSheet(), reactPicker(), listPickSheet(), reportSheet(), signinSheet(), feedMenuSheet()];
+  // The feed's own menu, behind the ⋯ in its header.
+  function feedMenuSheet() {
+    if (!ui.feedMenu) return null;
+    const def = feedDef();
+    const close = () => { ui.feedMenu = null; render(); };
+    if (!def) { ui.feedMenu = null; return null; }
+    const visitor = isVisitor();
+    const item = (icon, label, onClick) => h('button', { class: 'btn-block', style: 'text-align:left', onClick: () => { close(); onClick(); } }, icon + '  ' + label);
+    return h('div', { class: 'confirm-pop-backdrop', onClick: (e) => { if (e.target === e.currentTarget) close(); } },
+      h('div', { class: 'card col msg-sheet' },
+        feedPath(def, { share: true }) ? item('\u{1F517}', t('feedShare'), () => shareFeed(def)) : null,
+        item('\u{1F4E1}', t('feedRelays') + (feedRelays(def) ? ' \u00b7 ' + feedRelays(def).length : ''), () => { ui.feedRelayEdit = { id: def.id, input: '' }; }),
+        def.builtin || visitor ? null
+          : adhocFeeds.has(def.id)
+            ? item('\u{1F4BE}', t('feedSaveAdhoc'), () => openFeedEditor(def))
+            : item('\u270e', t('feedEdit'), () => openFeedEditor(def)),
+        h('button', { class: 'btn-ghost btn-block', onClick: close }, t('back'))));
+  }
   // ---- a visitor at the action bar ---------------------------------------
   // Reading is free; zapping, replying, reacting and following take a
   // wallet. A visitor who taps one gets the sign-in doors right there, and
@@ -7551,22 +7569,16 @@ export function messagesFeature(ctx) {
           def.of ? avatar(def.of, 'chat-avatar mini', true) : null,
           h('h3', { style: 'margin:0;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' },
             def.builtin && !def.all ? t('feedTitle') : def.of ? t('feedOfTitle', { name: displayName(def.of) }) : def.name),
-          def.builtin || visitor ? null
-            : adhocFeeds.has(def.id)
-              ? h('button', { class: 'btn-sm', onClick: () => openFeedEditor(def) }, t('feedSaveAdhoc'))
-              : h('button', { class: 'btn-sm', title: t('feedEdit'), 'aria-label': t('feedEdit'), onClick: () => openFeedEditor(def) }, '\u270e'),
+          // one ⋯ for the feed itself (share, relays, save or edit) and one
+          // pencil for a new post: the title keeps the room a phone has
           h('button', {
-            class: 'btn-sm' + (feedRelays(def) ? ' on' : ''), title: t('feedRelays'), 'aria-label': t('feedRelays'), style: 'margin-left:auto;flex-shrink:0',
-            onClick: () => { ui.feedRelayEdit = ui.feedRelayEdit && ui.feedRelayEdit.id === def.id ? null : { id: def.id, input: '' }; render(); },
-            html: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:block"><circle cx="12" cy="12" r="2"/><path d="M16.2 7.8a6 6 0 0 1 0 8.4M7.8 16.2a6 6 0 0 1 0-8.4M19 5a10 10 0 0 1 0 14M5 19A10 10 0 0 1 5 5"/></svg>' }),
-          feedPath(def, { share: true })
-            ? h('button', { class: 'btn-sm', title: t('feedShare'), 'aria-label': t('feedShare'), style: 'flex-shrink:0', onClick: () => shareFeed(def),
-                html: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:block"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.6" y1="13.5" x2="15.4" y2="17.5"/><line x1="15.4" y1="6.5" x2="8.6" y2="10.5"/></svg>' })
-            : null,
+            class: 'btn-sm' + (feedRelays(def) ? ' on' : ''), title: t('feedMenu'), 'aria-label': t('feedMenu'), style: 'margin-left:auto;flex-shrink:0',
+            onClick: () => { ui.feedMenu = true; render(); },
+          }, '\u22ef'),
           visitor ? null : h('button', {
-            class: 'btn-sm', style: 'flex-shrink:0',
+            class: 'btn-sm', style: 'flex-shrink:0', title: t('profNewPost'), 'aria-label': t('profNewPost'),
             onClick: () => { ui.profCompose = ui.profCompose == null ? (draftFor(POST_DRAFT) || '') : null; render(); },
-          }, t('profNewPost'))),
+            html: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:block"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>' })),
         ui.feedRelayEdit && ui.feedRelayEdit.id === def.id ? relayPanel(def) : null,
         visitor ? null : feedChips(),
         visitor ? null : postComposer(),

@@ -130,7 +130,7 @@ try {
   await page.evaluate(() => [...document.querySelectorAll('.feed-chip')].find((c) => c.textContent.trim() === 'Following').click()); await sleep(1200);
   check('Following again, with its own posts', (await chips())[0] === '*Following' && await waitText('plain post', 4000));
   await page.evaluate(() => { const a = [...document.querySelectorAll('.notes-feed a')].find((x) => x.textContent === '#bitcoin'); if (a) a.click(); }); await sleep(1200);
-  check('a #tag opens a topic feed of its own', JSON.stringify(await chips()) === JSON.stringify(['Following', 'Popular', '#gardenstr', 'Coin talk', '*#bitcoin', '+']) && await page.evaluate(() => !![...document.querySelectorAll('button')].find((b) => /save feed/i.test(b.textContent))), JSON.stringify(await chips()));
+  check('a #tag opens a topic feed of its own', JSON.stringify(await chips()) === JSON.stringify(['Following', 'Popular', '#gardenstr', 'Coin talk', '*#bitcoin', '+']) && await page.evaluate(() => { const m = document.querySelector('[aria-label="Feed options"]'); if (!m) return false; m.click(); return true; }) && await waitText('save feed', 2000) && await page.evaluate(() => { const b = [...document.querySelectorAll('.msg-sheet button')].find((x) => /back/i.test(x.textContent)); if (b) b.click(); return true; }), JSON.stringify(await chips()));
   const treq = (await page.evaluate(() => window.__reqs)).filter((f) => f['#t'] && !f.authors).pop();
   check('...asked for by topic alone', !!treq && JSON.stringify(treq['#t']) === JSON.stringify(['bitcoin']), JSON.stringify(treq || null));
 
@@ -163,7 +163,8 @@ try {
   check('the home list shows the pack feed with its pack', await page.evaluate(() => { const b = document.querySelector('.chat-back'); if (b) b.click(); return !!b; }) && await waitText('test pack', 3000));
   await page.evaluate(() => { const e = [...document.querySelectorAll('.item')].find((n) => (n.querySelector('.chat-name') || {}).textContent === 'Feed'); if (e) e.click(); }); await sleep(800);
   await page.evaluate(() => [...document.querySelectorAll('.feed-chip')].find((c) => c.textContent.trim() === 'Coin talk').click()); await sleep(800);
-  await page.evaluate(() => [...document.querySelectorAll('button')].find((b) => /edit feed/i.test(b.getAttribute('aria-label') || '')).click()); await sleep(400);
+  await page.click('[aria-label="Feed options"]'); await sleep(300); // the editor lives in the feed's ⋯ menu now
+  await page.evaluate(() => [...document.querySelectorAll('.msg-sheet button')].find((b) => /edit feed/i.test(b.textContent)).click()); await sleep(400);
   check('the editor shows what was saved', await page.evaluate(() => document.querySelector('input[placeholder="#bitcoin #nostr"]').value === '#bitcoin #lightning' && document.querySelector('input[type=checkbox]').checked));
   await click('delete feed'); await sleep(1000);
   check('deleting it lands back on Following', JSON.stringify(await chips()) === JSON.stringify(['*Following', 'Popular', '#gardenstr', 'Pack feed', '+']), JSON.stringify(await chips()));

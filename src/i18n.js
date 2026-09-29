@@ -247,6 +247,7 @@ const STR = {
     feedOfLoading: 'Reading who they follow…',
     feedNoFollowsOf: 'They follow nobody yet.',
     feedShare: 'Share this feed',
+    feedMenu: 'Feed options',
     feedSharedName: 'Shared feed',
     feedPackName: 'Follow pack',
     profTheirFeed: 'Their timeline',

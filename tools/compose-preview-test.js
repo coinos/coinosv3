@@ -65,7 +65,7 @@ try {
   await sleep(1000);
   await page.evaluate(() => { const e = [...document.querySelectorAll('.item')].find((n) => /feed/i.test(n.textContent)); if (e) e.click(); });
   await sleep(2500);
-  const opened = await click('new post');
+  const opened = await page.evaluate(() => { const b = [...document.querySelectorAll('button')].find((n) => (n.getAttribute('aria-label') || n.textContent).trim().toLowerCase() === 'new post'); if (b) { b.click(); return true; } return false; });
   check('the composer opens', opened && !!(await page.$('textarea')));
 
   await type('textarea', DRAFT);

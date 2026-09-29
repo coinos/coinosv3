@@ -1336,6 +1336,16 @@ export function messagesFeature(ctx) {
       save(s);
     }, 800);
   }
+  // Cancel means discard, including across an immediate reload. Typing can
+  // use the debounce above; an explicit destructive action is persisted now.
+  function discardDraft(key) {
+    sessionDrafts.set(key, '');
+    clearTimeout(draftPersist); draftPersist = 0;
+    const s = st();
+    s.drafts ||= {};
+    for (const [k, v] of sessionDrafts) { if (v) s.drafts[k] = v; else delete s.drafts[k]; }
+    save(s);
+  }
 
   // The morph never rewrites a focused field's value (it would fight the user
   // mid-keystroke), and the composer is focused at the moment you send — so
@@ -7586,6 +7596,7 @@ export function messagesFeature(ctx) {
   // client reads media — with a NIP-92 imeta tag published beside it for the
   // ones that would rather have the metadata than sniff the URL.
   const composeText = () => (ui.profCompose == null ? draftFor(POST_DRAFT) : ui.profCompose || '');
+  let postAttachGeneration = 0;
   // Upload, then hand the URL to whichever draft asked for it.
   async function attachTo(file, place) {
     const upload = ctx.uploadMedia || ctx.uploadImage;
@@ -7593,20 +7604,35 @@ export function messagesFeature(ctx) {
     ui.postUploading = true; render();
     try {
       const url = await upload(file);
-      (ui.postMedia ||= []).push({ url, m: file.type || '' });
-      place(url);
+      // A post canceled while its upload was in flight must stay canceled.
+      // `false` lets that composer reject the late result without affecting
+      // the reply composer, which shares this helper.
+      if (place(url) !== false) (ui.postMedia ||= []).push({ url, m: file.type || '' });
     } catch (e) { toast(e.message || String(e)); }
     ui.postUploading = false; render();
   }
-  const attachMedia = (file) => attachTo(file, (url) => {
-    const cur = composeText().replace(/\s+$/, '');
-    const next = (cur ? cur + '\n' : '') + url;
-    ui.profCompose = next;
-    setDraft(POST_DRAFT, next);
-    // you just attached a picture; showing it IS the answer to the question
-    // attaching one raises
-    ui.postPreview = true;
-  });
+  const attachMedia = (file) => {
+    const generation = postAttachGeneration;
+    return attachTo(file, (url) => {
+      if (generation !== postAttachGeneration) return false;
+      const cur = composeText().replace(/\s+$/, '');
+      const next = (cur ? cur + '\n' : '') + url;
+      ui.profCompose = next;
+      setDraft(POST_DRAFT, next);
+      // you just attached a picture; showing it IS the answer to the question
+      // attaching one raises
+      ui.postPreview = true;
+      return true;
+    });
+  };
+  function cancelPost() {
+    postAttachGeneration++;
+    ui.profCompose = null;
+    ui.postMedia = [];
+    ui.postPreview = false;
+    discardDraft(POST_DRAFT);
+    render();
+  }
   const CLIP = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:block"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>';
   const EYE = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:block"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
 
@@ -7677,7 +7703,7 @@ export function messagesFeature(ctx) {
           type: 'file', id: 'post-file', accept: 'image/*,video/*', style: 'display:none',
           onChange: async (e) => { const f = e.target.files && e.target.files[0]; e.target.value = ''; await attachMedia(f); },
         }),
-        h('button', { class: 'btn-ghost', onClick: () => { ui.profCompose = null; render(); } }, t('cancel'))));
+        h('button', { class: 'btn-ghost', onClick: cancelPost }, t('cancel'))));
   }
 
   // ---- the feed view --------------------------------------------------------

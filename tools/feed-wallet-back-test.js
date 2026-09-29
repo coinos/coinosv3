@@ -13,12 +13,13 @@ try {
   await page.setRequestInterception(true);
   page.on('request', r => r.url().startsWith(server.url.origin) ? r.continue() : r.abort());
   await page.goto(server.url.origin + '/feed', { waitUntil: 'domcontentloaded' });
-  await page.waitForSelector('.feed-bottom-nav', { visible: true });
-  await page.tap('.feed-nav-button:nth-child(4)');
-  await page.waitForFunction(() => !document.querySelector('.feed-bottom-nav'));
+  await page.waitForSelector('.app-bottom-nav', { visible: true });
+  await page.tap('.app-nav-button:nth-child(4)');
+  await page.waitForFunction(() => !document.querySelector('.app-bottom-nav'));
+  assert(!(await page.$('.app-bottom-nav')), 'no nav over the welcome screen');
   await page.goBack({ waitUntil: 'domcontentloaded' });
-  await page.waitForSelector('.feed-bottom-nav', { visible: true, timeout: 5000 });
-  assert(await page.$eval('.feed-bottom-nav', e => !e.hidden && e.getBoundingClientRect().height > 0));
+  await page.waitForSelector('.app-bottom-nav', { visible: true, timeout: 5000 });
+  assert(await page.$eval('.app-bottom-nav', e => !e.hidden && e.getBoundingClientRect().height > 0));
   assert.equal(await page.evaluate(() => scrollY), 0, 'visible on return without scrolling');
   console.log('✓ Real browser Back restores the public feed and visible navigation after Wallet');
 } finally { await browser.close(); server.stop(true); }

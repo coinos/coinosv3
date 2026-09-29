@@ -7524,28 +7524,47 @@ export function messagesFeature(ctx) {
       } catch {}
     }, 0);
   }
-  function feedBottomNav() {
+  function appBottomNav() {
+    const visitor = isVisitor();
+    const active = ui.noteThread || ui.profilePk ? 'feed' : ui.chatOpen
+      ? ui.msgView === 'feed' ? 'feed' : ui.msgView === 'notifs' ? 'notifs' : 'messages' : 'wallet';
+    const leavePage = () => {
+      stopFeedWatch(); stopNotifWatch();
+      // Top-level destinations must leave any feature page covering the shell.
+      for (const key of ['profilePk', 'profEdit', 'profEditFilled', 'profOverThread', 'noteThread', 'userSearch',
+        'zapSetup', 'hatShop', 'feedEdit', 'feedMenu', 'feedRelayEdit', 'noteSheet', 'reactPick', 'reportSheet',
+        'msgReplyTo', 'msgSheet', 'arkCoinsPage', 'arkExitPage', 'nameEditOpen', 'nostrReconnect', 'nostrLoginOpen',
+        'pos', 'lockedGift', 'viewGift', 'claimChoose', 'signinAsk']) ui[key] = null;
+      if (!visitor) { ui.screen = 'wallet'; ui.pubProf = null; }
+    };
     const icon = (paths) => '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + paths + '</svg>';
-    const button = (label, paths, onClick) => h('button', {
-      type: 'button', class: 'feed-nav-button', 'aria-label': label, onClick,
+    const button = (id, label, paths, onClick) => h('button', {
+      type: 'button', class: 'app-nav-button' + (id === 'messages' && !visitor && hook('unreadMessages') ? ' unread' : ''),
+      'aria-label': label, 'aria-current': active === id ? 'page' : undefined, onClick,
     }, h('span', { html: icon(paths) }), h('span', {}, label));
     return h('nav', {
-      class: 'feed-bottom-nav', 'data-key': 'feed-bottom-nav', 'aria-label': t('feedTitle'),
+      class: 'app-bottom-nav', 'data-key': 'app-bottom-nav',
     },
-      button(t('home'), '<path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1z"/>', jumpToNew),
-      button(t('msgDmsTitle'), '<path d="M21 11.5a8.4 8.4 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.4 8.4 0 0 1-3.8-.9L3 21l1.9-5.7a8.4 8.4 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.4 8.4 0 0 1 3.8-.9h.5a8.5 8.5 0 0 1 8 8z"/>', () => {
-        if (signinAsk()) return;
-        stopFeedWatch(); ui.msgView = 'home'; render();
+      button('feed', t('feedTitle'), '<path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1z"/>', () => {
+        if (active === 'feed' && ui.msgView === 'feed' && !ui.profilePk && !ui.noteThread && !ui.feedEdit) { jumpToNew(); return; }
+        leavePage();
+        if (visitor) { ui.pubProf = true; openFirehose(); } else showFeed(curFeedId);
         window.scrollTo({ top: 0 });
       }),
-      button(t('alertsTitle'), '<path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/>', () => {
-        if (signinAsk()) return;
-        stopFeedWatch(); openNotifs();
+      button('messages', t('msgDmsTitle'), '<path d="M21 11.5a8.4 8.4 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.4 8.4 0 0 1-3.8-.9L3 21l1.9-5.7a8.4 8.4 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.4 8.4 0 0 1 3.8-.9h.5a8.5 8.5 0 0 1 8 8z"/>', () => {
+        if (visitor) { toFrontDoor(); return; }
+        leavePage(); ui.chatOpen = true; ui.msgView = 'home'; render();
         window.scrollTo({ top: 0 });
       }),
-      button(t('settingsWallet'), '<path d="M20 8V5H5a2 2 0 0 0 0 4h16v11H5a2 2 0 0 1-2-2V7"/><path d="M21 12h-5v5h5"/><path d="M17 14.5h.01"/>', () => {
+      button('notifs', t('alertsTitle'), '<path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/>', () => {
+        if (visitor) { toFrontDoor(); return; }
+        leavePage(); openNotifs();
+        window.scrollTo({ top: 0 });
+      }),
+      button('wallet', t('settingsWallet'), '<path d="M20 8V5H5a2 2 0 0 0 0 4h16v11H5a2 2 0 0 1-2-2V7"/><path d="M21 12h-5v5h5"/><path d="M17 14.5h.01"/>', () => {
         if (isVisitor()) { toFrontDoor(); return; }
-        stopFeedWatch();
+        leavePage();
+        ui.txDetail = null; ui.arkMoveDetail = null; ui.arkReconDetail = null; ui.arkExitDetail = null; ui.giftDetail = null;
         ui.chatOpen = false; ui.msgView = null; ui.tab = 'receive';
         render(); window.scrollTo({ top: 0 });
       }));
@@ -7644,7 +7663,6 @@ export function messagesFeature(ctx) {
         // the reader's language, right where a curated feed is judged by it
         ctx.languagePicker ? h('div', { class: 'row gap6 feed-lang', 'data-key': 'feed-lang', style: 'justify-content:center;align-items:center;padding:6px 0 2px' },
           h('span', { class: 'small muted' }, t('feedLangLabel')), ctx.languagePicker()) : null,
-        feedBottomNav(),
         ...noteOverlays());
   }
 
@@ -9024,6 +9042,7 @@ export function messagesFeature(ctx) {
       if (!Object.keys(s.read || {}).length && !anyMsgs) return 1;
       return unreadCount();
     },
+    bottomNav: appBottomNav,
     notifySettingsCards() { return [notifyCard()]; },
     screenView() {
       // A profile deep link mid-resolution holds the frame over EVERY screen

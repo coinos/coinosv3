@@ -7537,15 +7537,22 @@ export function messagesFeature(ctx) {
         'pos', 'lockedGift', 'viewGift', 'claimChoose', 'signinAsk']) ui[key] = null;
       if (!visitor) { ui.screen = 'wallet'; ui.pubProf = null; }
     };
+    // The chat list used to carry the notifications row and its count; the
+    // nav's bell carries the dot now.
+    const notifsWaiting = () => {
+      if (!myPubkeys().length) return 0;
+      refreshNotifs(); // throttled inside; keeps the count honest
+      return notifUnread();
+    };
     const icon = (paths) => '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + paths + '</svg>';
     const button = (id, label, paths, onClick) => h('button', {
-      type: 'button', class: 'app-nav-button' + (id === 'messages' && !visitor && hook('unreadMessages') ? ' unread' : ''),
+      type: 'button', class: 'app-nav-button' + (!visitor && (id === 'messages' ? hook('unreadMessages') : id === 'notifs' && notifsWaiting()) ? ' unread' : ''),
       'aria-label': label, 'aria-current': active === id ? 'page' : undefined, onClick,
     }, h('span', { html: icon(paths) }), h('span', {}, label));
     return h('nav', {
       class: 'app-bottom-nav', 'data-key': 'app-bottom-nav',
     },
-      button('feed', t('feedTitle'), '<path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1z"/>', () => {
+      button('feed', t('feedTitle'), '<path d="M4 22h16a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2H8a2 2 0 0 0-2 2v16a2 2 0 0 1-2 2m0 0a2 2 0 0 1-2-2v-9c0-1.1.9-2 2-2h2"/><path d="M18 14h-8M15 18h-5M10 6h8v4h-8z"/>', () => {
         if (active === 'feed' && ui.msgView === 'feed' && !ui.profilePk && !ui.noteThread && !ui.feedEdit) { jumpToNew(); return; }
         leavePage();
         if (visitor) { ui.pubProf = true; openFirehose(); } else showFeed(curFeedId);
@@ -8201,45 +8208,6 @@ export function messagesFeature(ctx) {
     // push, the answer is a different one — see pushAdvice.
     if (st().noPushService && !st().push)
       kids.push(h('div', { class: 'notice info small' }, pushAdvice()));
-
-    // ---- the feed, above the conversations: it's the thing you read, they're
-    // the things you answer
-    kids.push(h('div', { class: 'list' },
-      h('div', {
-        class: 'item chat-thread-row',
-        onClick: () => { ui.msgView = 'feed'; switchFeed(FOLLOWING); },
-      },
-      h('div', { class: 'chat-avatar fallback' }, '\u2605'),
-      h('div', { class: 'col grow', style: 'min-width:0;gap:1px' },
-        h('span', { class: 'chat-name' }, t('feedTitle')),
-        h('div', { class: 'muted small' },
-          followsNow().set.size === 1 ? t('feedFollowing1')
-            : followsNow().set.size ? t('feedFollowingN', { n: followsNow().set.size })
-            : t('feedNoFollowsShort')))),
-      // ...the feeds you made, each its own row under it
-      ...st().feeds.map((f) => h('div', {
-        class: 'item chat-thread-row',
-        onClick: () => { ui.msgView = 'feed'; switchFeed(f.id); },
-      },
-      h('div', { class: 'chat-avatar fallback' }, feedTopics(f).length && !f.follows && !(f.authors || []).length && !(f.packs || []).length ? '#' : '\u2605'),
-      h('div', { class: 'col grow', style: 'min-width:0;gap:1px' },
-        h('span', { class: 'chat-name' }, f.name),
-        h('div', { class: 'muted small chat-preview' }, feedSummary(f))))),
-      // ...and what happened to what you posted
-      (() => {
-        const n = myPubkeys().length ? notifUnread() : 0;
-        if (myPubkeys().length) refreshNotifs(); // throttled inside; keeps the count honest
-        return h('div', {
-          class: 'item chat-thread-row' + (n ? ' unread' : ''),
-          onClick: openNotifs,
-        },
-          h('div', { class: 'chat-avatar fallback' }, '\ud83d\udd14'),
-          h('div', { class: 'col grow', style: 'min-width:0;gap:1px' },
-            h('span', { class: 'chat-name' }, t('alertsTitle')),
-            h('div', { class: 'muted small' }, n ? t('alertsNew', { n }) : t('alertsSub'))),
-          // like a group row: the dot sits mid-height, padded off the edge
-          n ? h('i', { class: 'thread-dot' }) : null);
-      })()));
 
     // ---- DMs
     kids.push(h('div', { class: 'row between', style: 'align-items:baseline' },

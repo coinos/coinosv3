@@ -772,19 +772,22 @@ html.no-scroll { overflow: hidden; scrollbar-gutter: auto; }
    sticky element inside the card would scroll away with the card. */
 #app:has(> .app-bottom-nav) { padding-bottom: calc(82px + env(safe-area-inset-bottom, 0px)); }
 .app-bottom-nav {
-  position: fixed; bottom: 0; left: 50%; transform: translateX(-50%);
-  z-index: 30; display: flex; width: min(100%, 560px); box-sizing: border-box;
-  padding: 6px 4px calc(6px + env(safe-area-inset-bottom, 0px));
+  /* Edge to edge like a system bar; the buttons stay over the page column. */
+  position: fixed; bottom: 0; left: 0; right: 0;
+  z-index: 30; display: flex; justify-content: center; box-sizing: border-box;
+  padding: 6px max(4px, calc((100% - 560px) / 2)) calc(6px + env(safe-area-inset-bottom, 0px));
   background: var(--paper); border-top: 1px solid var(--line);
   box-shadow: 0 -4px 18px rgba(0, 0, 0, .06);
 }
 .app-nav-button {
   display: flex; flex: 1; min-width: 0; flex-direction: column; align-items: center;
   justify-content: center; gap: 3px; min-height: 52px; padding: 4px;
-  border: 0; background: transparent; color: var(--ink); font-size: 11px;
+  border: 0; border-radius: 12px; background: transparent; color: var(--muted); font-size: 11px;
+  cursor: pointer; transition: color .15s ease, background-color .15s ease;
 }
+@media (hover: hover) { .app-nav-button:hover { color: var(--ink); } }
 .app-nav-button > span:first-child { display: flex; position: relative; }
-.app-nav-button[aria-current="page"] { background: var(--accent-soft); }
+.app-nav-button[aria-current="page"] { background: var(--accent-soft); color: var(--ink); font-weight: 600; }
 .app-nav-button.unread > span:first-child::after {
   content: ''; position: absolute; top: -2px; right: -4px; width: 7px; height: 7px;
   border-radius: 50%; background: var(--green); border: 1px solid var(--paper);

@@ -9,6 +9,7 @@ import { qrSvg } from './qr.js';
 import { makeSearcher, resultRows, searchable, punkUrl, warmSearch } from './recipient-search.js';
 import { npubOf, seedPubkey, neventOf } from './nostr.js';
 import { nip98Header } from './nip98.js';
+import { uploadPublicMedia, MediaUploadError } from './media-upload.js';
 import { NOSTR_MARK } from './features/nostrlogin.js';
 import { scanQr } from './scan.js';
 import { dataSources, getSource, setSource, getNetwork, setNetwork, NETWORKS } from './api.js';
@@ -3452,19 +3453,25 @@ async function onbUpload(file) {
   const fd = new FormData();
   fd.append('file', file);
   const endpoint = 'https://nostr.build/api/v2/upload/files';
-  // nostr.build no longer takes anonymous uploads — sign with the wallet's
-  // nostr key, the one key that's always available without a signer prompt.
-  const headers = {};
-  try {
-    if (wallet.nostrPubkey && wallet.nostrPubkey()) {
-      headers.authorization = await nip98Header({ signEvent: (e) => wallet.nostrSign(e) }, endpoint, 'POST');
-    }
-  } catch {}
-  const r = await fetch(endpoint, { method: 'POST', body: fd, headers });
-  const j = await r.json();
-  const url = j?.data?.[0]?.url;
+  const authorization = await nip98Header({ signEvent: (event) => wallet.nostrSign(event) }, endpoint, 'POST');
+  const response = await fetch(endpoint, {
+    method: 'POST', body: fd, headers: { authorization }, signal: AbortSignal.timeout(60_000),
+  });
+  let body = null;
+  try { body = await response.json(); } catch {}
+  const url = response.ok && body?.data?.[0]?.url;
   if (!url) throw new Error(t('onbUploadFailed'));
   return url;
+}
+
+async function publicMediaUpload(file) {
+  try {
+    return await uploadPublicMedia(file, (event) => wallet.nostrSign(event));
+  } catch (error) {
+    if (error instanceof MediaUploadError && error.code === 'too-big') throw new Error(t('mediaUploadTooBig'));
+    if (error instanceof MediaUploadError && error.code === 'unsupported') throw new Error(t('mediaUploadUnsupported'));
+    throw new Error(t('msgUploadFailed'));
+  }
 }
 
 // Whether the wizard can offer Spending at all: an Ark-capable build on a
@@ -5720,9 +5727,10 @@ const ctx = {
   setAccount: (a, dir) => setAccountSel(a, dir),
   // Open (or create) a wallet from a mnemonic — used by nostr login.
   openMnemonic: async (mnemonic, passphrase, opts) => enterWallet(mnemonic, passphrase, opts),
-  // Upload an image (avatar) and get back its URL — the same signed
-  // nostr.build path the onboarding picker uses.
+  // Profile pictures retain the metadata-scrubbing image uploader. Public
+  // post media uses resilient Blossom storage and media-specific failures.
   uploadImage: (file) => onbUpload(file),
+  uploadMedia: (file) => publicMediaUpload(file),
   // A nostr login that lands mid-wizard: a restored wallet has been through
   // onboarding elsewhere, so the wizard ends without tour or prompts; a fresh
   // one falls through to the wallet + tour on the next render.

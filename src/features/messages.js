@@ -6995,7 +6995,7 @@ export function messagesFeature(ctx) {
       // A reply can carry a picture too — same upload, same imeta tag, same
       // paperclip. The URL lands in the draft, which is what every client
       // reads as the media.
-      ctx.uploadImage ? h('button', {
+      (ctx.uploadMedia || ctx.uploadImage) ? h('button', {
         class: 'attach-btn', title: t('feedAttach'), 'aria-label': t('feedAttach'), disabled: !!ui.postUploading,
         onClick: () => document.getElementById('reply-file')?.click(),
       }, ui.postUploading ? h('span', { class: 'spinner sm' }) : h('span', { style: 'display:flex', html: CLIP })) : null,
@@ -7588,10 +7588,11 @@ export function messagesFeature(ctx) {
   const composeText = () => (ui.profCompose == null ? draftFor(POST_DRAFT) : ui.profCompose || '');
   // Upload, then hand the URL to whichever draft asked for it.
   async function attachTo(file, place) {
-    if (!file || !ctx.uploadImage) return;
+    const upload = ctx.uploadMedia || ctx.uploadImage;
+    if (!file || !upload) return;
     ui.postUploading = true; render();
     try {
-      const url = await ctx.uploadImage(file);
+      const url = await upload(file);
       (ui.postMedia ||= []).push({ url, m: file.type || '' });
       place(url);
     } catch (e) { toast(e.message || String(e)); }
@@ -7667,7 +7668,7 @@ export function messagesFeature(ctx) {
             render();
           }
         } }, t('profPostBtn')),
-        ctx.uploadImage ? h('button', {
+        (ctx.uploadMedia || ctx.uploadImage) ? h('button', {
           class: 'attach-btn', title: t('feedAttach'), 'aria-label': t('feedAttach'), disabled: !!ui.postUploading,
           onClick: () => document.getElementById('post-file')?.click(),
         }, ui.postUploading ? h('span', { class: 'spinner sm' }) : h('span', { style: 'display:flex', html: CLIP })) : null,
@@ -7804,7 +7805,10 @@ export function messagesFeature(ctx) {
       class: 'app-bottom-nav', 'data-key': 'app-bottom-nav',
     },
       button('feed', t('feedTitle'), '<path d="M4 22h16a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2H8a2 2 0 0 0-2 2v16a2 2 0 0 1-2 2m0 0a2 2 0 0 1-2-2v-9c0-1.1.9-2 2-2h2"/><path d="M18 14h-8M15 18h-5M10 6h8v4h-8z"/>', () => {
-        if (active === 'feed' && ui.msgView === 'feed' && !ui.profilePk && !ui.noteThread && !ui.feedEdit) { jumpToNew(); return; }
+        // A destination tab is a destination: tapping Feed while already
+        // there always returns to its top. Only the explicit "x new posts"
+        // pill jumps to the first unread arrival.
+        if (active === 'feed' && ui.msgView === 'feed' && !ui.profilePk && !ui.noteThread && !ui.feedEdit) { glideToTop(); return; }
         leavePage();
         if (visitor) { ui.pubProf = true; openFirehose(); } else showFeed(curFeedId);
         window.scrollTo({ top: 0 });

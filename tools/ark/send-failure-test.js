@@ -10,11 +10,12 @@ const send = await import('../../src/ark/send.js');
 let cosigns = 0;
 const badId = 'a'.repeat(64) + ':0';
 const error = new GrpcError(3, `bad user input: vtxo ${badId} expired at height 100 (tip = 200)`, 'RequestArkoorCosign');
+let nextError = error;
 mock.module('../../src/ark/send.js', () => ({
   ...send,
   registerVtxoTransactions: async () => {},
   buildArkoorSend: () => ({}),
-  cosignPackageWithServer: async () => { cosigns++; throw error; },
+  cosignPackageWithServer: async () => { cosigns++; throw nextError; },
 }));
 const { ArkManager } = await import('../../src/ark/manager.js');
 const key = n => secp256k1.getPublicKey(new Uint8Array(32).fill(n), true);
@@ -32,17 +33,25 @@ Object.defineProperty(mgr, 'chain', { value: { tipHeight: async () => 200 } });
 mgr._decoded = () => ({ _raw: { bytes: new Uint8Array() } });
 mgr._keyForVtxo = () => ({});
 
-await assert.rejects(mgr.send(dest, 181), /expired at height 100/);
+// the refusal marks the coin and the send goes again on what is left —
+// here nothing covers 181, so the user hears about the shortfall
+await assert.rejects(mgr.send(dest, 181), /1 sat expired and unusable/);
+assert.equal(cosigns, 1, 'the retry does not reuse the rejected coin');
 assert.equal(mgr.state.actions[0].step, 'failed');
 assert.ok(mgr.state.vtxos.every(v => v.state === 'spendable'), 'atomic rejection does not consume either input');
 assert.deepEqual(mgr.balance(), { spendableSat: 180, pendingSat: 0, boardingSat: 0, expiredSat: 1 });
+assert.equal(mgr.state.movements.length, 0, 'the retried attempt leaves no failed row');
+assert.equal(mgr.pendingActions().length, 0, 'a definitive rejection is not driven again');
+console.log('✓ an expired-input rejection retries without the coin and preserves unspent inputs');
+
+// any other refusal still surfaces at once and is recorded
+nextError = new GrpcError(3, 'bad user input: something else', 'RequestArkoorCosign');
+await assert.rejects(mgr.send(dest, 180), /something else/);
+assert.equal(cosigns, 2, 'no retry for other refusals');
 assert.equal(mgr.state.movements[0].status, 'failed');
 assert.equal(mgr.state.movements[0].to, dest);
-assert.equal(mgr.pendingActions().length, 0, 'a definitive rejection is not automatically retried');
-console.log('✓ a rejected send throws, preserves unspent inputs, and records failure');
-
-await assert.rejects(mgr.send(dest, 181), /1 sat expired and unusable/);
-assert.equal(cosigns, 1, 'send-all does not reuse the rejected coin');
+console.log('✓ other rejections throw once and record failure');
+nextError = error;
 assert.equal(mgr._selectInputs(180, 200)[0].amountSat, 180);
 assert.equal(mgr._expired({ amountSat: 1, expiryHeight: 100 }, 200), false, 'other dust retains its existing policy');
 delete mgr.state.vtxos[0].expiryRejected;

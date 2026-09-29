@@ -1667,7 +1667,8 @@ export function arkFeature(ctx) {
       const adv = await lookupArkZapTarget(pk).catch(() => ({ status: 'noark' }));
       if (!live()) return;
       if (adv.status === 'ready') { Object.assign(z, adv); if (z.autoSat) return auto(); render(); return; }
-      if (adv.status === 'wrongnet') { Object.assign(z, adv); bail(t('arkGiftWrongNet', { net: adv.net })); render(); return; }
+      // An advert for another network is no address here: keep looking.
+      if (adv.status === 'wrongnet') z.net = adv.net;
       // 1b. BIP-353 with an ark instruction; remember on-chain as last resort
       const uris = [];
       try {
@@ -1699,12 +1700,14 @@ export function arkFeature(ctx) {
       }
       // 2. lightning via the zap flow (connect first — canLnPay needs it)
       if (profile && (profile.lud16 || profile.lud06)) {
+        z.lnOk = true;
         await connectArk().catch(() => {});
         if (!live()) return;
         if (ctx.hook('canLnZap')) { if (ui.arkZap === z) ui.arkZap = null; ctx.hook('lnZapNpub', pk, npub, z.eventId, z.autoSat); return; }
       }
-      // 3. on-chain fallback
-      if (onchain) {
+      // 3. on-chain fallback (a one-tap zap can't take the send form: it
+      // goes as a locked gift below instead)
+      if (onchain && !(z.autoSat && z.eventId && zapGiftOk())) {
         if (z.autoSat && z.eventId) { bail(); render(); return; }
         ui.arkZap = null;
         ui.send.recipients[0].address = onchain;
@@ -1712,7 +1715,23 @@ export function arkFeature(ctx) {
         render();
         return;
       }
-      if (live()) { z.status = 'noark'; bail(); render(); }
+      if (!live()) return;
+      z.status = z.net ? 'wrongnet' : 'noark';
+      // 4. last resort: an ark gift locked to their nostr key, DMed to them.
+      // To the payer it's just a zap.
+      if (z.autoSat && zapGiftOk(z.autoSat)) {
+        try {
+          await performArkZapGift(z, z.autoSat);
+          if (ui.arkZap === z) ui.arkZap = null;
+          ctx.hook('zapSettled', z.eventId, true, z.autoSat);
+          if (!z.eventId) toast('⚡ ' + t('zapSentShort', { n: fmtAmount(z.autoSat) + ' ' + unitLabel() }));
+        } catch (e) {
+          if (!bail(e.message)) ui.sendError = e.message;
+        }
+        render();
+        return;
+      }
+      bail(z.net ? t('arkGiftWrongNet', { net: z.net }) : undefined); render();
     })().catch((e) => { if (live()) { z.status = 'noark'; if (!bail(e.message)) ui.sendError = e.message; render(); } });
   }
 
@@ -1828,6 +1847,34 @@ export function arkFeature(ctx) {
   // safe to put in the receipt because only the recipient's key — or the
   // claim code we DM them — opens it. Unclaimed, it stays revocable from the
   // gift card like any other ark gift.
+  // Can a zap to this person leave as a locked gift (this build carries
+  // gifts, the wallet can sign, and Spending covers it)?
+  function zapGiftOk(sats = 330) {
+    return !wallet.watchOnly && (arkBalance()?.spendableSat || 0) >= Math.max(330, sats) && !!ctx.hook('canLockGift');
+  }
+  async function performArkZapGift(z, sats) {
+    const g = await createArkGift(sats, z.pk);
+    const locked = ctx.hook('lockArkGift', g.code, sats, z.pk);
+    if (!locked) throw new Error(t('claimFailed')); // no gifts feature in this build
+    noteZap('to:' + g.address, z.pk);
+    const gift = { url: locked.url, claimCode: locked.claimCode, dm: 'sending' };
+    // best-effort receipt; carries the locked link so the recipient can
+    // discover the gift from the note even if the DM never lands
+    wallet.nostrPublish({
+      kind: ARK_ZAP_KIND,
+      content: (z.comment || '').slice(0, 280),
+      tags: [['p', z.pk], ...(z.eventId ? [['e', z.eventId]] : []),
+        ['amount', String(sats)], ['network', getNetwork()], ['gift', locked.url], ...zapSenderTag()],
+    }).catch(() => {});
+    const dmText = t('giftDmText', { amount: fmtAmount(sats) + ' ' + unitLabel(), link: locked.url, code: locked.claimCode });
+    if (wallet.sendNostrDM) {
+      wallet.sendNostrDM(z.pk, dmText)
+        .then((ok) => { gift.dm = ok ? 'sent' : 'failed'; render(); })
+        .catch(() => { gift.dm = 'failed'; render(); });
+    } else gift.dm = 'failed';
+    return gift;
+  }
+
   async function doArkZapGift() {
     const z = ui.arkZap;
     const sats = ctx.parseAmount(z.amount, ctx.getUnit());
@@ -1835,27 +1882,11 @@ export function arkFeature(ctx) {
     if (sats > (arkBalance()?.spendableSat || 0)) { ui.sendError = t('giftExceedsBalance'); render(); return; }
     ui.busy = true; ui.sendError = ''; render();
     try {
-      const g = await createArkGift(sats, z.pk);
-      const locked = ctx.hook('lockArkGift', g.code, sats, z.pk);
-      if (!locked) throw new Error(t('claimFailed')); // no gifts feature in this build
-      noteZap('to:' + g.address, z.pk);
-      const done = (ui.arkZapped = { amountSat: sats, npub: z.npub, gift: { url: locked.url, claimCode: locked.claimCode, dm: 'sending' } });
+      const gift = await performArkZapGift(z, sats);
+      ctx.hook('zapSettled', z.eventId, true, sats);
+      ui.arkZapped = { amountSat: sats, npub: z.npub, gift };
       ui.arkZap = null;
       ui.send = blankSend();
-      // best-effort receipt; carries the locked link so the recipient can
-      // discover the gift from the note even if the DM never lands
-      await wallet.nostrPublish({
-        kind: ARK_ZAP_KIND,
-        content: (z.comment || '').slice(0, 280),
-        tags: [['p', z.pk], ...(z.eventId ? [['e', z.eventId]] : []),
-          ['amount', String(sats)], ['network', getNetwork()], ['gift', locked.url], ...zapSenderTag()],
-      }).catch(() => {});
-      const dmText = t('giftDmText', { amount: fmtAmount(sats) + ' ' + unitLabel(), link: locked.url, code: locked.claimCode });
-      if (wallet.sendNostrDM) {
-        wallet.sendNostrDM(z.pk, dmText)
-          .then((ok) => { done.gift.dm = ok ? 'sent' : 'failed'; render(); })
-          .catch(() => { done.gift.dm = 'failed'; render(); });
-      } else done.gift.dm = 'failed';
     } catch (e) {
       ui.sendError = e.message;
     }
@@ -1870,7 +1901,9 @@ export function arkFeature(ctx) {
     if (ui.arkZapped) {
       const gift = ui.arkZapped.gift;
       const finish = () => { ui.arkZapped = null; ui.send = blankSend(); render(); };
-      if (!gift) {
+      // A gift zap looks like any other zap. Only a DM that couldn't be
+      // delivered needs the payer: the link and code to pass along by hand.
+      if (!gift || gift.dm !== 'failed') {
         return h('div', {
           class: 'card col',
           style: 'align-items:center;text-align:center;gap:14px;cursor:pointer;padding:48px 20px',
@@ -1881,29 +1914,25 @@ export function arkFeature(ctx) {
           h('div', { class: 'amount-neg', style: 'font-size:18px' }, '-' + fmtAmount(ui.arkZapped.amountSat) + ' ' + unitLabel()),
           h('div', { class: 'small muted' }, t('tapToProceed')));
       }
-      // A locked-gift zap has aftercare: the DM's fate, and the link + claim
-      // code to pass along by hand when the DM couldn't be delivered.
       return h('div', { class: 'card col', style: 'align-items:center;text-align:center;gap:12px;padding:28px 16px' },
-        h('div', { class: 'check-badge' }, '🎁'),
-        h('h2', { style: 'margin:0' }, t('arkZapGiftSentTitle')),
+        h('div', { class: 'check-badge' }, '⚡'),
+        h('h2', { style: 'margin:0' }, t('arkZapSentTitle')),
         h('div', { class: 'amount-neg', style: 'font-size:18px' }, '-' + fmtAmount(ui.arkZapped.amountSat) + ' ' + unitLabel()),
-        gift.dm === 'sending'
-          ? h('div', { class: 'row gap6', style: 'align-items:center' }, h('span', { class: 'spinner sm' }), h('span', { class: 'small muted' }, t('giftDmSending')))
-          : gift.dm === 'sent'
-            ? h('div', { class: 'small', style: 'color:var(--green)' }, t('giftDmSent'))
-            : h('div', { class: 'notice info', style: 'text-align:left' }, t('giftDmFailed')),
+        h('div', { class: 'notice info', style: 'text-align:left' }, t('giftDmFailed')),
         h('div', { class: 'addr-box break', style: 'width:100%;font-size:11px' }, gift.url),
         h('div', { class: 'row gap6 wrap', style: 'justify-content:center' },
           copyBtn(gift.url, t('copyLink')),
-          gift.dm !== 'sent' ? copyBtn(gift.claimCode, t('giftCopyCode')) : null),
+          copyBtn(gift.claimCode, t('giftCopyCode'))),
         h('button', { class: 'btn-primary btn-block', onClick: finish }, t('done')));
     }
     const z = ui.arkZap;
     if (!z) return null;
     const spendable = arkBalance()?.spendableSat || 0;
-    // No ark address found — but a zap can still leave as an ark gift locked
-    // to their nostr key, when this build carries the gifts feature.
-    const giftOk = z.status === 'noark' && !wallet.watchOnly && spendable >= 1 && !!ctx.hook('canLockGift');
+    // No ark address or Lightning found — the zap still leaves, as an ark
+    // gift locked to their nostr key. The payer sees an ordinary zap.
+    const noAddr = z.status === 'noark' || z.status === 'wrongnet';
+    const giftOk = noAddr && !wallet.watchOnly && !!ctx.hook('canLockGift');
+    const payable = z.status === 'ready' || giftOk;
     const amountInputs = (hint) => h('div', { class: 'col gap6' },
       h('div', { class: 'input-group' },
         h('input', { type: 'number', min: '0', inputmode: 'decimal', placeholder: t('lnPayAmount'), value: z.amount,
@@ -1918,31 +1947,24 @@ export function arkFeature(ctx) {
       ctx.hook('profileChip', z.pk, 'lg') || h('div', { class: 'small muted', style: 'word-break:break-all' }, z.npub),
       z.status === 'lookup' ? h('div', { class: 'row gap6', style: 'align-items:center' }, h('span', { class: 'spinner sm' }), h('span', { class: 'small muted' }, t('arkZapLookup'))) : null,
       z.status === 'noark' && !giftOk ? h('div', { class: 'notice err' }, t('arkZapNoArk')) : null,
-      giftOk ? h('div', { class: 'notice info' }, t('arkZapNoArkGift')) : null,
-      giftOk ? amountInputs(t('arkZapGiftHint')) : null,
-      giftOk
-        ? (ui.busy
-            ? h('button', { class: 'btn-primary btn-block', disabled: true }, h('span', { class: 'spinner' }))
-            : h('button', { class: 'btn-primary btn-block', onClick: doArkZapGift }, '🎁 ' + t('arkZapGiftBtn')))
+      z.status === 'wrongnet' && !giftOk ? h('div', { class: 'notice err' }, t('arkGiftWrongNet', { net: z.net })) : null,
+      // Only someone with a Lightning address gets the Lightning door (the
+      // lookup normally hands such a person straight to the zaps feature).
+      noAddr && z.lnOk && ctx.hook('canLnZap')
+        ? h('button', { class: 'btn-block', disabled: !!ui.busy, onClick: () => { ctx.hook('lnZapNpub', z.pk, z.npub, z.eventId); } }, '⚡ ' + t('lnZapFallback'))
         : null,
-      z.status === 'wrongnet' ? h('div', { class: 'notice err' }, t('arkGiftWrongNet', { net: z.net })) : null,
-      // No Ark address, but they may still take a Lightning zap — hand off to
-      // the zaps feature (present alongside swaps).
-      (z.status === 'noark' || z.status === 'wrongnet') && ctx.hook('canLnZap')
-        ? h('button', { class: (giftOk ? '' : 'btn-primary ') + 'btn-block', disabled: !!ui.busy, onClick: () => { ctx.hook('lnZapNpub', z.pk, z.npub, z.eventId); } }, '⚡ ' + t('lnZapFallback'))
-        : null,
-      z.status === 'ready' && spendable < 330
+      payable && spendable < 330
         ? h('div', { class: 'notice info' }, t('zapNoBalance'))
-        : z.status === 'ready'
+        : payable
         ? amountInputs(t('arkZapHint'))
         : null,
       ui.sendError ? h('div', { class: 'notice err' }, ui.sendError) : null,
       h('div', { class: 'row gap6' },
         h('button', { class: 'btn-ghost', onClick: () => { ui.arkZap = null; ui.sendError = ''; ui.send = blankSend(); render(); } }, t('back')),
-        z.status === 'ready' && spendable >= 330
+        payable && spendable >= 330
           ? (ui.busy
               ? h('button', { class: 'btn-primary grow', disabled: true }, h('span', { class: 'spinner' }))
-              : h('button', { class: 'btn-primary grow', onClick: doArkZap }, t('arkZapBtn')))
+              : h('button', { class: 'btn-primary grow', onClick: z.status === 'ready' ? doArkZap : doArkZapGift }, t('arkZapBtn')))
           : null));
   }
 

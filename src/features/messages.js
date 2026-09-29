@@ -5318,15 +5318,32 @@ export function messagesFeature(ctx) {
     return c;
   }
 
+  // A feed row that froze before its quote arrived showed a link — and
+  // nothing asked for the note again. Keep asking, and once the note and its
+  // own faces/pictures are in, the row takes the card.
+  function quoteWarm(ref) {
+    const c = quotedNote(ref);
+    if (c.ev && !c.warm && !c.warming) {
+      c.warming = noteReady(c.ev, Date.now() + READY_MS, 1).catch(() => {})
+        .then(() => { c.warm = true; c.warming = null; scheduleRepaint(); });
+    }
+    return c;
+  }
+
   // The card. Deliberately not a noteRow: a quote is context, not another
   // post to act on — no reply, no boost, no zap of its own. Tapping it opens
   // the note properly, which is where those live.
   function quoteCard(ref, depth) {
     if (feedPaint && !feedPaint.quotes.has(ref.id)) feedPaint.quotes.set(ref.id, { ...quoted.get(ref.id) });
-    const c = feedPaint ? feedPaint.quotes.get(ref.id) : quotedNote(ref);
-    if (feedPaint && !c?.ev) return h('a', {
-      href: '#', onClick: (e) => { e.preventDefault(); e.stopPropagation(); openNoteRef(ref); },
-    }, t('noteRefLink'));
+    let c = feedPaint ? feedPaint.quotes.get(ref.id) : quotedNote(ref);
+    if (feedPaint && !c?.ev) {
+      const live = quoteWarm(ref);
+      if (!(live.ev && live.warm)) return h('a', {
+        href: '#', onClick: (e) => { e.preventDefault(); e.stopPropagation(); openNoteRef(ref); },
+      }, t('noteRefLink'));
+      c = { ...live };
+      feedPaint.quotes.set(ref.id, c);
+    }
     if (c.status === 'loading') {
       return h('div', { class: 'quote-card quote-loading' },
         h('span', { class: 'spinner sm' }), h('span', { class: 'small faint' }, t('noteRefLoading')));

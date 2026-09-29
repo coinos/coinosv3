@@ -30,6 +30,18 @@ const html = await buildHtml({ minify: true, pwa: false });
 const server = Bun.serve({ port: 5269, fetch: () => new Response(html, { headers: { 'content-type': 'text/html' } }) });
 const browser = await puppeteer.launch({ executablePath: '/usr/bin/google-chrome', headless: 'new', args: ['--no-sandbox'] });
 const page = await browser.newPage();
+// --slow: the relays miss the quoted note the first time it is asked for
+// (ours was down for an evening once), so the row freezes with the fallback
+// link; the next ask, half a minute on, finds it.
+const SLOW_MS = 32000;
+await page.evaluateOnNewDocument((id) => {
+  const send = WebSocket.prototype.send;
+  const t0 = Date.now();
+  WebSocket.prototype.send = function (d) {
+    if (localStorage.getItem('__slowQuote') && typeof d === 'string' && d.includes(id) && d.startsWith('["REQ"') && Date.now() - t0 < 20000) return;
+    return send.call(this, d);
+  };
+}, target.id);
 const click = (t) => page.evaluate((x) => { const e = [...document.querySelectorAll('button')].find((n) => n.textContent.trim().toLowerCase().includes(x)); if (e) { e.click(); return true; } return false; }, t);
 const waitText = async (x, ms = 25000) => { for (let i = 0; i < ms/250; i++) { if ((await page.evaluate(() => document.body.innerText)).toLowerCase().includes(x)) return true; await sleep(250); } return false; };
 try {
@@ -52,13 +64,18 @@ try {
     localStorage.setItem(k + ':feedNotes', JSON.stringify([
       { id: 'd'.repeat(64), pubkey: pk, kind: 1, created_at: Math.floor(Date.now()/1000), content: 'what he said nostr:' + ref, tags: [] },
     ]));
+    localStorage.setItem(k + ':profiles', JSON.stringify({ [pk]: { name: 'Quoter', t: Date.now() } }));
   }, [base, A, nevent]);
+  if (process.argv.includes('--slow')) await page.evaluate(() => localStorage.setItem('__slowQuote', '1'));
   await page.reload({ waitUntil: 'domcontentloaded' });
   await waitText('receive', 20000);
-  await page.evaluate(() => { const b = [...document.querySelectorAll('button')].find((e) => /message/i.test(e.getAttribute('aria-label') || '')); if (b) b.click(); });
-  await sleep(1000);
-  await page.evaluate(() => { const e = [...document.querySelectorAll('.item')].find((n) => /feed/i.test(n.textContent)); if (e) e.click(); });
+  await page.evaluate(() => document.querySelector('.app-bottom-nav .app-nav-button').click());
   await sleep(7000);
+  if (process.argv.includes('--slow')) {
+    for (let i = 0; i < 40 && !(await page.evaluate(() => document.body.innerText.includes('view note'))); i++) await sleep(250);
+    check('a late quote first paints as a link', await page.evaluate(() => document.body.innerText.includes('view note')));
+    await sleep(SLOW_MS + 4000);
+  }
 
   const card = await page.evaluate(() => {
     const q = document.querySelector('.quote-card');

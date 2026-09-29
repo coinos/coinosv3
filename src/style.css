@@ -726,6 +726,7 @@ html:has(#app .chat-card), body:has(#app .chat-card) { overflow: hidden; }
   display: flex; align-items: center; justify-content: center;
   background: rgba(8, 10, 14, .94); padding: 16px;
   animation: lightbox-in .12s ease-out;
+  touch-action: none; /* pinch and drag are the picture's own (see attachZoom) */
 }
 /* Nothing scrolls behind a picture that fills the screen — and the reserved
    scrollbar gutter (see html, top of file) stands down with it, or it shows
@@ -737,6 +738,7 @@ html.no-scroll { overflow: hidden; scrollbar-gutter: auto; }
 .lightbox img {
   max-width: 100%; max-height: 100svh; max-height: 100vh;
   object-fit: contain; border-radius: 6px; cursor: zoom-out;
+  user-select: none; -webkit-user-select: none; transform-origin: center center; will-change: transform;
 }
 .lightbox-x {
   position: absolute; top: max(10px, env(safe-area-inset-top)); right: 10px;

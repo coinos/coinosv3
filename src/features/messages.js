@@ -3021,7 +3021,20 @@ export function messagesFeature(ctx) {
     }
   }
 
+  // A profile opens at its top: keeping the feed's scroll offset landed the
+  // reader deep in that person's posts, which read as a thread. Back (a
+  // popstate) puts them where they were on the page they left.
+  const profReturn = []; // [{ pk, y }] per profile opened, newest last
+  window.addEventListener('popstate', () => {
+    const top = profReturn[profReturn.length - 1];
+    if (!top || ui.profilePk === top.pk) return;
+    profReturn.pop();
+    requestAnimationFrame(() => { try { window.scrollTo(0, top.y); } catch {} });
+  });
   function openProfile(pk) {
+    let y = 0; try { y = window.scrollY || 0; } catch {}
+    if (ui.profilePk !== pk) profReturn.push({ pk, y });
+    if (profReturn.length > 20) profReturn.shift();
     ui.profilePk = pk;
     // Opened from inside a thread (an author's avatar/name), the profile
     // stacks ON TOP of it — back returns to the conversation. The screen
@@ -3030,6 +3043,7 @@ export function messagesFeature(ctx) {
     ui.profOverThread = !!ui.noteThread;
     ui.profEdit = null; ui.profEditFilled = false; ui.logoutConfirm = null; ui.profCompose = null;
     render();
+    try { window.scrollTo(0, 0); } catch {}
     fetchFullProfile(pk);
     notesFor(pk);
   }

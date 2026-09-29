@@ -3472,6 +3472,9 @@ export function messagesFeature(ctx) {
   // only runs once a wallet opens.
   if (typeof window !== 'undefined') {
     window.addEventListener('scroll', () => {
+      // Update just the navigation visibility; scrolling must not repaint posts.
+      const nav = document.querySelector('.feed-bottom-nav');
+      if (nav) nav.hidden = window.scrollY < 160;
       if (!ui.profilePk && (!(ui.chatOpen && ui.msgView === 'feed') || ui.noteThread)) return;
       windowScrolled(ui.profilePk ? notesCache.get(ui.profilePk) : feed);
       // back at the top by yourself: the new posts are under your eyes, so
@@ -7524,6 +7527,27 @@ export function messagesFeature(ctx) {
       } catch {}
     }, 0);
   }
+  function feedBottomNav() {
+    const icon = (paths) => '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + paths + '</svg>';
+    const button = (label, paths, onClick) => h('button', {
+      type: 'button', class: 'feed-nav-button', 'aria-label': label, onClick,
+    }, h('span', { html: icon(paths) }), h('span', {}, label));
+    return h('nav', {
+      class: 'feed-bottom-nav', 'data-key': 'feed-bottom-nav', 'aria-label': t('feedTitle'),
+      hidden: typeof window === 'undefined' || window.scrollY < 160,
+    },
+      button(t('home'), '<path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1z"/>', jumpToNew),
+      button(t('msgDmsTitle'), '<path d="M21 11.5a8.4 8.4 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.4 8.4 0 0 1-3.8-.9L3 21l1.9-5.7a8.4 8.4 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.4 8.4 0 0 1 3.8-.9h.5a8.5 8.5 0 0 1 8 8z"/>', () => {
+        if (signinAsk()) return;
+        stopFeedWatch(); ui.msgView = 'home'; render();
+        window.scrollTo({ top: 0 });
+      }),
+      button(t('alertsTitle'), '<path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/>', () => {
+        if (signinAsk()) return;
+        stopFeedWatch(); openNotifs();
+        window.scrollTo({ top: 0 });
+      }));
+  }
   function feedView() {
     syncFollowSets().catch(() => {}); // throttled inside
     syncReports().catch(() => {}); // likewise
@@ -7563,7 +7587,7 @@ export function messagesFeature(ctx) {
           waiting === 1 ? t('feedOneNewWord') : t('feedNNewWord'))
       : null;
     // the chat shell draws the brand header; this is just the page under it
-    return h('div', { class: 'card col chat-page', style: 'gap:10px' },
+    return h('div', { class: 'card col chat-page feed-page', style: 'gap:10px' },
         h('div', { 'data-key': 'feed-notice', style: 'display:contents' }, pill),
         h('div', { class: 'row gap6', style: 'align-items:center' },
           backBtn(() => {
@@ -7618,6 +7642,7 @@ export function messagesFeature(ctx) {
         // the reader's language, right where a curated feed is judged by it
         ctx.languagePicker ? h('div', { class: 'row gap6 feed-lang', 'data-key': 'feed-lang', style: 'justify-content:center;align-items:center;padding:6px 0 2px' },
           h('span', { class: 'small muted' }, t('feedLangLabel')), ctx.languagePicker()) : null,
+        feedBottomNav(),
         ...noteOverlays());
   }
 

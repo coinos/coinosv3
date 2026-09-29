@@ -953,9 +953,9 @@ export function messagesFeature(ctx) {
         const prev = profiles.get(pk);
         const miss = ((prev && prev.miss) || 0) + 1;
         profiles.set(pk, { ...(prev || {}), t: Date.now(), miss });
-        // twice running: not a cold relay, they have none (never someone
-        // whose face we do know)
-        if (miss >= 2 && !(prev && (prev.name || prev.picture))) markFaceless(pk, true);
+        // remembered, so the next load paints their punk at once (never
+        // someone whose face we do know; a face found later replaces it)
+        if (!(prev && (prev.name || prev.picture))) markFaceless(pk, true);
       }
       scheduleRepaint();
     } finally {
@@ -2918,6 +2918,18 @@ export function messagesFeature(ctx) {
     return (big ? `url(${JSON.stringify(p.picture)}),` : '') + `url(${JSON.stringify(local)})`;
   }
 
+  const FACE_WAIT_MS = 1000;
+  const faceAsked = new Map(); // pk -> when its face was first wanted this session
+  let faceTimer = null;
+  function faceWaiting(pk) {
+    let at = faceAsked.get(pk);
+    if (at == null) { at = Date.now(); faceAsked.set(pk, at); }
+    const left = at + FACE_WAIT_MS - Date.now();
+    if (left <= 0) return false;
+    // repaint when the wait runs out, so the punk shows without an event
+    if (!faceTimer) faceTimer = setTimeout(() => { faceTimer = null; scheduleRepaint(); }, left + 20);
+    return true;
+  }
   const avatar = (pk, cls = 'chat-avatar', clickable = true) => {
     const p = profileOf(pk);
     // Someone we've never cached used to get an empty circle until a relay
@@ -2931,12 +2943,15 @@ export function messagesFeature(ctx) {
     // `loading` is different and still gets the quiet circle: a name lookup
     // is in flight for that specific person, so a picture is expected and
     // punk art must not flash in front of it.
+    // A face still being looked up gets a quiet circle for a second at
+    // most, then its punk — a picture found later replaces it.
+    const waiting = (p === null || (p && p.loading && !p.picture)) && faceWaiting(pk);
     const node = feedPaint && !p.picture
       ? h('div', { class: cls + ' fallback' }, (p.name || npubOf(pk) || '??').slice(0, 2))
-      : p && p.loading && !p.picture
-      ? h('div', { class: cls + ' fallback loading' })
-      : p === null && (ui.noteThread || (ui.chatOpen && ui.msgView === 'room'))
+      : waiting && (p || ui.noteThread || (ui.chatOpen && ui.msgView === 'room'))
         ? h('div', { class: cls + ' fallback loading' })
+      : p && p.loading && !p.picture
+        ? fallbackAvatar(h, pk, p.name, cls)
       : p === null
         ? fallbackAvatar(h, pk, null, cls)
       : p.picture 
@@ -8743,15 +8758,16 @@ export function messagesFeature(ctx) {
       .sort((a, b) => eventMs(b.rumor) - eventMs(a.rumor));
     return [...new Set(msgs.map((m) => m.author))].slice(0, 150);
   }
+  // Each face is warmed once per half minute; a later call (the history
+  // still streaming in when the list first warmed) adds whoever is new.
   function warmRoom(jm) {
-    const w = roomWarm.get(jm.community_id);
-    if (w && Date.now() - w.at < 30_000) return w.promise;
+    let w = roomWarm.get(jm.community_id);
+    if (!w || Date.now() - w.at > 30_000) { w = { at: Date.now(), faces: new Map() }; roomWarm.set(jm.community_id, w); }
     const deadline = Date.now() + 8000;
-    let promise;
-    try { promise = Promise.all(roomFaces(jm).map((pk) => warmAvatar(pk, deadline).catch(() => {}))); }
-    catch { promise = Promise.resolve(); }
-    roomWarm.set(jm.community_id, { at: Date.now(), promise });
-    return promise;
+    try {
+      for (const pk of roomFaces(jm)) if (!w.faces.has(pk)) w.faces.set(pk, warmAvatar(pk, deadline).catch(() => {}));
+    } catch {}
+    return Promise.all(w.faces.values());
   }
   async function openRoomWarm(jm, go) {
     const seq = ++roomOpenSeq;

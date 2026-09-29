@@ -45,7 +45,10 @@ try {
   if (!process.argv.includes('--no-hover')) await row.hover();
   await row.click();
   for (let i = 0; i < 60 && !(await page.evaluate(() => !!window.__first)); i++) await sleep(100);
-  await sleep(6000);
+  await sleep(1200);
+  const at1s = await page.evaluate(new Function('return (' + face.toString() + ')()'));
+  check('no face is still a blank circle a second after the room shows', !at1s.includes('wait'), JSON.stringify(tally(at1s)));
+  await sleep(4800);
   const [first, at] = await page.evaluate(() => [window.__first, window.__firstAt]);
   const last = await page.evaluate(new Function('return (' + face.toString() + ')()'));
   const flips = (first || []).filter((f, i) => f === 'punk' && last[i] === 'pic').length;
@@ -59,7 +62,7 @@ try {
     // frame — a known-faceless member is their punk at once, not a blank
     // circle that turns into one. (Wait out the second ask that confirms
     // who has no profile.)
-    await sleep(25000);
+    await sleep(8000);
     await page.evaluateOnNewDocument((fs, ks) => {
       const face = new Function('return ' + fs)();
       const keyed = new Function('return ' + ks)();

@@ -2907,7 +2907,7 @@ export function messagesFeature(ctx) {
       ? h('div', { class: cls + ' fallback' }, (p.name || npubOf(pk) || '??').slice(0, 2))
       : p && p.loading && !p.picture
       ? h('div', { class: cls + ' fallback loading' })
-      : p === null && ui.noteThread
+      : p === null && (ui.noteThread || (ui.chatOpen && ui.msgView === 'room'))
         ? h('div', { class: cls + ' fallback loading' })
       : p === null
         ? fallbackAvatar(h, pk, null, cls)
@@ -8627,6 +8627,9 @@ export function messagesFeature(ctx) {
         h('button', { class: 'btn-sm', onClick: () => createCommunity(ui.msgNewName || '') }, t('msgCreate'))));
     const allRooms = communities();
     const shownRooms = ui.msgAllRooms ? allRooms : allRooms.slice(0, LIST_PREVIEW);
+    // the rooms on the list get their faces while it sits there, so even a
+    // tap with no hover before it finds them ready
+    setTimeout(() => { for (const jm of shownRooms) if (rooms.has(jm.community_id)) warmRoom(jm); }, 300);
     kids.push(h('div', { class: 'list' }, shownRooms.map((jm) => {
       const room = rooms.get(jm.community_id);
       const name = room?.folded?.metadata?.name || jm.name;
@@ -8641,7 +8644,9 @@ export function messagesFeature(ctx) {
       const unread = room ? roomUnread(room) : false;
       return h('div', {
         class: 'item chat-thread-row' + (unread ? ' unread' : ''),
-        onClick: () => { ui.msgView = 'room'; ui.msgCommunity = jm.community_id; ui.msgChannel = null; ui.msgStick = true; render(); },
+        onMouseenter: () => warmRoom(jm),
+        onPointerdown: () => warmRoom(jm),
+        onClick: () => openRoomWarm(jm, () => { ui.msgView = 'room'; ui.msgCommunity = jm.community_id; ui.msgChannel = null; ui.msgStick = true; }),
       },
       h('div', { class: 'chat-avatar fallback' }, name.slice(0, 2)),
       h('div', { class: 'col grow', style: 'min-width:0;gap:1px' },
@@ -8691,6 +8696,44 @@ export function messagesFeature(ctx) {
   }
 
   // ---- room ---------------------------------------------------------------
+
+  // ---- a room's faces, before it opens -------------------------------------
+  // Opening a community painted everyone as a punk for a beat: their
+  // profiles weren't in memory yet. As SvelteKit preloads on hover, a
+  // pointer over (or pressing) a room's row starts the faces of its latest
+  // messages — profile, then the picture decoded — and the tap waits for
+  // them, a moment at most, before the room replaces the list.
+  const ROOM_READY_MS = 1500;
+  const roomWarm = new Map(); // cid -> { at, promise }
+  let roomOpenSeq = 0;
+  function roomFaces(jm) {
+    const room = ensureRoom(jm);
+    const ch = roomChannels(room)[0];
+    if (!ch) return [];
+    // everyone the channel paints, newest speakers first
+    const msgs = [...(room.byChannel.get(ch.id)?.values() || [])]
+      .sort((a, b) => eventMs(b.rumor) - eventMs(a.rumor));
+    return [...new Set(msgs.map((m) => m.author))].slice(0, 150);
+  }
+  function warmRoom(jm) {
+    const w = roomWarm.get(jm.community_id);
+    if (w && Date.now() - w.at < 30_000) return w.promise;
+    const deadline = Date.now() + 8000;
+    let promise;
+    try { promise = Promise.all(roomFaces(jm).map((pk) => warmAvatar(pk, deadline).catch(() => {}))); }
+    catch { promise = Promise.resolve(); }
+    roomWarm.set(jm.community_id, { at: Date.now(), promise });
+    return promise;
+  }
+  async function openRoomWarm(jm, go) {
+    const seq = ++roomOpenSeq;
+    const from = ui.msgView;
+    await Promise.race([warmRoom(jm), new Promise((r) => setTimeout(r, ROOM_READY_MS))]);
+    // another tap, or the reader went elsewhere, while the faces loaded
+    if (seq !== roomOpenSeq || ui.msgView !== from || !ui.chatOpen) return;
+    go();
+    render();
+  }
 
   function messageRows(room, chId) {
     const my = myPubkeys();

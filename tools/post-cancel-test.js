@@ -12,6 +12,9 @@ assert(cancel.includes('ui.profCompose = null'), 'composer is closed');
 assert(cancel.includes('ui.postMedia = []'), 'pending attachment metadata is removed');
 assert(cancel.includes('ui.postPreview = false'), 'preview state is removed');
 assert(cancel.includes('discardDraft(POST_DRAFT)'), 'persisted draft is removed immediately');
-assert(source.includes("onClick: cancelPost }, t('cancel')"), 'Cancel button uses the discard handler');
+assert(source.includes("composeText().length > 20"), 'drafts over 20 characters require confirmation');
+assert(source.includes("ui.postUploading || (ui.postMedia || []).length"), 'attachments require confirmation');
+assert(source.includes("onClick: requestCancelPost }, t('cancel')"), 'Cancel button uses the guarded discard handler');
+assert(source.includes("onClick: cancelPost }, t('postDiscard')"), 'warning can confirm the discard');
 
-console.log('✓ Cancel closes the new-post form and removes its complete saved draft');
+console.log('✓ Cancel warns for substantial drafts, then closes the form and removes its complete saved draft');

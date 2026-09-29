@@ -7627,11 +7627,34 @@ export function messagesFeature(ctx) {
   };
   function cancelPost() {
     postAttachGeneration++;
+    ui.postCancelConfirm = false;
     ui.profCompose = null;
     ui.postMedia = [];
     ui.postPreview = false;
     discardDraft(POST_DRAFT);
     render();
+  }
+  function requestCancelPost() {
+    if (composeText().length > 20 || ui.postUploading || (ui.postMedia || []).length) {
+      ui.postCancelConfirm = true;
+      render();
+      return;
+    }
+    cancelPost();
+  }
+  function postCancelWarning() {
+    if (!ui.postCancelConfirm) return null;
+    const keep = () => { ui.postCancelConfirm = false; render(); };
+    return h('div', {
+      class: 'confirm-pop-backdrop',
+      onClick: (event) => { if (event.target === event.currentTarget) keep(); },
+    },
+      h('div', { class: 'card col confirm-pop', style: 'gap:10px' },
+        h('h3', { style: 'margin:0' }, t('postDiscardTitle')),
+        h('div', { class: 'small muted' }, t('postDiscardBody')),
+        h('div', { class: 'row gap6' },
+          h('button', { class: 'btn-ghost grow', onClick: keep }, t('postKeepEditing')),
+          h('button', { class: 'btn-danger grow', onClick: cancelPost }, t('postDiscard')))));
   }
   const CLIP = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:block"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>';
   const EYE = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:block"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
@@ -7703,7 +7726,8 @@ export function messagesFeature(ctx) {
           type: 'file', id: 'post-file', accept: 'image/*,video/*', style: 'display:none',
           onChange: async (e) => { const f = e.target.files && e.target.files[0]; e.target.value = ''; await attachMedia(f); },
         }),
-        h('button', { class: 'btn-ghost', onClick: cancelPost }, t('cancel'))));
+        h('button', { class: 'btn-ghost', onClick: requestCancelPost }, t('cancel'))),
+      postCancelWarning());
   }
 
   // ---- the feed view --------------------------------------------------------

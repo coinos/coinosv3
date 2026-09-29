@@ -6,6 +6,7 @@
 
 import { Wallet, newMnemonic, isValidMnemonic, accountXpubFor, cacheKeyFor, utxoId, parseExtendedKey, xpubToZpub, encryptVault, decryptVault } from './wallet.js';
 import { qrSvg } from './qr.js';
+import './rich-text.js'; // <coinos-text>, the composers' field
 import { makeSearcher, resultRows, searchable, punkUrl, warmSearch } from './recipient-search.js';
 import { npubOf, seedPubkey, neventOf } from './nostr.js';
 import { nip98Header } from './nip98.js';
@@ -233,7 +234,10 @@ function morph(a, b) {
   // <details open> is the user's doing (the browser toggles the attribute on
   // click), like a field's value: a render that doesn't set `open` leaves it
   // alone instead of collapsing the section on every background repaint.
-  const userOwned = (at) => a.nodeName === 'DETAILS' && at.name === 'open';
+  // <coinos-text> sets its own editing attributes when it joins the page;
+  // the freshly built copy doesn't have them yet, and must not strip them
+  const userOwned = (at) => (a.nodeName === 'DETAILS' && at.name === 'open')
+    || (a.nodeName === 'COINOS-TEXT' && /^(contenteditable|role|aria-multiline|aria-placeholder|data-empty)$/.test(at.name));
   for (const at of [...a.attributes]) {
     if (b.hasAttribute(at.name) || userOwned(at)) continue;
     if (at.name === 'src' && b.hasAttribute('data-lazy-src')) continue; // the lazy source stands for it
@@ -260,6 +264,12 @@ function morph(a, b) {
       if (a.checked !== b.checked) a.checked = b.checked;
     }
     if (a.disabled !== b.disabled) a.disabled = b.disabled;
+  }
+  // the contenteditable field: its text is its value, owned like a
+  // textarea's — synced when not being edited, children never diffed
+  if (tag === 'COINOS-TEXT') {
+    if (document.activeElement !== a && a.value !== b.value) a.value = b.value;
+    return;
   }
   // innerHTML-authored subtrees (svg icons, QRs): compare source, not nodes
   if (b._html != null) {
@@ -724,7 +734,7 @@ function renderInner() {
   // payment push, an SP scan) can't kick the user out of a field they're editing.
   const a = document.activeElement;
   let fpath = null, selStart = null, selEnd = null;
-  if (a && root.contains(a) && /^(INPUT|SELECT|TEXTAREA)$/.test(a.tagName)) {
+  if (a && root.contains(a) && /^(INPUT|SELECT|TEXTAREA|COINOS-TEXT)$/.test(a.tagName)) {
     fpath = focusPath(a);
     try { selStart = a.selectionStart; selEnd = a.selectionEnd; } catch {}
   }
@@ -789,7 +799,7 @@ function renderInner() {
   try { document.documentElement.classList.toggle('no-scroll', !!ui.lightbox); } catch {}
   if (fpath) {
     const el = nodeAtPath(fpath);
-    if (el && el !== a && /^(INPUT|SELECT|TEXTAREA)$/.test(el.tagName)) {
+    if (el && el !== a && /^(INPUT|SELECT|TEXTAREA|COINOS-TEXT)$/.test(el.tagName)) {
       try { el.focus({ preventScroll: true }); if (selStart != null && el.setSelectionRange) el.setSelectionRange(selStart, selEnd); } catch {}
     }
   }

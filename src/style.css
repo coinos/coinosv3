@@ -248,6 +248,16 @@ select {
   background-repeat: no-repeat; background-position: right 14px center;
 }
 textarea { resize: vertical; min-height: 84px; font-family: var(--mono); font-size: 15px; }
+/* The composers' text field (src/rich-text.js): a textarea to look at and
+   type in, contenteditable underneath so keyboards offer GIFs and images. */
+coinos-text {
+  display: block; width: 100%; box-sizing: border-box; font: inherit; color: var(--ink); background: var(--paper);
+  border: 1px solid var(--line-strong); border-radius: 11px; padding: 11px 13px;
+  white-space: pre-wrap; overflow-wrap: anywhere; overflow-y: auto; line-height: 1.4; cursor: text;
+}
+coinos-text:focus { outline: 2px solid var(--accent); outline-offset: -1px; border-color: var(--accent); }
+coinos-text[data-empty]::before { content: attr(placeholder); color: var(--muted); pointer-events: none; }
+.chat-compose coinos-text { flex: 1; min-width: 0; padding: 10px 13px; max-height: 120px; }
 .mono-input { font-family: var(--mono); }
 .input-group { display: flex; gap: 8px; }
 .input-group input { flex: 1; }

@@ -5495,6 +5495,19 @@ export function messagesFeature(ctx) {
   // so outright — plenty of perfectly good picture URLs carry no extension
   // (a CDN path, a /media/ route), and ![…] is the author telling us what it
   // is, which beats guessing from the filename.
+  // A picture is fitted inside its box (object-fit: contain), so a tall one
+  // leaves blank bands either side. A tap there is a tap on the post — it
+  // opens the thread — not on the picture.
+  function onPicture(e) {
+    const el = e.currentTarget;
+    const r = el.getBoundingClientRect();
+    const nw = el.naturalWidth, nh = el.naturalHeight;
+    if (!nw || !nh || !r.width || !r.height) return true;
+    const k = Math.min(r.width / nw, r.height / nh);
+    const w = nw * k, hh = nh * k;
+    const x = e.clientX - (r.left + (r.width - w) / 2), y = e.clientY - (r.top + (r.height - hh) / 2);
+    return x >= 0 && x <= w && y >= 0 && y <= hh;
+  }
   function urlNode(url, { label = null, isImage = false } = {}) {
     if (/\.(mp4|webm|mov|m4v)(\?[^\s]*)?$/i.test(url)) {
       return videoNode(url, { stable: !!feedPaint });
@@ -5508,7 +5521,7 @@ export function messagesFeature(ctx) {
         src: url, class: 'note-img clickable', loading: feedPaint ? 'eager' : 'lazy', alt: label || '',
         width: size?.width, height: size?.height,
         style: size ? 'height:auto;aspect-ratio:' + size.width + '/' + size.height : undefined,
-        onClick: (e) => { e.stopPropagation(); ctx.openImage && ctx.openImage(url); },
+        onClick: (e) => { if (!onPicture(e)) return; e.stopPropagation(); ctx.openImage && ctx.openImage(url); },
         // a picture we were TOLD was a picture and which won't load leaves
         // nothing behind — the alt text is already in the sentence above it
         onError: (e) => { if (!size) e.target.style.display = 'none'; },
@@ -6110,7 +6123,7 @@ export function messagesFeature(ctx) {
     ui.msgView = 'feed';
     feedNow();
     render();
-    setTimeout(() => { const el = document.querySelector('.chat-page textarea'); if (el) { el.focus(); el.setSelectionRange(0, 0); } }, 80);
+    setTimeout(() => { const el = document.querySelector('.chat-page coinos-text'); if (el) { el.focus(); el.setSelectionRange(0, 0); } }, 80);
   }
 
   // ---- mute list (NIP-51 kind 10000) ---------------------------------------
@@ -7054,11 +7067,17 @@ export function messagesFeature(ctx) {
       // A textarea that grows with the reply, like the chat composer: Enter
       // sends, Shift+Enter (or Ctrl+J) breaks the line — a reply used to be
       // a one-line field with no way to write a paragraph.
-      h('textarea', {
+      h('coinos-text', {
         class: 'thread-reply-input', placeholder: t('threadReplyHint'),
-        rows: String(Math.min(6, Math.max(2, (s.draft || '').split('\n').length))),
-        style: 'font-family:var(--sans);resize:none;max-height:160px;overflow-y:auto;line-height:1.4;width:100%;box-sizing:border-box',
+        style: 'font-family:var(--sans);min-height:64px;max-height:160px',
         value: s.draft || '',
+        // a keyboard GIF or a pasted picture: attached like the paperclip's
+        onMedia: (f) => attachTo(f, (url) => {
+          s.draft = ((s.draft || '').replace(/\s+$/, '') + ' ' + url).trim();
+          const inp = document.querySelector('.thread-reply-input');
+          if (inp) inp.value = s.draft;
+          s.preview = true;
+        }),
         // a render per keystroke only while the preview is open; the morph
         // leaves a focused field alone, so this can't fight the typing
         onInput: (e) => { s.draft = e.target.value; growComposer(e.target); if (s.preview) render(); },
@@ -7758,10 +7777,12 @@ export function messagesFeature(ctx) {
     if (ui.profCompose == null && !draftFor(POST_DRAFT)) return null;
     const text = composeText();
     return h('div', { class: 'col', style: 'gap:8px' },
-      h('textarea', {
-        rows: '3', placeholder: t('profComposePh'),
-        style: 'font-family:var(--sans);min-height:64px',
+      h('coinos-text', {
+        class: 'post-input', placeholder: t('profComposePh'),
+        style: 'font-family:var(--sans);min-height:84px;max-height:320px',
         value: text,
+        // the field is focused, so the morph leaves it: put the URL in by hand
+        onMedia: (f) => attachMedia(f).then(() => { const el = document.querySelector('.post-input'); if (el) el.value = composeText(); }),
         onInput: (ev) => {
           ui.profCompose = ev.target.value;
           setDraft(POST_DRAFT, ev.target.value);
@@ -8498,9 +8519,10 @@ export function messagesFeature(ctx) {
         type: 'file', id: 'msg-file', accept: 'image/*,video/*', style: 'display:none',
         onChange: (e) => { const f = e.target.files && e.target.files[0]; e.target.value = ''; if (f) onAttach(f); },
       }) : null,
-      h('textarea', {
-        class: 'grow', id: 'msg-draft', placeholder, rows: String(Math.min(5, draftFor(draftKey).split('\n').length)),
-        value: draftFor(draftKey), maxlength: '2000',
+      h('coinos-text', {
+        class: 'grow', id: 'msg-draft', placeholder,
+        value: draftFor(draftKey),
+        onMedia: onAttach ? (f) => onAttach(f) : null,
         onInput: (e) => { setDraft(draftKey, e.target.value); growComposer(e.target); updateEmojiAc(e.target, draftKey); if (onType && e.target.value) onType(); },
         onClick: (e) => updateEmojiAc(e.target, draftKey), // the caret moved
         onBlur: () => { if (ui.emojiAc) { ui.emojiAc = null; render(); } },

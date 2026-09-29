@@ -631,7 +631,7 @@ html:has(#app .chat-card), body:has(#app .chat-card) { overflow: hidden; }
 .note-content > * { grid-column: 1 / -1; min-width: 0; }
 .note-content > .note-header { grid-column: 2; grid-row: 1; }
 .note-content > .note-text { font-size: 18px; line-height: 1.5; }
-.note-acts { margin-top: 8px; gap: 4px; width: min(100%, 340px); }
+.note-acts { margin-top: 8px; gap: 4px; width: 100%; }
 .note-acts > .note-act { flex: 1 1 0; min-width: 0; justify-content: center; padding-inline: 2px; }
 /* server comparison table (Settings → Advanced → Ark server) */
 .cmp-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }

@@ -6719,9 +6719,9 @@ export function messagesFeature(ctx) {
     // An event of a kind this app has no renderer for (a chess game, kind
     // 64, reached through a reaction to it) is shown as what its author's
     // client said it is (NIP-31 alt), never as raw content dressed as a post.
-    const foreign = ev.kind !== 1 && ev.kind !== 30023 && ev.kind !== POLL;
+    const foreign = ev.kind !== 1 && ev.kind !== 30023 && ev.kind !== POLL && ev.kind !== COMMENT;
     const altText = foreign ? ((ev.tags.find((x) => x[0] === 'alt') || [])[1] || t('noteForeignKind', { kind: ev.kind })) : null;
-    const isReply = !foreign && ev.tags.some((x) => x[0] === 'e');
+    const isReply = ev.kind === COMMENT || (!foreign && ev.tags.some((x) => x[0] === 'e'));
     const canZap = canZapPk(pk);
     // an optimistic post mid-publish: visible but not yet a real event —
     // dimmed, and no thread/reply/zap until its signed self takes over
@@ -6834,7 +6834,16 @@ export function messagesFeature(ctx) {
     settle();
     requestAnimationFrame(settle);
   }
+  // ---- NIP-22 comments (kind 1111) ----
+  // The reply format for everything that isn't a kind 1 note — a poll, an
+  // article, a picture. Uppercase tags name the ROOT (E/A + K + P),
+  // lowercase the PARENT it answers (e/a + k + p). A kind 1 note is never
+  // answered with one (NIP-22), and never answers anything but a kind 1.
+  const COMMENT = 1111;
+  const tagVal = (ev, name) => (ev.tags.find((x) => x[0] === name && x[1]) || [])[1] || null;
+  const addrOf = (ev) => ev.kind >= 30000 && ev.kind < 40000 ? ev.kind + ':' + ev.pubkey + ':' + (tagVal(ev, 'd') || '') : null;
   function rootIdOf(ev) {
+    if (ev.kind === COMMENT) return tagVal(ev, 'E') || tagVal(ev, 'e') || ev.id;
     const es = ev.tags.filter((x) => x[0] === 'e');
     const marked = es.find((x) => x[3] === 'root');
     return (marked || es[0] || [])[1] || ev.id;
@@ -6893,7 +6902,11 @@ export function messagesFeature(ctx) {
       let relays = await relaysFor(c.root || seed);
       const [roots, replies] = await Promise.all([
         c.root ? Promise.resolve([]) : queryOn(relays, { ids: [rootId] }, 4000), // a root can be a poll
-        queryOn(relays, { kinds: [1], '#e': [rootId], limit: 80 }, 4500),
+        // kind 1 replies, and NIP-22 comments naming it as their root
+        Promise.all([
+          queryOn(relays, { kinds: [1], '#e': [rootId], limit: 80 }, 4500).catch(() => []),
+          queryOn(relays, { kinds: [COMMENT], '#E': [rootId], limit: 120 }, 4500).catch(() => []),
+        ]).then(([a, b]) => [...(a || []), ...(b || [])]),
       ]);
       if (!c.root) c.root = (roots || [])[0] || null;
       let all = [...c.replies, ...(replies || [])];
@@ -6907,7 +6920,7 @@ export function messagesFeature(ctx) {
         relays = [...new Set([...relays, ...(await relaysFor(top))])].slice(0, 14);
         const [ups, more] = await Promise.all([
           queryOn(relays, { ids: [up] }, 4000),
-          queryOn(relays, { kinds: [1], '#e': [up], limit: 80 }, 4500),
+          queryOn(relays, { kinds: [1, COMMENT], '#e': [up], limit: 80 }, 4500),
         ]);
         const upNote = (ups || [])[0];
         if (!upNote) break;
@@ -6919,6 +6932,9 @@ export function messagesFeature(ctx) {
         threadCache.set(topId, c);
         if (ui.noteThread && ui.noteThread.rootId === rootId) ui.noteThread.rootId = topId;
       }
+      // an article's comments may name it only by address
+      const addr = c.root && addrOf(c.root);
+      if (addr) all = [...all, ...(await queryOn(relays, { kinds: [COMMENT], '#A': [addr], limit: 120 }, 4500).catch(() => []) || [])];
       for (const e of all) noteForSpam(e);
       const seen = new Set([c.rootId]);
       c.replies = all
@@ -7020,7 +7036,28 @@ export function messagesFeature(ctx) {
     ])].filter((pk) => pk !== id.pubkey).slice(0, 8);
     const imeta = (ui.postMedia || []).filter((m) => m && m.url && text.includes(m.url))
       .map((m) => ['imeta', 'url ' + m.url, ...(m.m ? ['m ' + m.m] : [])]);
-    const partial = {
+    const root = c.root || (target.id === rootId ? target : null);
+    // the root's scope: from the root itself, or — not loaded yet — copied
+    // off the comment being answered, which carries it
+    const scope = root
+      ? [...(addrOf(root) ? [['A', addrOf(root), '']] : []), ['E', root.id, '', root.pubkey], ['K', String(root.kind)], ['P', root.pubkey]]
+      : target.kind === COMMENT ? target.tags.filter((x) => ['A', 'E', 'I', 'K', 'P'].includes(x[0])) : [];
+    const partial = target.kind === 1 || !scope.length ? null : {
+      // NIP-22: a comment on a poll, an article, or on another comment
+      kind: COMMENT,
+      content: text,
+      created_at: Math.floor(Date.now() / 1000),
+      tags: [
+        ...scope,
+        ...(root && target.id === root.id
+          ? [...(addrOf(root) ? [['a', addrOf(root), '']] : []), ['e', root.id, '', root.pubkey], ['k', String(root.kind)], ['p', root.pubkey]]
+          : [['e', target.id, '', target.pubkey], ['k', String(target.kind)], ['p', target.pubkey]]),
+        ...pTags.filter((pk) => pk !== target.pubkey && (!root || pk !== root.pubkey)).map((pk) => ['p', pk]),
+        ...imeta,
+        CLIENT_TAG,
+      ],
+    };
+    const note = partial || {
       kind: 1,
       content: text,
       created_at: Math.floor(Date.now() / 1000),
@@ -7032,7 +7069,7 @@ export function messagesFeature(ctx) {
         CLIENT_TAG,
       ],
     };
-    const evt = id.signer instanceof Uint8Array ? finalizeEvent(partial, id.signer) : await id.signer.signEvent(partial);
+    const evt = id.signer instanceof Uint8Array ? finalizeEvent(note, id.signer) : await id.signer.signEvent(note);
     const relays = [...new Set([...(await notesRelays(target.pubkey)), ...wallet.nostrRelays()])];
     const ok = await publishOn(relays, evt);
     if (!ok) throw new Error(t('msgSendFailed'));
@@ -7163,6 +7200,9 @@ export function messagesFeature(ctx) {
     // first among a note's answers, so what you just wrote shows right
     // under the post instead of at the bottom of a long thread.
     const parentOf = (ev) => {
+      // a comment's parent is its lowercase e; one answering the root by
+      // address (an article) has only an a — the root
+      if (ev.kind === COMMENT) return tagVal(ev, 'e') || c.rootId;
       const es = ev.tags.filter((x) => x[0] === 'e');
       const marked = es.find((x) => x[3] === 'reply');
       return (marked || es[es.length - 1] || [])[1] || c.rootId;
@@ -9174,7 +9214,7 @@ export function messagesFeature(ctx) {
   // kept as a short list of what-happened rows rather than the raw events —
   // a zap receipt drags its whole request along, and the list rides in the
   // feature state. Painted from the last visit while the relays are asked.
-  const NOTIF_KINDS = [1, 6, 7, ...ZAP_KINDS];
+  const NOTIF_KINDS = [1, COMMENT, 6, 7, ...ZAP_KINDS];
   const NOTIF_KEEP = 150;
   let notif = null;      // { status, items }
   let notifAt = 0, notifUnsub = null;
@@ -9289,6 +9329,10 @@ export function messagesFeature(ctx) {
       return { id: ev.id, what: 'react', actor: ev.pubkey, target: lastE, hint, emoji, ts: ev.created_at };
     }
     if (ev.kind === 6) return lastE ? { id: ev.id, what: 'boost', actor: ev.pubkey, target: lastE, hint, ts: ev.created_at } : null;
+    if (ev.kind === COMMENT) {
+      const parent = tagVal(ev, 'e') || tagVal(ev, 'E');
+      return { id: ev.id, what: parent ? 'reply' : 'mention', actor: ev.pubkey, target: parent, text: String(ev.content || '').slice(0, 300), ts: ev.created_at, pubkey: ev.pubkey };
+    }
     if (ev.kind === 1) {
       const es = (ev.tags || []).filter((x) => x[0] === 'e' && x[1]);
       const replyTo = (es.find((x) => x[3] === 'reply') || es.find((x) => x[3] === 'root') || es.at(-1) || [])[1] || null;
@@ -9300,7 +9344,7 @@ export function messagesFeature(ctx) {
     const c = notifNow();
     const known = new Set(c.items.map((x) => x.id));
     for (const ev of evs || []) noteForSpam(ev);
-    const add = (evs || []).map((ev) => (ev.kind === 1 && hidden(ev) ? null : notifItem(ev)))
+    const add = (evs || []).map((ev) => ((ev.kind === 1 || ev.kind === COMMENT) && hidden(ev) ? null : notifItem(ev)))
       .filter((x) => x && !hiddenPk(x.actor) && !known.has(x.id) && known.add(x.id));
     if (!add.length) return false;
     warmNotifFaces(add);
@@ -9317,7 +9361,7 @@ export function messagesFeature(ctx) {
     c.items = kept.slice(0, NOTIF_KEEP);
     // Keep the small notification rows and one deduplicated copy of each note
     // they show. A reply is also a note we can open straight away.
-    for (const ev of evs) if (ev.kind === 1) notifNotes.set(ev.id, ev);
+    for (const ev of evs) if (ev.kind === 1 || ev.kind === COMMENT) notifNotes.set(ev.id, ev);
     cacheNotifNotes(evs);
     warmNotifNotes(c.items);
     persistNotifs();

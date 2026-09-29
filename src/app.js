@@ -737,7 +737,7 @@ wallet.subscribe(scheduleRender);
 // lightbox: a full-screen photo is a place too — the phone's Back must close
 // it, not pop the screen under it (which once walked a viewer straight back
 // to the start page, so the photo's × then looked like a logout).
-const NAV_FIELDS = ['screen', 'tab', 'txDetail', 'arkMoveDetail', 'arkReconDetail', 'arkExitDetail', 'giftDetail', 'bump', 'giftMode', 'claimStep', 'chatOpen', 'msgView', 'feedId', 'arkCoinsPage', 'arkExitPage', 'msgCommunity', 'msgPeer', 'profilePk', 'profEdit', 'profEditFilled', 'profOverThread', 'settingsPage', 'nameEditOpen', 'noteThread', 'userSearch', 'zapSetup', 'hatShop', 'lightbox'];
+const NAV_FIELDS = ['screen', 'tab', 'txDetail', 'arkMoveDetail', 'arkReconDetail', 'arkExitDetail', 'giftDetail', 'bump', 'giftMode', 'claimStep', 'chatOpen', 'msgView', 'feedId', 'pubProf', 'arkCoinsPage', 'arkExitPage', 'msgCommunity', 'msgPeer', 'profilePk', 'profEdit', 'profEditFilled', 'profOverThread', 'settingsPage', 'nameEditOpen', 'noteThread', 'userSearch', 'zapSetup', 'hatShop', 'lightbox'];
 function navSnapshot() {
   const s = {};
   for (const f of NAV_FIELDS) s[f] = ui[f] ?? null;

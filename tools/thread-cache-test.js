@@ -22,6 +22,14 @@ check('a fresh store restores full content and tags by any viewed event', () => 
   assert.deepEqual(restored, { rootId: root.id, root, profiles: {}, counts: {}, replies: [long, parent], quotes: [] });
   assert.equal(store.find(parent.id).root.id, root.id);
 });
+check('a thread rooted in a poll (kind 1068) is kept too', () => {
+  const poll = { ...note(40), kind: 1068, tags: [['option', '0', 'Yes!'], ['option', '1', 'No!']] };
+  const answer = note(41, [['e', poll.id, '', 'root']]);
+  store.save({ root: poll, replies: [answer] }, poll.id);
+  const restored = createThreadStore(storage).find(poll.id);
+  assert.equal(restored?.root.kind, 1068);
+  assert.deepEqual(restored.replies, [answer]);
+});
 check('thread authors keep their names and local avatar thumbnails across reloads', () => {
   const thumb = 'data:image/webp;base64,AAAA';
   const face = { name: 'Nostrich', picture: 'https://example.com/face.webp', eventAt: 50,

@@ -3025,7 +3025,7 @@ export function messagesFeature(ctx) {
   // reader deep in that person's posts, which read as a thread. Back (a
   // popstate) puts them where they were on the page they left.
   const profReturn = []; // [{ pk, y }] per profile opened, newest last
-  window.addEventListener('popstate', () => {
+  if (typeof window !== 'undefined') window.addEventListener('popstate', () => {
     const top = profReturn[profReturn.length - 1];
     if (!top || ui.profilePk === top.pk) return;
     profReturn.pop();

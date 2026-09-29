@@ -6,13 +6,16 @@ const MAX_THREADS = 12;
 const MAX_EVENTS = 160;
 const MAX_QUOTES = 24; // posts quoted inside the thread, so a reload paints them too
 const MAX_BYTES = 1_000_000; // JSON code units; at most about 2 MB in storage
-const validNote = (e) => e?.kind === 1 && typeof e.id === 'string'
+// Any kind: a thread can hang off a poll (1068), a picture (20), a comment
+// (1111)… — requiring kind 1 left those threads uncached, so every reload
+// sat on a spinner while the relays answered.
+const validNote = (e) => Number.isSafeInteger(e?.kind) && e.kind >= 0 && typeof e.id === 'string'
   && /^[0-9a-f]{64}$/.test(e.id) && typeof e.pubkey === 'string'
   && /^[0-9a-f]{64}$/.test(e.pubkey) && typeof e.content === 'string'
   && Number.isFinite(e.created_at) && Array.isArray(e.tags)
   && e.tags.every((t) => Array.isArray(t) && t.every((v) => typeof v === 'string'));
 // A quote can be any kind of event (a poll, an article…), not only a note.
-const validQuote = (e) => Number.isSafeInteger(e?.kind) && e.kind >= 0 && validNote({ ...e, kind: 1 });
+const validQuote = validNote;
 const savedNote = ({ id, pubkey, kind, created_at, content, tags }) => ({ id, pubkey, kind, created_at, content, tags });
 const savedProfile = (p) => {
   if (!p || typeof p !== 'object') return null;

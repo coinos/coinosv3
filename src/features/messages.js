@@ -3079,17 +3079,28 @@ export function messagesFeature(ctx) {
   // A profile opens at its top: keeping the feed's scroll offset landed the
   // reader deep in that person's posts, which read as a thread. Back (a
   // popstate) puts them where they were on the page they left.
-  const profReturn = []; // [{ pk, y }] per profile opened, newest last
+  // The same for a post opened into its thread: Back lands on the row the
+  // reader tapped, not the top of the feed.
+  const pageReturn = []; // [{ key, y }] per profile/thread opened, newest last
+  const pageKey = () => ui.noteThread && !(ui.profilePk && ui.profOverThread) ? 'thread'
+    : ui.profilePk ? 'p:' + ui.profilePk : '';
+  function rememberPlace(key) {
+    if (pageKey() === key) return;
+    let y = 0; try { y = window.scrollY || 0; } catch {}
+    pageReturn.push({ key, y });
+    if (pageReturn.length > 20) pageReturn.shift();
+  }
   if (typeof window !== 'undefined') window.addEventListener('popstate', () => {
-    const top = profReturn[profReturn.length - 1];
-    if (!top || ui.profilePk === top.pk) return;
-    profReturn.pop();
-    requestAnimationFrame(() => { try { window.scrollTo(0, top.y); } catch {} });
+    const top = pageReturn[pageReturn.length - 1];
+    if (!top || pageKey() === top.key) return;
+    pageReturn.pop();
+    const y = top.y;
+    // twice: the page under it may paint its rows a frame late
+    requestAnimationFrame(() => { try { window.scrollTo(0, y); } catch {}
+      requestAnimationFrame(() => { try { if (Math.abs(window.scrollY - y) > 2) window.scrollTo(0, y); } catch {} }); });
   });
   function openProfile(pk) {
-    let y = 0; try { y = window.scrollY || 0; } catch {}
-    if (ui.profilePk !== pk) profReturn.push({ pk, y });
-    if (profReturn.length > 20) profReturn.shift();
+    rememberPlace('p:' + pk);
     ui.profilePk = pk;
     // Opened from inside a thread (an author's avatar/name), the profile
     // stacks ON TOP of it — back returns to the conversation. The screen
@@ -5389,15 +5400,35 @@ export function messagesFeature(ctx) {
   // wanted, half a minute on, with any relay hints the reference carried.
   const QUOTE_RETRY_MS = 30_000;
   const quoted = new Map(); // id -> { status, ev, at }
+  // Where a referenced note may be: the reference's hints, its author's own
+  // relays, ours — and when none of those has it, a wider net of big public
+  // relays (a quoted note in the wild sat only on nostr.mom, which neither
+  // the reference nor its author's relay list named).
+  const WIDE_RELAYS = ['wss://nostr.mom', 'wss://relay.nostr.band', 'wss://nostr.wine', 'wss://relay.snort.social',
+    'wss://offchain.pub', 'wss://relay.nostr.bg', 'wss://nostr.oxtr.dev', 'wss://relay.damus.io', 'wss://nos.lol', 'wss://relay.primal.net'];
+  // All at once, first answer wins: asked in turn, a note on a far relay
+  // took longer than the feed waits for a row.
+  function findNote(ref) {
+    const pick = (evs) => (evs || []).find((e) => e.id === ref.id) || null;
+    const ask = (relays) => (relays.length ? queryOn(relays, { ids: [ref.id] }, 4500).then(pick).catch(() => null) : Promise.resolve(null));
+    const near = [...new Set([...(ref.relays || []), ...zapRelays()])];
+    const asks = [
+      ask(near),
+      ref.author ? relaysOf(ref.author).catch(() => []).then((rs) => ask(rs.filter((r) => !near.includes(r)))) : Promise.resolve(null),
+      ask(WIDE_RELAYS.filter((r) => !near.includes(r))),
+    ];
+    return new Promise((resolve) => {
+      let left = asks.length;
+      for (const a of asks) a.then((ev) => { if (ev) resolve(ev); else if (--left === 0) resolve(null); });
+    });
+  }
   function quotedNote(ref) {
     let c = quoted.get(ref.id);
     if (c && (c.status !== 'missing' || Date.now() - (c.at || 0) < QUOTE_RETRY_MS)) return c;
     if (!c) { c = { status: 'loading', ev: null, at: 0 }; quoted.set(ref.id, c); }
     c.at = Date.now();
     c.promise = (async () => {
-      const relays = [...new Set([...(ref.relays || []), ...zapRelays()])];
-      const evs = await queryOn(relays, { ids: [ref.id] }, 4500).catch(() => []);
-      c.ev = (evs || [])[0] || c.ev || null;
+      c.ev = (await findNote(ref).catch(() => null)) || c.ev || null;
       c.status = c.ev ? 'ready' : 'missing';
       if (c.ev) cacheNotifNotes([c.ev]);
       // the open thread quotes it: keep it with the thread for the next reload
@@ -5428,9 +5459,10 @@ export function messagesFeature(ctx) {
     let c = feedPaint ? feedPaint.quotes.get(ref.id) : quotedNote(ref);
     if (feedPaint && !c?.ev) {
       const live = quoteWarm(ref);
-      if (!(live.ev && live.warm)) return h('a', {
-        href: '#', onClick: (e) => { e.preventDefault(); e.stopPropagation(); openNoteRef(ref); },
-      }, t('noteRefLink'));
+      // not (yet) found: the card says so where the quote will be — never a
+      // bare "view note" link that only leads to the same answer
+      if (!(live.ev && live.warm)) return h('div', { class: 'quote-card' },
+        h('span', { class: 'small faint' }, t(live.status === 'missing' ? 'noteRefNotFound' : 'noteRefLoading')));
       c = { ...live };
       feedPaint.quotes.set(ref.id, c);
     }
@@ -6900,6 +6932,7 @@ export function messagesFeature(ctx) {
     return c;
   }
   function openNoteThread(ev) {
+    rememberPlace('thread');
     ui.noteThread = { rootId: rootIdOf(ev), focusId: ev.id, seed: ev, scrollPending: true };
     ui.profOverThread = false; // a freshly opened thread goes on top
     render();
@@ -6912,9 +6945,7 @@ export function messagesFeature(ctx) {
     const cached = saved && (saved.root.id === ref.id ? saved.root : saved.replies.find((e) => e.id === ref.id));
     if (cached) { openNoteThread(cached); return; }
     toast(t('noteRefLoading'));
-    const relays = [...new Set([...(ref.relays || []), ...NOTE_RELAYS])];
-    const evs = await queryOn(relays, { ids: [ref.id] }, 4000).catch(() => []);
-    const ev = (evs || [])[0];
+    const ev = quoted.get(ref.id)?.ev || await findNote(ref).catch(() => null);
     if (ev) openNoteThread(ev);
     else toast(t('noteRefNotFound'));
   }

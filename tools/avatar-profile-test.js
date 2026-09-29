@@ -69,6 +69,17 @@ try {
   }
   check('back returns to the feed where the reader was', back.feed && Math.abs(back.y - feedY) < 60, 'scrollY ' + back.y + ' vs ' + feedY);
 
+  // a post opened into its thread: Back lands where the reader was
+  await page.evaluate(() => { const r = [...document.querySelectorAll('.notes-feed [data-key]')].find((n) => n.innerText.includes('post number 13')); r.scrollIntoView({ block: 'center' }); });
+  await sleep(700);
+  const y0 = await page.evaluate(() => window.scrollY);
+  await page.evaluate(() => [...document.querySelectorAll('.notes-feed [data-key]')].find((n) => n.innerText.includes('post number 13')).querySelector('.note-text').click());
+  await sleep(1500);
+  const inThread = await page.evaluate(() => !!document.querySelector('.thread-page'));
+  await page.goBack(); await sleep(1500);
+  const y1 = await page.evaluate(() => window.scrollY);
+  check('back from a post returns to the same place in the feed', inThread && y0 > 500 && Math.abs(y1 - y0) < 60, 'scrollY ' + y1 + ' vs ' + y0);
+
   // "Their timeline" from the profile: its chip names it (it was a blank pill)
   await page.evaluate(() => { const r = [...document.querySelectorAll('.notes-feed .note-avatar')].find((n) => n.closest('[data-key]')?.innerText.includes('Bob Poster')); r.click(); });
   await sleep(1000);

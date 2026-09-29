@@ -25,6 +25,7 @@ const found = await pool.querySync(['wss://relay.primal.net', 'wss://nos.lol'],
 const target = (found || []).filter((e) => e.content && e.content.length > 20)[0];
 if (!target) { console.log(' ✗ no note to quote (relays quiet)'); process.exit(1); }
 const nevent = neventOf(target.id, target.pubkey);
+const FAR = 'nevent1qvzqqqqqqypzqntcggz30qhq60ltqdx32zku9d46unhrkjtcv7fml7jx3dh4h94nqqsqchs0pz4hnqm6jurakjwcd6wcrph7wyy80j0ljup68p4hynvsz3q3nhre2';
 
 const html = await buildHtml({ minify: true, pwa: false });
 const server = Bun.serve({ port: 5269, fetch: () => new Response(html, { headers: { 'content-type': 'text/html' } }) });
@@ -59,21 +60,24 @@ try {
   await waitText('receive', 20000);
   const base = cacheKeyFor(mn + '\n');
   const A = 'a'.repeat(63) + '9';
-  await page.evaluate(([k, pk, ref]) => {
+  await page.evaluate(([k, pk, ref, FAR]) => {
     localStorage.setItem(k + ':follows', JSON.stringify({ tags: [['p', pk]], c: '', at: Math.floor(Date.now()/1000) }));
     localStorage.setItem(k + ':feedNotes', JSON.stringify([
       { id: 'd'.repeat(64), pubkey: pk, kind: 1, created_at: Math.floor(Date.now()/1000), content: 'what he said nostr:' + ref, tags: [] },
+      // quotes a note that sits only on nostr.mom — not in the reference, not in its author's relay list
+      { id: 'e'.repeat(64), pubkey: pk, kind: 1, created_at: Math.floor(Date.now()/1000) - 60, content: 'I remember this.\n\nnostr:' + FAR, tags: [] },
     ]));
     localStorage.setItem(k + ':profiles', JSON.stringify({ [pk]: { name: 'Quoter', t: Date.now() } }));
-  }, [base, A, nevent]);
+  }, [base, A, nevent, FAR]);
   if (process.argv.includes('--slow')) await page.evaluate(() => localStorage.setItem('__slowQuote', '1'));
   await page.reload({ waitUntil: 'domcontentloaded' });
   await waitText('receive', 20000);
   await page.evaluate(() => document.querySelector('.app-bottom-nav .app-nav-button').click());
   await sleep(7000);
   if (process.argv.includes('--slow')) {
-    for (let i = 0; i < 40 && !(await page.evaluate(() => document.body.innerText.includes('view note'))); i++) await sleep(250);
-    check('a late quote first paints as a link', await page.evaluate(() => document.body.innerText.includes('view note')));
+    for (let i = 0; i < 40 && !(await page.evaluate(() => !!document.querySelector('.quote-card'))); i++) await sleep(250);
+    check('a late quote first paints as a placeholder card, not a link', await page.evaluate(() => !document.body.innerText.includes('view note')
+      && [...document.querySelectorAll('.quote-card')].some((q) => /Couldn.t find|Fetching note/.test(q.innerText))));
     await sleep(SLOW_MS + 4000);
   }
 
@@ -87,7 +91,12 @@ try {
   check('...with whose note it is', !!(card && card.hasAvatar), card ? card.text.slice(0, 50) : '');
   const body = target.content.replace(/\s+/g, ' ').slice(0, 24);
   check('...and what it actually said', !!(card && card.text.replace(/\s+/g, ' ').includes(body.slice(0, 18))), body);
-  check('no "view note" link left in the post', !(await page.evaluate(() => document.body.innerText)).includes('view note'));
+  if (!process.argv.includes('--slow')) {
+    const far = await page.evaluate(() => { const r = [...document.querySelectorAll('.notes-feed [data-key]')].find((n) => n.innerText.includes('Quoter') && n.innerText.includes('I remember this')); return r && r.querySelector('.quote-card')?.innerText; });
+    check('a quote found only on a far relay still shows as its card', !!far && !/Couldn.t find|Fetching/.test(far), JSON.stringify((far || '').slice(0, 60)));
+  }
+  // (a quote inside a quote stays a link on purpose: one level of cards)
+  check('no "view note" link left in the post', !(await page.evaluate(() => [...document.querySelectorAll('.notes-feed a')].some((a) => a.textContent === 'view note' && !a.closest('.quote-card')))));
   // the outer post keeps its actions; the quote has none of its own
   const acts = await page.evaluate(() => ({
     outer: document.querySelectorAll('.notes-feed > .row .note-acts').length,

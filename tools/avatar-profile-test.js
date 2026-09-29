@@ -76,6 +76,20 @@ try {
   await sleep(1500);
   const chip = await page.evaluate(() => document.querySelector('.feed-chip.on')?.textContent || null);
   check('someone’s timeline has a labelled chip', !!chip && /Bob Poster/.test(chip), JSON.stringify(chip));
+
+  // ⋯ → Save feed: straight into the chips, no editor listing their follows
+  await page.evaluate((l) => document.querySelector('button[aria-label="' + l + '"]').click(), 'Feed options');
+  await sleep(500);
+  const saved = await click('save feed');
+  await sleep(1000);
+  const savedState = await page.evaluate(() => ({ editor: /New feed/.test(document.body.innerText), chips: [...document.querySelectorAll('.feed-chip')].map((c) => c.textContent), on: document.querySelector('.feed-chip.on')?.textContent }));
+  check('“Save feed” on a timeline saves it without the editor', saved && !savedState.editor && /Bob Poster/.test(savedState.on || ''), JSON.stringify(savedState));
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await waitText('receive', 20000);
+  await page.evaluate(() => document.querySelector('.app-bottom-nav .app-nav-button').click());
+  await sleep(2000);
+  const kept = await page.evaluate(() => [...document.querySelectorAll('.feed-chip')].map((c) => c.textContent));
+  check('...and it is still among the feeds after a reload', kept.some((c) => /(Bob Poster|npub1hwam).*’s timeline/.test(c)), JSON.stringify(kept));
 } finally { await browser.close(); server.stop(true); }
 console.log(ok ? '\n✅ a face opens its profile at the top' : '\n❌ failed');
 process.exit(ok ? 0 : 1);

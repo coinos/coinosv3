@@ -4173,7 +4173,7 @@ export function messagesFeature(ctx) {
     if (!ui.listPick) return null;
     const pk = ui.listPick;
     const close = () => { ui.listPick = null; render(); };
-    const feeds = st().feeds;
+    const feeds = st().feeds.filter((f) => !f.of); // a timeline is someone, not a list
     const toggle = (f) => {
       const s = st();
       const def = s.feeds.find((x) => x.id === f.id);
@@ -4245,8 +4245,37 @@ export function messagesFeature(ctx) {
     for (const pk of def.authors || []) if (pk) set.add(pk);
     for (const pk of def.priv || []) if (pk) set.add(pk); // a list's private members
     for (const pk of packAuthors(def)) set.add(pk);
+    if (def.of) for (const pk of ofFollows.get(def.of)?.authors || []) set.add(pk);
     return [...set].slice(0, FEED_AUTHORS_MAX);
   };
+  // Someone's timeline is their follow list, read from the relays when the
+  // feed is opened (and again after ten minutes) — never copied into the
+  // feed itself, so a saved one stays small in sync and follows them.
+  const ofFollows = new Map(); // pk -> { authors, at, loading }
+  const ofLoaded = (def) => !!ofFollows.get(def.of)?.at;
+  function loadOfFollows(def) {
+    const pk = def.of;
+    let f = ofFollows.get(pk);
+    if (!f) { f = { authors: [], at: 0, loading: false }; ofFollows.set(pk, f); }
+    if (f.loading || (f.at && Date.now() - f.at < 600_000)) return;
+    f.loading = true;
+    liveProfileOf(pk); // their name and face for the title
+    queryOn([...new Set([...(def.relays || []), ...PROFILE_RELAYS, ...NOTE_RELAYS])], { kinds: [3], authors: [pk] }, 6000)
+      .catch(() => [])
+      .then((evs) => {
+        const newest = (evs || []).sort((a, b) => b.created_at - a.created_at)[0];
+        const had = f.at;
+        if (newest || !had) f.authors = newest ? hexList(newest.tags.filter((x) => x[0] === 'p').map((x) => x[1])) : [];
+        f.at = Date.now(); f.loading = false;
+        // whatever was built before the list was known
+        for (const id of [...feedStates.keys()]) {
+          if (feedDef(id)?.of !== pk || id === curFeedId) continue;
+          dropFeedState(id);
+        }
+        if (feedDef(curFeedId)?.of === pk) { dropFeedState(curFeedId); selectFeed(curFeedId); }
+        scheduleRepaint();
+      });
+  }
 
   function feedNow() {
     if (!feedDef(curFeedId)) curFeedId = FOLLOWING; // a feed deleted on another device
@@ -4308,6 +4337,7 @@ export function messagesFeature(ctx) {
   // history restores ui.feedId and the view catches up from here.
   function selectFeed(id) {
     if (!feedDef(id)) return;
+    if (feedDef(id).of) loadOfFollows(feedDef(id));
     if (id !== curFeedId) {
       curFeedId = id;
       if (!adhocFeeds.has(id)) { try { localStorage.setItem(FEED_LS, id); } catch {} }
@@ -4344,19 +4374,9 @@ export function messagesFeature(ctx) {
     const id = 'of:' + pk + (readFrom.length ? '@' + readFrom.join(',') : '');
     let def = adhocFeeds.get(id);
     if (!def) {
-      def = { id, name: '', follows: false, authors: [], packs: [], topics: [], of: pk, ofAt: 0, relays: readFrom };
+      def = { id, name: '', follows: false, authors: [], packs: [], topics: [], of: pk, relays: readFrom };
       adhocFeeds.set(id, def);
-      liveProfileOf(pk); // their name and face for the title
-      queryOn([...new Set([...relays, ...PROFILE_RELAYS, ...NOTE_RELAYS])], { kinds: [3], authors: [pk] }, 6000)
-        .catch(() => [])
-        .then((evs) => {
-          const newest = (evs || []).sort((a, b) => b.created_at - a.created_at)[0];
-          def.authors = newest ? hexList(newest.tags.filter((x) => x[0] === 'p').map((x) => x[1])) : [];
-          def.ofAt = Date.now();
-          dropFeedState(id); // whatever was built before the list was known
-          if (curFeedId === id) selectFeed(id);
-          scheduleRepaint();
-        });
+      loadOfFollows({ ...def, relays: [...relays, ...readFrom] });
     }
     showFeed(id);
   }
@@ -7682,7 +7702,7 @@ export function messagesFeature(ctx) {
         onClick: () => switchFeed(f.id),
         // someone's timeline carries the person, not a name — an empty
         // label left a blank black pill
-      }, f.of ? t('feedOfTitle', { name: displayName(f.of) }) : f.name || feedSummary(f))),
+      }, f.name || (f.of ? t('feedOfTitle', { name: displayName(f.of) }) : feedSummary(f)))),
       h('button', { class: 'feed-chip add', type: 'button', title: t('feedNew'), 'aria-label': t('feedNew'), onClick: () => openFeedEditor(null) }, '+'));
   }
   // The sheets a post (or a person) can open: the ⋯ menu, the reaction
@@ -7703,7 +7723,9 @@ export function messagesFeature(ctx) {
         item('\u{1F4E1}', t('feedRelays') + (feedRelays(def) ? ' \u00b7 ' + feedRelays(def).length : ''), () => { ui.feedRelayEdit = { id: def.id, input: '' }; }),
         def.builtin || visitor ? null
           : adhocFeeds.has(def.id)
-            ? item('\u{1F4BE}', t('feedSaveAdhoc'), () => openFeedEditor(def))
+            ? item('\u{1F4BE}', t('feedSaveAdhoc'), () => (def.of ? saveTimelineFeed(def) : openFeedEditor(def)))
+            // a saved timeline is the person, nothing to edit — only to drop
+            : def.of ? item('\u{1F5D1}', t('feedDelete'), () => deleteFeed(def.id))
             : item('\u270e', t('feedEdit'), () => openFeedEditor(def)),
         h('button', { class: 'btn-ghost btn-block', onClick: close }, t('back'))));
   }
@@ -7853,7 +7875,7 @@ export function messagesFeature(ctx) {
           }),
           def.of ? avatar(def.of, 'chat-avatar mini', true) : null,
           h('h3', { style: 'margin:0;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' },
-            def.builtin && !def.all ? t('feedTitle') : def.of ? t('feedOfTitle', { name: displayName(def.of) }) : def.name),
+            def.builtin && !def.all ? t('feedTitle') : def.of && !def.name ? t('feedOfTitle', { name: displayName(def.of) }) : def.name),
           // one ⋯ for the feed itself (share, relays, save or edit) and one
           // pencil for a new post: the title keeps the room a phone has
           h('button', {
@@ -7867,7 +7889,7 @@ export function messagesFeature(ctx) {
         ui.feedRelayEdit && ui.feedRelayEdit.id === def.id ? relayPanel(def) : null,
         visitor ? null : feedChips(),
         visitor ? null : postComposer(),
-        def.of && !def.ofAt
+        def.of && !ofLoaded(def)
           ? h('div', { class: 'row gap6', style: 'justify-content:center;align-items:center;padding:12px 0' },
               h('span', { class: 'spinner sm' }), h('span', { class: 'small muted' }, t('feedOfLoading')))
         : def.of && !hasQuery
@@ -7952,6 +7974,22 @@ export function messagesFeature(ctx) {
       save(s);
       deleteFollowSet(prev).catch(() => {});
     }
+  }
+  // "Save feed" on someone's timeline: into the chips at once. The editor
+  // would have copied their whole follow list in, one row per person.
+  function saveTimelineFeed(adhoc) {
+    const s = st();
+    const have = s.feeds.find((f) => f.of === adhoc.of && JSON.stringify(f.relays || []) === JSON.stringify(adhoc.relays || []));
+    const id = have ? have.id : 'f' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    if (!have) {
+      s.feeds.push({ id, name: '', follows: false, authors: [], packs: [], topics: [], of: adhoc.of,
+        ...(adhoc.relays && adhoc.relays.length ? { relays: adhoc.relays } : {}), at: Date.now() });
+      save(s);
+    }
+    adhocFeeds.delete(adhoc.id);
+    feedStates.delete(adhoc.id);
+    switchFeed(id);
+    toast(t('feedSaved'));
   }
   function deleteFeed(id) {
     const s = st();

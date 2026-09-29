@@ -242,6 +242,7 @@ const STR = {
     feedTopicsHelp: 'Posts tagged with any of these. With people set as well, only their posts on these topics.',
     feedDelete: 'Delete feed',
     feedSaveAdhoc: 'Save feed',
+    feedSaved: 'Feed saved',
     feedNoQuery: 'Add people or topics to this feed.',
     feedOfTitle: '{name}’s timeline',
     feedOfLoading: 'Reading who they follow…',

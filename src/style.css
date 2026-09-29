@@ -626,6 +626,11 @@ html:has(#app .chat-card), body:has(#app .chat-card) { overflow: hidden; }
 /* The row under a post: reply, boost, quote, react, zap — spread across the
    post's full width so each is a comfortable target, quiet until one carries
    a count or you've used it. */
+.note-post { display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 8px 10px; align-items: center; }
+.note-content { display: contents; }
+.note-content > * { grid-column: 1 / -1; min-width: 0; }
+.note-content > .note-header { grid-column: 2; grid-row: 1; }
+.note-content > .note-text { font-size: 18px; line-height: 1.5; }
 .note-acts { margin-top: 8px; gap: 4px; width: min(100%, 340px); }
 .note-acts > .note-act { flex: 1 1 0; min-width: 0; justify-content: center; padding-inline: 2px; }
 /* server comparison table (Settings → Advanced → Ark server) */

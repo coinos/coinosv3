@@ -6403,10 +6403,10 @@ export function messagesFeature(ctx) {
     const openable = open && !pending;
     if (!pending) watchZaps([ev.id]);
     return h('div', {
-      class: 'row',
+      class: 'row note-post',
       'data-zap-post': ev.id,
       'data-focus-note': focus ? '1' : undefined,
-      style: 'gap:10px;align-items:flex-start;padding:10px 0'
+      style: 'padding:10px 0'
         + (openable ? ';cursor:pointer' : '')
         + (pending ? ';opacity:.55' : '')
         // joined: the reply box continues this highlight below, so the
@@ -6419,8 +6419,8 @@ export function messagesFeature(ctx) {
       // the avatar is its own tap-target (profile), even inside an openable
       // row — its handler stops propagation, so the row still opens the thread
       avatar(pk, 'chat-avatar note-avatar'),
-      h('div', { class: 'col grow', style: 'min-width:0;gap:3px' },
-        h('div', { class: 'row between', style: 'align-items:center;gap:8px' },
+      h('div', { class: 'note-content' },
+        h('div', { class: 'row between note-header', style: 'align-items:center;gap:8px' },
           h('div', { class: 'row', style: 'gap:7px;align-items:baseline;min-width:0' },
             h('span', {
               // the name, like the avatar, is its own tap-target (profile)

@@ -5417,7 +5417,7 @@ export function messagesFeature(ctx) {
   // blob, the key riding inside the (already encrypted) message. The media
   // host never sees a picture. coinos's own Blossom server stores only sync
   // envelopes, so these go to public hosts that take anonymous blobs.
-  const MEDIA_SERVERS = ['https://blossom.ditto.pub', 'https://nostr.download'];
+  const MEDIA_SERVERS = ['https://blossom.ditto.pub', 'https://nostr.download', 'https://blossom.yakihonne.com'];
   const MEDIA_MAX = 20 * 1024 * 1024;
   async function encryptFile(file) {
     if (file.size > MEDIA_MAX) throw new Error(t('msgAttachTooBig'));
@@ -5453,7 +5453,8 @@ export function messagesFeature(ctx) {
         const j = await r.json();
         if (j && j.url) urls.push(j.url);
       } catch {}
-      if (urls.length && enc.cipher.length > 4 * 1024 * 1024) break; // one copy is enough for a big file
+      // one copy is enough for a big file, two for a small one — later hosts are fallbacks
+      if (urls.length >= (enc.cipher.length > 4 * 1024 * 1024 ? 1 : 2)) break;
     }
     if (!urls.length) throw new Error(t('msgUploadFailed'));
     return urls;

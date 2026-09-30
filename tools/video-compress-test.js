@@ -34,16 +34,34 @@ const server = Bun.serve({ port: 5287, fetch: async (req) => {
 } });
 const browser = await puppeteer.launch({ executablePath: '/usr/bin/google-chrome', headless: 'new', args: ['--no-sandbox'] });
 const page = await browser.newPage();
+// the upload goes out by XMLHttpRequest (for its progress events): keep a
+// copy of the body, and answer at the network layer — nothing leaves
 await page.evaluateOnNewDocument(() => {
-  const f = window.fetch;
-  window.fetch = async (url, init) => {
-    if (init && init.method === 'PUT' && /nostr\.build|nostr\.download/.test(String(url))) {
-      window.__put = { size: init.body.size, type: init.body.type, buf: await init.body.arrayBuffer() };
-      return new Response(JSON.stringify({ url: 'https://blossom.nostr.build/' + 'f'.repeat(64) + '.mp4' }), { status: 201 });
+  const open = XMLHttpRequest.prototype.open, send = XMLHttpRequest.prototype.send;
+  XMLHttpRequest.prototype.open = function (m, url) { this.__m = m; this.__url = String(url); return open.apply(this, arguments); };
+  XMLHttpRequest.prototype.send = function (body) {
+    if (this.__m === 'PUT' && /nostr\.build|nostr\.download/.test(this.__url) && body instanceof Blob) {
+      body.arrayBuffer().then((buf) => { window.__put = { size: body.size, type: body.type, buf }; });
     }
-    if (init && init.method === 'HEAD' && /nostr\.build|nostr\.download/.test(String(url))) return new Response('', { status: 200 });
-    return f(url, init);
+    return send.apply(this, arguments);
   };
+  // every state the progress bar shows
+  window.__prog = [];
+  new MutationObserver(() => {
+    const m = document.querySelector('.media-progress');
+    const s = m ? m.innerText.replace(/\s+/g, ' ').trim() : null;
+    if (s && window.__prog.at(-1) !== s) window.__prog.push(s);
+  }).observe(document, { childList: true, subtree: true, characterData: true, attributes: true });
+});
+await page.setRequestInterception(true);
+page.on('request', (req) => {
+  const u = req.url();
+  if (!/nostr\.build|nostr\.download/.test(u)) return req.continue();
+  const cors = { 'access-control-allow-origin': '*', 'access-control-allow-methods': 'PUT, HEAD, GET', 'access-control-allow-headers': '*' };
+  if (req.method() === 'OPTIONS') return req.respond({ status: 204, headers: cors });
+  if (req.method() === 'HEAD') return req.respond({ status: 200, headers: cors });
+  return req.respond({ status: 201, headers: cors, contentType: 'application/json',
+    body: JSON.stringify({ url: 'https://blossom.nostr.build/' + 'f'.repeat(64) + '.mp4' }) });
 });
 const click = (t) => page.evaluate((x) => { const e = [...document.querySelectorAll('button')].find((n) => n.textContent.trim().toLowerCase().includes(x)); if (e) { e.click(); return true; } return false; }, t);
 const waitText = async (x, ms = 25000) => { for (let i = 0; i < ms / 250; i++) { if ((await page.evaluate(() => document.body.innerText)).toLowerCase().includes(x)) return true; await sleep(250); } return false; };
@@ -72,9 +90,16 @@ try {
     dt.items.add(new File([b], 'phone.mp4', { type: 'video/mp4' }));
     document.querySelector('.post-input').dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
   });
-  const sawShrink = await waitText('shrinking the video', 15000);
-  check('the toast says it is shrinking the video', sawShrink);
   const done = await waitFor(() => !!window.__put, 120000);
+  await waitFor(() => !document.querySelector('.media-progress'), 10000);
+  const prog = await page.evaluate(() => window.__prog);
+  const pcts = (stage) => prog.filter((x) => x.startsWith(stage)).map((x) => +x.match(/(\d+)%/)[1]);
+  const shrink = pcts('Shrinking video'), up = pcts('Uploading');
+  check('a bar shows the shrinking with its percentage', shrink.length >= 3 && shrink.some((p) => p > 0 && p < 100), JSON.stringify(shrink.slice(0, 12)));
+  // (the answer here is instant, so only its start shows — the percentages
+  // themselves are upload-progress-test's)
+  check('...then the upload with its own', up.length >= 1 && prog.findIndex((x) => x.startsWith('Uploading')) > prog.findIndex((x) => x.startsWith('Shrinking')), JSON.stringify(up));
+  check('...and goes away when it is done', await page.evaluate(() => !document.querySelector('.media-progress')));
   const put = done && await page.evaluate(() => ({ size: window.__put.size, type: window.__put.type }));
   const secs = ((Date.now() - t0) / 1000).toFixed(1);
   check('the upload is the shrunk video', !!put && put.type === 'video/mp4' && put.size < srcSize * 0.35,

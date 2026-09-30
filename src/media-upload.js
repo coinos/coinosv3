@@ -43,13 +43,32 @@ function mediaUrl(url, server, file) {
   return out.href;
 }
 
+// A PUT that reports how much of the body has gone out: fetch() can't, so in
+// the browser (with the real fetch) it's XMLHttpRequest. Answers like fetch.
+function putWithProgress(url, { body, headers, signal }, onProgress) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('PUT', url);
+    for (const [k, v] of Object.entries(headers)) xhr.setRequestHeader(k, v);
+    xhr.upload.onprogress = (e) => { if (e.lengthComputable) onProgress(e.loaded / e.total); };
+    xhr.onload = () => resolve(new Response(xhr.responseText, {
+      status: xhr.status, headers: { 'x-reason': xhr.getResponseHeader('x-reason') || '' } }));
+    xhr.onerror = () => reject(new Error('network error'));
+    xhr.ontimeout = () => reject(new Error('timeout'));
+    if (signal) signal.addEventListener('abort', () => { xhr.abort(); reject(new Error('timeout')); });
+    xhr.send(body);
+  });
+}
+
 // BUD-02 upload. `signEvent` is deliberately injected: the app can use its
 // always-available wallet identity, while tests need no secret key.
 export async function uploadPublicMedia(file, signEvent, {
   servers = PUBLIC_MEDIA_SERVERS,
   fetcher = globalThis.fetch,
   timeoutMs = 5 * 60_000,
+  onProgress = null, // (fraction 0..1) as the bytes go out
 } = {}) {
+  const tracked = onProgress && typeof XMLHttpRequest !== 'undefined' && fetcher === globalThis.fetch;
   if (!file || !file.size || typeof signEvent !== 'function') throw new MediaUploadError('failed');
   const x = await fileHash(file);
   const now = Math.floor(Date.now() / 1000);
@@ -68,7 +87,7 @@ export async function uploadPublicMedia(file, signEvent, {
       catch (error) { failures.push({ status: 0, reason: 'unreachable' }); continue; }
     }
     try {
-      const response = await fetcher(server.replace(/\/$/, '') + '/upload', {
+      const init = {
         method: 'PUT', body: file, signal: AbortSignal.timeout(timeoutMs),
         headers: {
           authorization,
@@ -76,7 +95,10 @@ export async function uploadPublicMedia(file, signEvent, {
           'x-sha-256': x,
           'x-content-length': String(file.size),
         },
-      });
+      };
+      if (onProgress) onProgress(0);
+      const target = server.replace(/\/$/, '') + '/upload';
+      const response = tracked ? await putWithProgress(target, init, onProgress) : await fetcher(target, init);
       let body = null;
       try { body = await response.json(); } catch {}
       const url = response.ok && responseUrl(body);

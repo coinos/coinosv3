@@ -7127,6 +7127,7 @@ export function messagesFeature(ctx) {
       style: 'gap:8px;margin:0 -8px;padding:' + (joined ? '2px' : '8px') + ' 8px 10px;background:var(--accent-soft,rgba(128,128,128,.08));border-radius:' + (joined ? '0 0 8px 8px' : '8px'),
     },
       s.preview ? draftPreview(s.draft) : null,
+      mediaBar(),
       // A textarea that grows with the reply, like the chat composer: Enter
       // sends, Shift+Enter (or Ctrl+J) breaks the line — a reply used to be
       // a one-line field with no way to write a paragraph.
@@ -7833,6 +7834,16 @@ export function messagesFeature(ctx) {
         ? h('div', { class: 'note-text', style: 'white-space:pre-wrap;overflow-wrap:anywhere' }, ...noteBody(body))
         : h('div', { class: 'small faint' }, t('composePreviewEmpty')));
   }
+  // Shrinking, then uploading, as a labelled bar with its percentage — the
+  // paperclip's spinner said only "busy", however long a video took.
+  function mediaBar() {
+    const m = ui.mediaProgress;
+    if (!m) return null;
+    const label = t(m.stage === 'shrink' ? 'mediaShrinking' : 'mediaUploading');
+    return h('div', { class: 'media-progress', role: 'progressbar', 'aria-valuemin': '0', 'aria-valuemax': '100', 'aria-valuenow': String(m.pct), 'aria-label': label },
+      h('div', { class: 'row between small' }, h('span', { class: 'muted' }, label + '…'), h('span', { class: 'media-progress-pct' }, m.pct + '%')),
+      h('div', { class: 'media-progress-track' }, h('div', { class: 'media-progress-fill', style: 'width:' + m.pct + '%' })));
+  }
   const previewBtn = (on, toggle) => h('button', {
     class: 'attach-btn' + (on ? ' on' : ''),
     title: on ? t('composePreviewHide') : t('composePreview'),
@@ -7859,6 +7870,7 @@ export function messagesFeature(ctx) {
         },
       }),
       ui.postPreview ? draftPreview(text) : null,
+      mediaBar(),
       h('div', { class: 'row gap6' },
         h('button', { class: 'btn-primary grow', disabled: !!ui.postUploading, onClick: async () => {
           const body = composeText().trim();
@@ -8105,9 +8117,11 @@ export function messagesFeature(ctx) {
             onClick: () => { ui.feedMenu = true; render(); },
           }, '\u22ef'),
           visitor ? null : h('button', {
-            class: 'btn-sm', style: 'flex-shrink:0', title: t('profNewPost'), 'aria-label': t('profNewPost'),
+            // the pencil alone wasn't read as "write a post": it says so
+            class: 'btn-sm feed-new-post', style: 'flex-shrink:0;display:inline-flex;align-items:center;gap:6px;white-space:nowrap', title: t('profNewPost'), 'aria-label': t('profNewPost'),
             onClick: () => { ui.profCompose = ui.profCompose == null ? (draftFor(POST_DRAFT) || '') : null; render(); },
-            html: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:block"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>' })),
+          }, h('span', { style: 'display:flex', html: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:block"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>' }),
+            h('span', {}, t('profNewPost')))),
         ui.feedRelayEdit && ui.feedRelayEdit.id === def.id ? relayPanel(def) : null,
         visitor ? null : feedChips(),
         visitor ? null : postComposer(),

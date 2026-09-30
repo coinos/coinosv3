@@ -3482,24 +3482,32 @@ async function onbUpload(file) {
   return url;
 }
 
+// ui.mediaProgress = { stage: 'shrink' | 'upload', pct } while a picture or
+// video is on its way; the composers draw it as a bar under the field.
+// A render per whole percent, no more.
+function mediaProgress(stage, fraction) {
+  const pct = Math.max(0, Math.min(100, Math.floor(fraction * 100)));
+  const cur = ui.mediaProgress;
+  if (cur && cur.stage === stage && cur.pct === pct) return;
+  ui.mediaProgress = { stage, pct };
+  render();
+}
 async function publicMediaUpload(file) {
-  // a phone video is shrunk on the device first (see video-compress.js);
-  // the toast counts it down, since a long clip takes a while
-  if (/^video\//.test(file?.type || '')) {
-    let shown = -1;
-    const { compressVideo } = await import('./video-compress.js');
-    file = await compressVideo(file, (p) => {
-      const pct = Math.floor(p * 100);
-      if (pct !== shown && pct % 5 === 0) { shown = pct; toast(t('mediaShrinking', { pct }), 60_000); }
-    });
-    if (shown >= 0) toast(t('mediaUploading'), 4000);
-  }
   try {
-    return await uploadPublicMedia(file, (event) => wallet.nostrSign(event));
+    // a phone video is shrunk on the device first (see video-compress.js)
+    if (/^video\//.test(file?.type || '')) {
+      mediaProgress('shrink', 0);
+      const { compressVideo } = await import('./video-compress.js');
+      file = await compressVideo(file, (p) => mediaProgress('shrink', p));
+    }
+    mediaProgress('upload', 0);
+    return await uploadPublicMedia(file, (event) => wallet.nostrSign(event), { onProgress: (p) => mediaProgress('upload', p) });
   } catch (error) {
     if (error instanceof MediaUploadError && error.code === 'too-big') throw new Error(t('mediaUploadTooBig'));
     if (error instanceof MediaUploadError && error.code === 'unsupported') throw new Error(t('mediaUploadUnsupported'));
     throw new Error(t('msgUploadFailed'));
+  } finally {
+    ui.mediaProgress = null;
   }
 }
 

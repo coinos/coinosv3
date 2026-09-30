@@ -88,6 +88,24 @@ try {
   const chip = await page.evaluate(() => document.querySelector('.feed-chip.on')?.textContent || null);
   check('someone’s timeline has a labelled chip', !!chip && /Bob Poster/.test(chip), JSON.stringify(chip));
 
+  // ‹ on their timeline goes back to their profile, not the chat list
+  await page.evaluate(() => document.querySelector('.feed-page .chat-back').click());
+  await sleep(1200);
+  const backTo = await page.evaluate(() => ({ profile: /bob bio here/.test(document.body.innerText), chats: /Communities/.test(document.body.innerText) && !document.querySelector('.feed-page') }));
+  check('‹ on someone’s timeline goes back to their profile', backTo.profile && !backTo.chats, JSON.stringify(backTo));
+  // ...and from their timeline, the Feed tab is your own feed again
+  await click('their timeline');
+  await sleep(1500);
+  await page.evaluate(() => document.querySelector('.app-bottom-nav .app-nav-button').click());
+  await sleep(1200);
+  const mine = await page.evaluate(() => document.querySelector('.feed-chip.on')?.textContent || null);
+  check('the Feed tab brings back your own feed', mine === 'Following', JSON.stringify(mine));
+  // back onto their timeline for the save below
+  await page.evaluate(() => { const r = [...document.querySelectorAll('.notes-feed .note-avatar')].find((n) => n.closest('[data-key]')?.innerText.includes('Bob Poster')); r.click(); });
+  await sleep(1000);
+  await click('their timeline');
+  await sleep(1500);
+
   // ⋯ → Save feed: straight into the chips, no editor listing their follows
   await page.evaluate((l) => document.querySelector('button[aria-label="' + l + '"]').click(), 'Feed options');
   await sleep(500);

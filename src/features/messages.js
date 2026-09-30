@@ -3899,6 +3899,8 @@ export function messagesFeature(ctx) {
   const FEED_LS = 'btc-wallet-feed'; // the feed last on screen, remembered per device
   const feedStates = new Map(); // id -> state
   const adhocFeeds = new Map(); // id -> definition, this session only
+  // the feed of your own you last had on (never a session one)
+  const homeFeedId = () => { let id = FOLLOWING; try { id = localStorage.getItem(FEED_LS) || FOLLOWING; } catch {} return feedDef(id) && !adhocFeeds.has(id) ? id : FOLLOWING; };
   let curFeedId = (() => { try { return localStorage.getItem(FEED_LS) || FOLLOWING; } catch { return FOLLOWING; } })();
   // Two feeds everyone has: the people you follow, and everything the coinos
   // relay carries. Each remembers its own relay choice in the state.
@@ -7993,9 +7995,12 @@ export function messagesFeature(ctx) {
         // A destination tab is a destination: tapping Feed while already
         // there always returns to its top. Only the explicit "x new posts"
         // pill jumps to the first unread arrival.
-        if (active === 'feed' && ui.msgView === 'feed' && !ui.profilePk && !ui.noteThread && !ui.feedEdit) { glideToTop(); return; }
+        // (someone's timeline or a #tag opened from a post isn't the Feed
+        // tab — the tab is your own feeds, the one you last had on)
+        const own = adhocFeeds.has(curFeedId) ? homeFeedId() : curFeedId;
+        if (active === 'feed' && ui.msgView === 'feed' && !ui.profilePk && !ui.noteThread && !ui.feedEdit && own === curFeedId) { glideToTop(); return; }
         leavePage();
-        if (visitor) { ui.pubProf = true; openFirehose(); } else showFeed(curFeedId);
+        if (visitor) { ui.pubProf = true; openFirehose(); } else showFeed(own);
         window.scrollTo({ top: 0 });
       }),
       button('messages', t('msgDmsTitle'), '<path d="M21 11.5a8.4 8.4 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.4 8.4 0 0 1-3.8-.9L3 21l1.9-5.7a8.4 8.4 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.4 8.4 0 0 1 3.8-.9h.5a8.5 8.5 0 0 1 8 8z"/>', () => {
@@ -8060,6 +8065,9 @@ export function messagesFeature(ctx) {
         h('div', { class: 'row gap6', style: 'align-items:center' },
           backBtn(() => {
             stopFeedWatch();
+            // a feed opened from somewhere (a profile's timeline, a #tag, a
+            // pack link) goes back there — or, reached directly, to yours
+            if (!visitor && adhocFeeds.has(def.id)) { ctx.goBack(() => { ui.chatOpen = true; ui.msgView = 'feed'; selectFeed(homeFeedId()); }); return; }
             if (visitor) { ui.chatOpen = false; ui.msgView = null; ui.pubProf = null; } else ui.msgView = 'home';
             render();
           }),

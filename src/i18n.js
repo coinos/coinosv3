@@ -245,6 +245,7 @@ const STR = {
     feedDelete: 'Delete feed',
     feedSaveAdhoc: 'Save feed',
     feedSaved: 'Feed saved',
+    feedPostFab: 'Post',
     mediaShrinking: 'Shrinking video for streaming',
     mediaUploading: 'Uploading',
     feedNoQuery: 'Add people or topics to this feed.',

@@ -8116,14 +8116,20 @@ export function messagesFeature(ctx) {
             class: 'btn-sm' + (feedRelays(def) ? ' on' : ''), title: t('feedMenu'), 'aria-label': t('feedMenu'), style: 'margin-left:auto;flex-shrink:0',
             onClick: () => { ui.feedMenu = true; render(); },
           }, '\u22ef'),
-          visitor ? null : h('button', {
-            // the pencil alone wasn't read as "write a post": it says so
-            class: 'btn-sm feed-new-post', style: 'flex-shrink:0;display:inline-flex;align-items:center;gap:6px;white-space:nowrap', title: t('profNewPost'), 'aria-label': t('profNewPost'),
-            onClick: () => { ui.profCompose = ui.profCompose == null ? (draftFor(POST_DRAFT) || '') : null; render(); },
-          }, h('span', { style: 'display:flex', html: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:block"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>' }),
-            h('span', {}, t('profNewPost')))),
+          ),
         ui.feedRelayEdit && ui.feedRelayEdit.id === def.id ? relayPanel(def) : null,
         visitor ? null : feedChips(),
+        // floating bottom right, wherever the reader is in the feed: the
+        // composer opens at the top and takes the focus
+        visitor || ui.profCompose != null ? null : h('button', {
+          class: 'btn-primary feed-post-fab', 'data-key': 'feed-post-fab', type: 'button', title: t('profNewPost'), 'aria-label': t('profNewPost'),
+          onClick: () => {
+            ui.profCompose = draftFor(POST_DRAFT) || '';
+            render();
+            try { window.scrollTo({ top: 0, behavior: 'smooth' }); } catch { window.scrollTo(0, 0); }
+            setTimeout(() => document.querySelector('.post-input')?.focus(), 60);
+          },
+        }, h('span', { style: 'display:flex', html: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:block"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>' }), h('span', {}, t('feedPostFab'))),
         visitor ? null : postComposer(),
         def.of && !ofLoaded(def)
           ? h('div', { class: 'row gap6', style: 'justify-content:center;align-items:center;padding:12px 0' },

@@ -1728,7 +1728,9 @@ async function activateAccount(acc, opts = {}) {
 // by the Accounts screen and the profile page.
 function signInAnother() {
   clearSeedDrafts();
-  ui.fromWallet = true; ui.unlockError = ''; ui.unlockTab = 'import'; ui.screen = 'unlock';
+  ui.fromWallet = true; ui.unlockError = ''; ui.screen = 'unlock';
+  // Starts on Create new (its Generate button), not the seed-import box.
+  ui.unlockTab = 'create'; ui.createStep = 'gen'; ui.draftMnemonic = ''; ui.confirm = [];
   ui.profilePk = null; ui.profEdit = null; ui.profEditFilled = false; ui.chatOpen = false;
   render();
 }

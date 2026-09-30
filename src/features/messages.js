@@ -31,7 +31,7 @@ import {
 import { saveInbox } from '../dm-inbox.js';
 import { mergeFeedWindow } from '../feed-window.js';
 import { createThreadStore } from '../thread-cache.js';
-import { createFeedCache, FEED_CACHE_POSTS } from '../feed-cache.js';
+import { createFeedCache, FEED_CACHE_POSTS, FEED_SEED_POSTS } from '../feed-cache.js';
 import { makeSearcher, resultRows, fallbackAvatar, warmSearch, punkImageUrl, punkSmallUrl } from '../recipient-search.js';
 import { getNetwork } from '../api.js';
 import { decodeBolt11 } from '../ark/lightning.js';
@@ -4356,6 +4356,7 @@ export function messagesFeature(ctx) {
       let stored = [];
       try { stored = feedDisk()?.read(curFeedId) || wallet.loadFeatureState(feedCacheKey(curFeedId), []) || []; } catch {}
       if (!Array.isArray(stored)) stored = [];
+      if (!stored.length) stored = borrowedNotes(feedDef(curFeedId));
       stored = stored.slice(0, FEED_STORE);
       c = { id: curFeedId, status: 'loading', notes: stored, shown: FEED_PAGE, at: 0, booting: true, presentations: new Map() };
       feedStates.set(curFeedId, c);
@@ -4401,8 +4402,44 @@ export function messagesFeature(ctx) {
     } catch {} finally {
       if (!c.stopped) {
         c.status = 'ready';
-        if (c === feed && ui.chatOpen && ui.msgView === 'feed') { scheduleRepaint(); watchFeed(); }
+        if (c === feed && ui.chatOpen && ui.msgView === 'feed') { scheduleRepaint(); watchFeed(); seedOtherFeeds(); }
       }
+    }
+  }
+  // A feed never opened on this device (or pushed out of the disk cache)
+  // would open on a bare spinner. Posts another open feed already holds —
+  // by its people, on its topics — stand in until the relays answer.
+  function borrowedNotes(def) {
+    if (!def || def.all) return [];
+    const authors = new Set(feedAuthors(def)), topics = new Set(feedTopics(def));
+    if (!authors.size && !topics.size) return [];
+    const fits = (e) => (!authors.size || authors.has(e.pubkey))
+      && (!topics.size || (e.tags || []).some((x) => x[0] === 't' && topics.has(normTopic(x[1]))));
+    const seen = new Set(), out = [];
+    for (const o of feedStates.values()) {
+      for (const e of o.notes) if (!seen.has(e.id) && fits(e) && !hidden(e)) { seen.add(e.id); out.push(e); }
+    }
+    return out.sort((a, b) => b.created_at - a.created_at).slice(0, FEED_PAGE);
+  }
+  // And once the feed on screen has settled, the other feeds' first few
+  // posts are fetched ahead into the disk cache, one feed at a time, so
+  // switching to any of them paints at once.
+  const SEED_EVERY = 15 * 60_000;
+  let feedsSeededAt = 0;
+  async function seedOtherFeeds() {
+    const disk = feedDisk();
+    if (!disk || isVisitor() || Date.now() - feedsSeededAt < SEED_EVERY) return;
+    feedsSeededAt = Date.now();
+    for (const def of feedList()) {
+      if (def.curated || def.of || feedStates.has(def.id) || disk.has(def.id)) continue;
+      const authors = feedAuthors(def).slice(0, REQ_AUTHORS), topics = feedTopics(def);
+      if (!authors.length && !topics.length) continue;
+      try {
+        const events = await queryOn(feedRelaysOr(def, NOTE_RELAYS), { kinds: FEED_KINDS, limit: FEED_SEED_POSTS * 2,
+          ...(authors.length ? { authors } : {}), ...(topics.length ? { '#t': topics } : {}) }, 3000);
+        if (feedStates.has(def.id)) continue; // opened while we were asking
+        disk.seed(def.id, events.filter((e) => FEED_KINDS.includes(e.kind) && !isReply(e) && !hidden(e)));
+      } catch {}
     }
   }
   // Make a feed the current one (no paint): Back/Forward through the

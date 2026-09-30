@@ -4093,7 +4093,13 @@ export function messagesFeature(ctx) {
   };
   // posts on a topic come from the big public relays as well as ours: a
   // hashtag has no author whose outbox we could read
-  const TOPIC_RELAYS = [...new Set([...NOTE_RELAYS, 'wss://relay.damus.io', 'wss://relay.primal.net', 'wss://nos.lol'])];
+  // A topic has no authors whose relays to read, and the big relays prune:
+  // #gardenstr was 5 posts across damus/primal/nos.lol/ours, 774 once these
+  // archive-keeping relays were asked too (ditto 500+, nostr.mom 448,
+  // oxtr 247, nostrplebs 175, nostr21 102, offchain 74 — 2026-09-30).
+  const TOPIC_ARCHIVE_RELAYS = ['wss://relay.ditto.pub', 'wss://nostr.mom', 'wss://nostr.oxtr.dev',
+    'wss://relay.nostrplebs.com', 'wss://nostr21.com', 'wss://offchain.pub'];
+  const TOPIC_RELAYS = [...new Set([...NOTE_RELAYS, 'wss://relay.damus.io', 'wss://relay.primal.net', 'wss://nos.lol', ...TOPIC_ARCHIVE_RELAYS])];
 
   // ---- lists (NIP-51 follow sets, kind 30000) ------------------------------
   // A feed of hand-picked people IS a nostr list. Saved here it is published
@@ -4948,6 +4954,13 @@ export function messagesFeature(ctx) {
   // as disruptive as a live arrival if you were reading halfway down, so it
   // goes behind the pill too. A first load, or paging older posts onto the
   // bottom, does not.
+  // The oldest event the relays handed back, admitted or not: a page of
+  // replies, muted or spam posts is not the end of the feed — the next ask
+  // goes on from there.
+  function sawBack(c, evs) {
+    for (const e of evs || []) if (e && e.created_at && !(c.seenBack <= e.created_at)) c.seenBack = e.created_at;
+    c.sawAny = (c.sawAny || 0) + ((evs || []).length);
+  }
   async function feedPass(extra = {}, merge = {}, c = feedNow()) {
     const def = feedDef(c.id);
     if (!def) return false;
@@ -4961,6 +4974,7 @@ export function messagesFeature(ctx) {
       if (!topics.length && !def.all) return false;
       const relays = feedRelaysOr(def, def.all ? FIREHOSE_RELAYS : TOPIC_RELAYS);
       const evs = await queryOn(relays, { kinds: FEED_KINDS, ...tag, limit: FEED_LIMIT, ...extra }, 5000).catch(() => []);
+      sawBack(c, evs);
       if (await mergeFeed(evs, merge, c)) { got = true; scheduleRepaint(); }
       return got;
     }
@@ -4972,6 +4986,7 @@ export function messagesFeature(ctx) {
       for (let i = 0; i < a.length; i += REQ_AUTHORS) chunks.push(a.slice(i, i + REQ_AUTHORS));
       return chunks.map(async (chunk) => {
         const evs = await queryOn(relays, { kinds: FEED_KINDS, authors: chunk, ...tag, limit: FEED_LIMIT, ...extra }, 5000).catch(() => []);
+        sawBack(c, evs);
         if (await mergeFeed(evs, merge, c)) { got = true; scheduleRepaint(); }
       });
     }));
@@ -5182,8 +5197,14 @@ export function messagesFeature(ctx) {
       if (c.status !== 'ready' || c.end) return;
       const oldest = c.notes.at(-1);
       if (!oldest || !feedHasQuery(feedDef(c.id))) { c.end = true; return; }
-      if (await feedPass({ until: oldest.created_at - 1 }, {}, c)) c.shown = Math.min(c.shown + FEED_PAGE, c.notes.length);
-      else c.end = true;
+      let until = oldest.created_at - 1;
+      for (let tries = 0; tries < 3; tries++) {
+        c.sawAny = 0;
+        if (await feedPass({ until }, {}, c)) { c.shown = Math.min(c.shown + FEED_PAGE, c.notes.length); return; }
+        // nothing older at all (or no step back): that really is the end
+        if (!c.sawAny || !(c.seenBack <= until)) { c.end = true; return; }
+        until = c.seenBack - 1;
+      }
     } finally {
       c.loadingMore = false;
       if (c === feed) render();
@@ -5406,8 +5427,11 @@ export function messagesFeature(ctx) {
   // relays, ours — and when none of those has it, a wider net of big public
   // relays (a quoted note in the wild sat only on nostr.mom, which neither
   // the reference nor its author's relay list named).
-  const WIDE_RELAYS = ['wss://nostr.mom', 'wss://relay.nostr.band', 'wss://nostr.wine', 'wss://relay.snort.social',
-    'wss://offchain.pub', 'wss://relay.nostr.bg', 'wss://nostr.oxtr.dev', 'wss://relay.damus.io', 'wss://nos.lol', 'wss://relay.primal.net'];
+  // (the archive-keeping ones hold what the big relays have pruned — a poll
+  // two days old was only on ditto and nostrplebs by 2026-09-30)
+  const WIDE_RELAYS = ['wss://nostr.mom', 'wss://relay.ditto.pub', 'wss://relay.nostrplebs.com', 'wss://nostr21.com',
+    'wss://nostr.wine', 'wss://relay.snort.social', 'wss://offchain.pub', 'wss://nostr.oxtr.dev',
+    'wss://relay.damus.io', 'wss://nos.lol', 'wss://relay.primal.net'];
   // All at once, first answer wins: asked in turn, a note on a far relay
   // took longer than the feed waits for a row.
   function findNote(ref) {

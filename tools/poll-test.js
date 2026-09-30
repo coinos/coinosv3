@@ -15,7 +15,7 @@ const check = (n, c, d = '') => { console.log(` ${c ? '✓' : '✗'} ${n}${d ? '
 
 const POLL_ID = '000002f7c6a38223a9843d6e93ce8c15a3048bc95003690d74341cf9de372bfc';
 const pool = new SimplePool();
-const [poll] = await pool.querySync(['wss://relay.coinos.io', 'wss://relay.damus.io', 'wss://nos.lol', 'wss://relay.primal.net'], { ids: [POLL_ID] }, { maxWait: 6000 });
+const [poll] = await pool.querySync(['wss://relay.coinos.io', 'wss://relay.damus.io', 'wss://nos.lol', 'wss://relay.primal.net', 'wss://relay.ditto.pub', 'wss://relay.nostrplebs.com'], { ids: [POLL_ID] }, { maxWait: 6000 });
 if (!poll) { console.log(' ✗ the poll is not on the relays'); process.exit(1); }
 const labels = poll.tags.filter((x) => x[0] === 'option').map((x) => x[2]);
 

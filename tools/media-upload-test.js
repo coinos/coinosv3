@@ -39,7 +39,7 @@ check('sends signed Blossom authorization', calls[1].init.headers.authorization.
   });
   check('an unreachable host is skipped within seconds', u === 'https://alive.example/x.mov' && Date.now() - t0 < 7000 && puts.length === 1);
 }
-check('nostr.build is the first host', (await import('../src/media-upload.js')).PUBLIC_MEDIA_SERVERS[0] === 'https://blossom.nostr.build');
+check('ditto is the first host', (await import('../src/media-upload.js')).PUBLIC_MEDIA_SERVERS[0] === 'https://blossom.ditto.pub');
 
 const bareHashUrl = await uploadPublicMedia(file, sign, {
   servers: ['https://media.example'], timeoutMs: 1000,

@@ -2,11 +2,13 @@ import { sha256 } from '@noble/hashes/sha256';
 import { bytesToHex } from '@noble/hashes/utils';
 
 // Independent public hosts: a phone upload should not fail just because one
-// provider is down or rejects a particular container. nostr.build is the
-// widely-used Blossom home and goes first; nostr.download (which advertises
-// large image/video/audio uploads) is the fallback — it was unreachable for
-// hours on 2026-09-30, and every upload waited on it.
-export const PUBLIC_MEDIA_SERVERS = ['https://blossom.nostr.build', 'https://nostr.download'];
+// provider is down or rejects a particular container. Order from a
+// 2026-09-30 benchmark (4 MB mp4 / 110 KB jpeg, uploaded then fetched):
+// ditto took the mp4 in ~0.6 s and serves in ~120 ms; primal ~1.5 s; nostr.
+// download ~1-2 s but refuses a JPEG with bytes after its end marker (motion
+// photos); blossom.nostr.build ~5 s. The first to accept the file wins.
+export const PUBLIC_MEDIA_SERVERS = ['https://blossom.ditto.pub', 'https://blossom.primal.net',
+  'https://nostr.download', 'https://blossom.nostr.build'];
 
 export class MediaUploadError extends Error {
   constructor(code, details = '') {

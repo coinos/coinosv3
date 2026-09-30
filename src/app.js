@@ -3483,6 +3483,17 @@ async function onbUpload(file) {
 }
 
 async function publicMediaUpload(file) {
+  // a phone video is shrunk on the device first (see video-compress.js);
+  // the toast counts it down, since a long clip takes a while
+  if (/^video\//.test(file?.type || '')) {
+    let shown = -1;
+    const { compressVideo } = await import('./video-compress.js');
+    file = await compressVideo(file, (p) => {
+      const pct = Math.floor(p * 100);
+      if (pct !== shown && pct % 5 === 0) { shown = pct; toast(t('mediaShrinking', { pct }), 60_000); }
+    });
+    if (shown >= 0) toast(t('mediaUploading'), 4000);
+  }
   try {
     return await uploadPublicMedia(file, (event) => wallet.nostrSign(event));
   } catch (error) {

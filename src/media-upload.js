@@ -2,10 +2,11 @@ import { sha256 } from '@noble/hashes/sha256';
 import { bytesToHex } from '@noble/hashes/utils';
 
 // Independent public hosts: a phone upload should not fail just because one
-// provider is down or rejects a particular container. nostr.download's NIP-96
-// document currently advertises large image/video/audio uploads; nostr.build
-// is the second, widely-used Blossom home.
-export const PUBLIC_MEDIA_SERVERS = ['https://nostr.download', 'https://blossom.nostr.build'];
+// provider is down or rejects a particular container. nostr.build is the
+// widely-used Blossom home and goes first; nostr.download (which advertises
+// large image/video/audio uploads) is the fallback — it was unreachable for
+// hours on 2026-09-30, and every upload waited on it.
+export const PUBLIC_MEDIA_SERVERS = ['https://blossom.nostr.build', 'https://nostr.download'];
 
 export class MediaUploadError extends Error {
   constructor(code, details = '') {
@@ -59,7 +60,13 @@ export async function uploadPublicMedia(file, signEvent, {
   if (!auth) throw new MediaUploadError('failed');
   const authorization = 'Nostr ' + btoa(JSON.stringify(auth));
   const failures = [];
-  for (const server of servers) {
+  for (const [i, server] of servers.entries()) {
+    // A host that doesn't answer at all costs a few seconds, not the whole
+    // upload timeout. Any HTTP answer, even an error, means it's there.
+    if (i < servers.length - 1) {
+      try { await fetcher(server.replace(/\/$/, '') + '/upload', { method: 'HEAD', signal: AbortSignal.timeout(5000) }); }
+      catch (error) { failures.push({ status: 0, reason: 'unreachable' }); continue; }
+    }
     try {
       const response = await fetcher(server.replace(/\/$/, '') + '/upload', {
         method: 'PUT', body: file, signal: AbortSignal.timeout(timeoutMs),

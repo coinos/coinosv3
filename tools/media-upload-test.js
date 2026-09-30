@@ -10,6 +10,7 @@ let signed = null;
 const sign = async (event) => (signed = { ...event, id: '1'.repeat(64), pubkey: '2'.repeat(64), sig: '3'.repeat(128) });
 const calls = [];
 const fetcher = async (url, init) => {
+  if (init?.method === 'HEAD') return new Response('', { status: 200 }); // the reachability probe
   calls.push({ url, init });
   if (url.startsWith('https://first')) return new Response(JSON.stringify({ message: 'temporarily unavailable' }), { status: 503 });
   return new Response(JSON.stringify({ url: 'https://cdn.example/clip.mov' }), { status: 201, headers: { 'content-type': 'application/json' } });
@@ -22,6 +23,23 @@ check('uploads the original video type and bytes', calls[1].init.method === 'PUT
 check('hashes the file and binds the hash into Blossom auth', calls[1].init.headers['x-sha-256'] === bytesToHex(sha256(bytes))
   && signed.tags.some((tag) => tag[0] === 'x' && tag[1] === calls[1].init.headers['x-sha-256']));
 check('sends signed Blossom authorization', calls[1].init.headers.authorization.startsWith('Nostr '));
+
+// a host that never answers is skipped after the probe, not waited on
+{
+  const puts = [];
+  const t0 = Date.now();
+  const u = await uploadPublicMedia(file, sign, {
+    servers: ['https://dead.example', 'https://alive.example'], timeoutMs: 60_000,
+    fetcher: async (url, init) => {
+      if (url.startsWith('https://dead')) return new Promise((_, reject) => init.signal.addEventListener('abort', () => reject(new Error('timeout'))));
+      if (init.method === 'HEAD') return new Response('', { status: 404 });
+      puts.push(url);
+      return new Response(JSON.stringify({ url: 'https://alive.example/x.mov' }), { status: 201 });
+    },
+  });
+  check('an unreachable host is skipped within seconds', u === 'https://alive.example/x.mov' && Date.now() - t0 < 7000 && puts.length === 1);
+}
+check('nostr.build is the first host', (await import('../src/media-upload.js')).PUBLIC_MEDIA_SERVERS[0] === 'https://blossom.nostr.build');
 
 const bareHashUrl = await uploadPublicMedia(file, sign, {
   servers: ['https://media.example'], timeoutMs: 1000,

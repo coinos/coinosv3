@@ -248,6 +248,21 @@ select {
   background-repeat: no-repeat; background-position: right 14px center;
 }
 textarea { resize: vertical; min-height: 84px; font-family: var(--mono); font-size: 15px; }
+/* The composers' text field (src/rich-text.js): a textarea to look at and
+   type in, contenteditable underneath so keyboards offer GIFs and images. */
+coinos-text {
+  display: block; width: 100%; box-sizing: border-box; font: inherit; color: var(--ink); background: var(--paper);
+  border: 1px solid var(--line-strong); border-radius: 11px; padding: 11px 13px;
+  white-space: pre-wrap; overflow-wrap: anywhere; overflow-y: auto; line-height: 1.4; cursor: text;
+}
+coinos-text:focus { outline: 2px solid var(--accent); outline-offset: -1px; border-color: var(--accent); }
+/* a picture or video on its way: shrinking, then uploading (mediaBar) */
+.media-progress { display: flex; flex-direction: column; gap: 4px; }
+.media-progress-pct { font-variant-numeric: tabular-nums; }
+.media-progress-track { height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; }
+.media-progress-fill { height: 100%; background: var(--accent); border-radius: 3px; transition: width .2s linear; }
+coinos-text[data-empty]::before { content: attr(placeholder); color: var(--muted); pointer-events: none; }
+.chat-compose coinos-text { flex: 1; min-width: 0; padding: 10px 13px; max-height: 120px; }
 .mono-input { font-family: var(--mono); }
 .input-group { display: flex; gap: 8px; }
 .input-group input { flex: 1; }
@@ -626,7 +641,12 @@ html:has(#app .chat-card), body:has(#app .chat-card) { overflow: hidden; }
 /* The row under a post: reply, boost, quote, react, zap — spread across the
    post's full width so each is a comfortable target, quiet until one carries
    a count or you've used it. */
-.note-acts { margin-top: 8px; gap: 4px; width: min(100%, 340px); }
+.note-post { display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 8px 10px; align-items: center; }
+.note-content { display: contents; }
+.note-content > * { grid-column: 1 / -1; min-width: 0; }
+.note-content > .note-header { grid-column: 2; grid-row: 1; }
+.note-content > .note-text { font-size: 18px; line-height: 1.5; }
+.note-acts { margin-top: 8px; gap: 4px; width: 100%; }
 .note-acts > .note-act { flex: 1 1 0; min-width: 0; justify-content: center; padding-inline: 2px; }
 /* server comparison table (Settings → Advanced → Ark server) */
 .cmp-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
@@ -721,6 +741,7 @@ html:has(#app .chat-card), body:has(#app .chat-card) { overflow: hidden; }
   display: flex; align-items: center; justify-content: center;
   background: rgba(8, 10, 14, .94); padding: 16px;
   animation: lightbox-in .12s ease-out;
+  touch-action: none; /* pinch and drag are the picture's own (see attachZoom) */
 }
 /* Nothing scrolls behind a picture that fills the screen — and the reserved
    scrollbar gutter (see html, top of file) stands down with it, or it shows
@@ -732,6 +753,7 @@ html.no-scroll { overflow: hidden; scrollbar-gutter: auto; }
 .lightbox img {
   max-width: 100%; max-height: 100svh; max-height: 100vh;
   object-fit: contain; border-radius: 6px; cursor: zoom-out;
+  user-select: none; -webkit-user-select: none; transform-origin: center center; will-change: transform;
 }
 .lightbox-x {
   position: absolute; top: max(10px, env(safe-area-inset-top)); right: 10px;
@@ -761,10 +783,63 @@ html.no-scroll { overflow: hidden; scrollbar-gutter: auto; }
 .quote-card.clickable { cursor: pointer; }
 .quote-card.clickable:hover { border-color: var(--line-strong); }
 .quote-loading { flex-direction: row; align-items: center; gap: 8px; }
+/* A poll (NIP-88): each option a row with its share of the vote as a bar
+   behind the label. Only the bar's width changes as votes arrive, so the
+   post never changes height under the reader. */
+.poll { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.poll-opt {
+  position: relative; overflow: hidden; display: flex; align-items: center; gap: 8px;
+  width: 100%; min-height: 40px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 10px;
+  background: var(--surface2); color: inherit; font: inherit; text-align: left; cursor: pointer;
+}
+.poll-opt.static { cursor: inherit; min-height: 34px; padding: 6px 10px; }
+.poll-opt:not(.static):hover { border-color: var(--line-strong); }
+.poll-opt.mine { border-color: var(--accent); }
+.poll-bar { position: absolute; inset: 0 auto 0 0; background: var(--line); transition: width .3s ease; pointer-events: none; }
+.poll-opt.mine .poll-bar { background: var(--line-strong); }
+.poll-label { position: relative; flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.poll-opt.mine .poll-label { font-weight: 600; }
+.poll-pct { position: relative; font-variant-numeric: tabular-nums; color: var(--muted); font-size: 14px; }
+.poll-foot { margin-top: 2px; }
 /* Posts that landed while you were reading further down. Floats over the
    feed near the top, out of the way of the thumb, and takes you up to them
    when tapped. Fixed, not sticky: the feed is the page scroller, and a
    sticky element inside the card would scroll away with the card. */
+#app:has(> .app-bottom-nav) { padding-bottom: calc(82px + env(safe-area-inset-bottom, 0px)); }
+.app-bottom-nav {
+  /* Edge to edge like a system bar; the buttons stay over the page column. */
+  position: fixed; bottom: 0; left: 0; right: 0;
+  z-index: 30; display: flex; justify-content: center; box-sizing: border-box;
+  padding: 6px max(4px, calc((100% - 560px) / 2)) calc(6px + env(safe-area-inset-bottom, 0px));
+  background: var(--paper); border-top: 1px solid var(--line);
+  box-shadow: 0 -4px 18px rgba(0, 0, 0, .06);
+}
+.app-nav-button {
+  display: flex; flex: 1; min-width: 0; flex-direction: column; align-items: center;
+  justify-content: center; gap: 3px; min-height: 52px; padding: 4px;
+  border: 0; border-radius: 12px; background: transparent; color: var(--muted); font-size: 11px;
+  cursor: pointer; transition: color .15s ease, background-color .15s ease;
+}
+@media (hover: hover) { .app-nav-button:hover { color: var(--ink); } }
+.app-nav-button > span:first-child { display: flex; position: relative; }
+.app-nav-button[aria-current="page"] { background: var(--accent-soft); color: var(--ink); font-weight: 600; }
+.app-nav-button.unread > span:first-child::after {
+  content: ''; position: absolute; top: -2px; right: -4px; width: 7px; height: 7px;
+  border-radius: 50%; background: var(--green); border: 1px solid var(--paper);
+}
+.feed-post-fab {
+  /* the "write a post" button floats over the feed's bottom right, above
+     the nav, inside the page column */
+  position: fixed; z-index: 25;
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 82px);
+  right: max(16px, calc((100% - 560px) / 2 + 16px));
+  display: inline-flex; align-items: center; gap: 7px; width: auto;
+  padding: 12px 18px; border-radius: 999px; font-weight: 600;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, .22);
+}
+.feed-page .feed-new-pill {
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 82px);
+}
 .feed-new-pill {
   /* Rides at the bottom of the window, where a thumb already is; the tap
      takes the reader up to the new posts. */
@@ -872,6 +947,15 @@ html.no-scroll { overflow: hidden; scrollbar-gutter: auto; }
   margin-left: -20px; margin-right: -20px;
   border-left: none; border-right: none; border-radius: 0;
   box-shadow: none;
+}
+/* A post that arrived while you were reading wears a tint until it has been
+   on screen a couple of seconds; then it fades to the plain page. The side
+   shadows carry the tint through the list's padding to its edges. */
+.notes-feed > .row { transition: background-color .9s ease, box-shadow .9s ease; }
+.notes-feed > .row.note-fresh {
+  --fresh-bg: color-mix(in srgb, var(--green) 9%, var(--paper));
+  background-color: var(--fresh-bg);
+  box-shadow: -14px 0 0 var(--fresh-bg), 14px 0 0 var(--fresh-bg);
 }
 
 

@@ -332,7 +332,13 @@ async function bundleApp({ minify, features, staging, splitting = false }) {
     // The split build emits real ESM chunks (deferred features arrive as their
     // own files); the single-file build inlines the dynamic imports instead.
     ...(splitting ? { splitting: true, format: 'esm', naming: { chunk: 'chunk-[hash].[ext]' } } : {}),
-    plugins: [featurePlugin(enabledFeatures(features)), flagsPlugin(staging)],
+    plugins: [featurePlugin(enabledFeatures(features)), flagsPlugin(staging),
+      // the single file inlines every dynamic import: the video compressor
+      // (Mediabunny, ~700 KB) would ride along in a file meant to be small
+      // and offline — there it uploads the original, as before
+      ...(splitting ? [] : [{ name: 'no-video-compress', setup(build) {
+        build.onLoad({ filter: /src\/video-compress\.js$/ }, () => ({ loader: 'js', contents: 'export async function compressVideo(f) { return f; }' }));
+      } }])],
   });
   if (!result.success) {
     for (const log of result.logs) console.error(log);
@@ -470,7 +476,10 @@ if (import.meta.main) {
   const nwcSw = feats.includes('nwc') && feats.includes('ark');
   const swBody = SW
     .replaceAll('{{VERSION}}', version)
-    .replaceAll('{{EXTRA_SHELL}}', chunks.map((c) => `, '${c.name}'`).join(''))
+    // precached for offline use — except what only works online anyway:
+    // the video compressor (Mediabunny, ~700 KB) loads when a video is
+    // picked for upload, not on every install
+    .replaceAll('{{EXTRA_SHELL}}', chunks.filter((c) => !c.text.includes('Mediabunny Codec Registry')).map((c) => `, '${c.name}'`).join(''))
     .replaceAll('{{NWC_WAKE_FALLBACK}}', nwcSw ? '' : SW_WAKE_ONLY);
   await Bun.write('dist/sw.js', nwcSw ? swBody + '\n' + await buildSwNwc() : swBody);
   for (const f of STATIC) await Bun.write('dist/' + f, Bun.file('static/' + f));

@@ -68,13 +68,26 @@ export function zapTargetFromProfile(profile, pk) {
 
 function safeEncode(url) { try { return encodeLnurl(url); } catch { return null; } }
 
+// Errors name the server: the recipient's Lightning address lives on THEIR
+// host, and a bare "signal is aborted without reason" (the browser's words
+// for our timeout) read as though the wallet had broken.
 async function fetchJson(url, ms = 8000) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), ms);
+  let host = 'their Lightning server';
+  try { host = new URL(url).host; } catch {}
   try {
     const r = await fetch(url, { signal: ctrl.signal, headers: { Accept: 'application/json' } });
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    if (!r.ok) {
+      // LNURL servers say why in a JSON { status: 'ERROR', reason } body
+      const reason = await r.json().then((d) => d && d.reason).catch(() => null);
+      throw new Error(reason ? `${host}: ${reason}` : `${host} answered with an error (HTTP ${r.status})`);
+    }
     return await r.json();
+  } catch (e) {
+    if (ctrl.signal.aborted || e?.name === 'AbortError') throw new Error(`${host} didn’t answer in ${Math.round(ms / 1000)}s — their Lightning address may be down`);
+    if (e instanceof TypeError) throw new Error(`couldn’t reach ${host}`);
+    throw e;
   } finally { clearTimeout(timer); }
 }
 

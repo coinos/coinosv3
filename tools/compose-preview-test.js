@@ -66,9 +66,9 @@ try {
   await page.evaluate(() => { const e = [...document.querySelectorAll('.item')].find((n) => /feed/i.test(n.textContent)); if (e) e.click(); });
   await sleep(2500);
   const opened = await page.evaluate(() => { const b = [...document.querySelectorAll('button')].find((n) => (n.getAttribute('aria-label') || n.textContent).trim().toLowerCase() === 'new post'); if (b) { b.click(); return true; } return false; });
-  check('the composer opens', opened && !!(await page.$('textarea')));
+  check('the composer opens', opened && !!(await page.$('coinos-text')));
 
-  await type('textarea', DRAFT);
+  await type('coinos-text', DRAFT);
   await sleep(400);
   check('no preview until it is asked for', !(await page.$('.draft-preview')));
 
@@ -92,7 +92,7 @@ try {
     shown ? JSON.stringify(shown.text.slice(0, 60)) : '');
 
   // live: keep typing and the preview follows
-  await type('textarea', DRAFT + ' plus a word');
+  await type('coinos-text', DRAFT + ' plus a word');
   await sleep(900);
   check('it follows the draft as you type',
     /plus a word/.test(await page.evaluate(() => (document.querySelector('.draft-preview') || {}).innerText || '')));

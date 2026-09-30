@@ -446,6 +446,8 @@ export function messagesFeature(ctx) {
     if (wallet.nostr && wallet.nostr.sk) return { pubkey: wallet.nostr.pk, signer: wallet.nostr.sk };
     return null;
   }
+  // what a feed or a profile lists: notes, and polls (NIP-88)
+  const FEED_KINDS = [1, 1068];
   const myPubkeys = () => {
     const pks = [];
     const id = hook('nostrLoginIdentity');
@@ -553,6 +555,29 @@ export function messagesFeature(ctx) {
     profilesWarmed = true;
     const cached = profilesDisk();
     for (const [pk, p] of Object.entries(cached)) if (!profiles.has(pk)) profiles.set(pk, p);
+    // someone known to have no face paints their punk from the first frame,
+    // instead of a blank circle that turns into one when the relays answer
+    for (const [pk, t] of Object.entries(facelessDisk())) {
+      if (!profiles.has(pk)) profiles.set(pk, { name: null, picture: null, t, miss: 1 });
+    }
+  }
+  // People with no face: no kind 0 on two asks running, or one naming
+  // nothing. Kept apart from the profile blob (whose 150 rows are for real
+  // faces) as a small pubkey -> time map; one found with a face leaves it.
+  const FACELESS_MAX = 1000;
+  let facelessBlob = null, facelessFlush = null;
+  const facelessDisk = () => (facelessBlob ||= wallet.loadFeatureState('profilesFaceless', {}) || {});
+  function markFaceless(pk, on) {
+    const s = facelessDisk();
+    if (on ? s[pk] : !s[pk]) return;
+    if (on) s[pk] = Date.now(); else delete s[pk];
+    if (facelessFlush) return;
+    facelessFlush = setTimeout(() => {
+      facelessFlush = null;
+      const keys = Object.keys(s);
+      if (keys.length > FACELESS_MAX) for (const k of keys.sort((a, b) => s[a] - s[b]).slice(0, keys.length - FACELESS_MAX)) delete s[k];
+      wallet.saveFeatureState('profilesFaceless', s);
+    }, 500);
   }
   // The persisted profile blob (names, faces, thumbnails) lives parsed in
   // memory and is written back once per burst: a batch of thirty profiles
@@ -590,9 +615,10 @@ export function messagesFeature(ctx) {
     wallet.saveFeatureState('profiles', s);
   }
   function persistProfile(pk, p) {
-    // A faceless answer is not a fact worth writing down — persisting
-    // {name:null, picture:null} rows only evicts real faces from the cap and
-    // spreads a cold-relay miss across sessions.
+    // A faceless answer is not a fact worth writing down here — persisting
+    // {name:null, picture:null} rows only evicts real faces from the cap.
+    // (It goes on the faceless list instead.)
+    if (p && p.eventAt) markFaceless(pk, !p.name && !p.picture);
     if (!p || (!p.name && !p.picture)) return;
     const s = profilesDisk();
     s[pk] = { name: p.name || null, picture: p.picture || null, nip05: p.nip05 || null, lud16: p.lud16 || null,
@@ -925,7 +951,11 @@ export function messagesFeature(ctx) {
       for (const pk of pks) {
         if (found.has(pk)) continue;
         const prev = profiles.get(pk);
-        profiles.set(pk, { ...(prev || {}), t: Date.now(), miss: ((prev && prev.miss) || 0) + 1 });
+        const miss = ((prev && prev.miss) || 0) + 1;
+        profiles.set(pk, { ...(prev || {}), t: Date.now(), miss });
+        // remembered, so the next load paints their punk at once (never
+        // someone whose face we do know; a face found later replaces it)
+        if (!(prev && (prev.name || prev.picture))) markFaceless(pk, true);
       }
       scheduleRepaint();
     } finally {
@@ -1333,6 +1363,16 @@ export function messagesFeature(ctx) {
       for (const [k, v] of sessionDrafts) { if (v) s.drafts[k] = v; else delete s.drafts[k]; }
       save(s);
     }, 800);
+  }
+  // Cancel means discard, including across an immediate reload. Typing can
+  // use the debounce above; an explicit destructive action is persisted now.
+  function discardDraft(key) {
+    sessionDrafts.set(key, '');
+    clearTimeout(draftPersist); draftPersist = 0;
+    const s = st();
+    s.drafts ||= {};
+    for (const [k, v] of sessionDrafts) { if (v) s.drafts[k] = v; else delete s.drafts[k]; }
+    save(s);
   }
 
   // The morph never rewrites a focused field's value (it would fight the user
@@ -2878,6 +2918,18 @@ export function messagesFeature(ctx) {
     return (big ? `url(${JSON.stringify(p.picture)}),` : '') + `url(${JSON.stringify(local)})`;
   }
 
+  const FACE_WAIT_MS = 1000;
+  const faceAsked = new Map(); // pk -> when its face was first wanted this session
+  let faceTimer = null;
+  function faceWaiting(pk) {
+    let at = faceAsked.get(pk);
+    if (at == null) { at = Date.now(); faceAsked.set(pk, at); }
+    const left = at + FACE_WAIT_MS - Date.now();
+    if (left <= 0) return false;
+    // repaint when the wait runs out, so the punk shows without an event
+    if (!faceTimer) faceTimer = setTimeout(() => { faceTimer = null; scheduleRepaint(); }, left + 20);
+    return true;
+  }
   const avatar = (pk, cls = 'chat-avatar', clickable = true) => {
     const p = profileOf(pk);
     // Someone we've never cached used to get an empty circle until a relay
@@ -2891,12 +2943,15 @@ export function messagesFeature(ctx) {
     // `loading` is different and still gets the quiet circle: a name lookup
     // is in flight for that specific person, so a picture is expected and
     // punk art must not flash in front of it.
+    // A face still being looked up gets a quiet circle for a second at
+    // most, then its punk — a picture found later replaces it.
+    const waiting = (p === null || (p && p.loading && !p.picture)) && faceWaiting(pk);
     const node = feedPaint && !p.picture
       ? h('div', { class: cls + ' fallback' }, (p.name || npubOf(pk) || '??').slice(0, 2))
-      : p && p.loading && !p.picture
-      ? h('div', { class: cls + ' fallback loading' })
-      : p === null && ui.noteThread
+      : waiting && (p || ui.noteThread || (ui.chatOpen && ui.msgView === 'room'))
         ? h('div', { class: cls + ' fallback loading' })
+      : p && p.loading && !p.picture
+        ? fallbackAvatar(h, pk, p.name, cls)
       : p === null
         ? fallbackAvatar(h, pk, null, cls)
       : p.picture 
@@ -3021,7 +3076,31 @@ export function messagesFeature(ctx) {
     }
   }
 
+  // A profile opens at its top: keeping the feed's scroll offset landed the
+  // reader deep in that person's posts, which read as a thread. Back (a
+  // popstate) puts them where they were on the page they left.
+  // The same for a post opened into its thread: Back lands on the row the
+  // reader tapped, not the top of the feed.
+  const pageReturn = []; // [{ key, y }] per profile/thread opened, newest last
+  const pageKey = () => ui.noteThread && !(ui.profilePk && ui.profOverThread) ? 'thread'
+    : ui.profilePk ? 'p:' + ui.profilePk : '';
+  function rememberPlace(key) {
+    if (pageKey() === key) return;
+    let y = 0; try { y = window.scrollY || 0; } catch {}
+    pageReturn.push({ key, y });
+    if (pageReturn.length > 20) pageReturn.shift();
+  }
+  if (typeof window !== 'undefined') window.addEventListener('popstate', () => {
+    const top = pageReturn[pageReturn.length - 1];
+    if (!top || pageKey() === top.key) return;
+    pageReturn.pop();
+    const y = top.y;
+    // twice: the page under it may paint its rows a frame late
+    requestAnimationFrame(() => { try { window.scrollTo(0, y); } catch {}
+      requestAnimationFrame(() => { try { if (Math.abs(window.scrollY - y) > 2) window.scrollTo(0, y); } catch {} }); });
+  });
   function openProfile(pk) {
+    rememberPlace('p:' + pk);
     ui.profilePk = pk;
     // Opened from inside a thread (an author's avatar/name), the profile
     // stacks ON TOP of it — back returns to the conversation. The screen
@@ -3030,6 +3109,7 @@ export function messagesFeature(ctx) {
     ui.profOverThread = !!ui.noteThread;
     ui.profEdit = null; ui.profEditFilled = false; ui.logoutConfirm = null; ui.profCompose = null;
     render();
+    try { window.scrollTo(0, 0); } catch {}
     fetchFullProfile(pk);
     notesFor(pk);
   }
@@ -3447,7 +3527,7 @@ export function messagesFeature(ctx) {
       : { status: 'loading', notes: seed };
     notesCache.set(pk, c);
     (async () => {
-      const evs = await queryOn(await notesRelays(pk), { kinds: [1], authors: [pk], limit: 30 }, 4500);
+      const evs = await queryOn(await notesRelays(pk), { kinds: FEED_KINDS, authors: [pk], limit: 30 }, 4500);
       const seen = new Set();
       const fresh = (evs || [])
         .filter((e) => !seen.has(e.id) && seen.add(e.id))
@@ -3493,7 +3573,7 @@ export function messagesFeature(ctx) {
     render();
     try {
       const evs = await queryOn(await notesRelays(pk),
-        { kinds: [1], authors: [pk], limit: 30, until: oldest.created_at - 1 }, 4500);
+        { kinds: FEED_KINDS, authors: [pk], limit: 30, until: oldest.created_at - 1 }, 4500);
       const seen = new Set(c.notes.map((e) => e.id));
       const older = (evs || [])
         .filter((e) => !seen.has(e.id) && seen.add(e.id))
@@ -3819,6 +3899,8 @@ export function messagesFeature(ctx) {
   const FEED_LS = 'btc-wallet-feed'; // the feed last on screen, remembered per device
   const feedStates = new Map(); // id -> state
   const adhocFeeds = new Map(); // id -> definition, this session only
+  // the feed of your own you last had on (never a session one)
+  const homeFeedId = () => { let id = FOLLOWING; try { id = localStorage.getItem(FEED_LS) || FOLLOWING; } catch {} return feedDef(id) && !adhocFeeds.has(id) ? id : FOLLOWING; };
   let curFeedId = (() => { try { return localStorage.getItem(FEED_LS) || FOLLOWING; } catch { return FOLLOWING; } })();
   // Two feeds everyone has: the people you follow, and everything the coinos
   // relay carries. Each remembers its own relay choice in the state.
@@ -4011,7 +4093,13 @@ export function messagesFeature(ctx) {
   };
   // posts on a topic come from the big public relays as well as ours: a
   // hashtag has no author whose outbox we could read
-  const TOPIC_RELAYS = [...new Set([...NOTE_RELAYS, 'wss://relay.damus.io', 'wss://relay.primal.net', 'wss://nos.lol'])];
+  // A topic has no authors whose relays to read, and the big relays prune:
+  // #gardenstr was 5 posts across damus/primal/nos.lol/ours, 774 once these
+  // archive-keeping relays were asked too (ditto 500+, nostr.mom 448,
+  // oxtr 247, nostrplebs 175, nostr21 102, offchain 74 — 2026-09-30).
+  const TOPIC_ARCHIVE_RELAYS = ['wss://relay.ditto.pub', 'wss://nostr.mom', 'wss://nostr.oxtr.dev',
+    'wss://relay.nostrplebs.com', 'wss://nostr21.com', 'wss://offchain.pub'];
+  const TOPIC_RELAYS = [...new Set([...NOTE_RELAYS, 'wss://relay.damus.io', 'wss://relay.primal.net', 'wss://nos.lol', ...TOPIC_ARCHIVE_RELAYS])];
 
   // ---- lists (NIP-51 follow sets, kind 30000) ------------------------------
   // A feed of hand-picked people IS a nostr list. Saved here it is published
@@ -4157,7 +4245,7 @@ export function messagesFeature(ctx) {
     if (!ui.listPick) return null;
     const pk = ui.listPick;
     const close = () => { ui.listPick = null; render(); };
-    const feeds = st().feeds;
+    const feeds = st().feeds.filter((f) => !f.of); // a timeline is someone, not a list
     const toggle = (f) => {
       const s = st();
       const def = s.feeds.find((x) => x.id === f.id);
@@ -4229,8 +4317,37 @@ export function messagesFeature(ctx) {
     for (const pk of def.authors || []) if (pk) set.add(pk);
     for (const pk of def.priv || []) if (pk) set.add(pk); // a list's private members
     for (const pk of packAuthors(def)) set.add(pk);
+    if (def.of) for (const pk of ofFollows.get(def.of)?.authors || []) set.add(pk);
     return [...set].slice(0, FEED_AUTHORS_MAX);
   };
+  // Someone's timeline is their follow list, read from the relays when the
+  // feed is opened (and again after ten minutes) — never copied into the
+  // feed itself, so a saved one stays small in sync and follows them.
+  const ofFollows = new Map(); // pk -> { authors, at, loading }
+  const ofLoaded = (def) => !!ofFollows.get(def.of)?.at;
+  function loadOfFollows(def) {
+    const pk = def.of;
+    let f = ofFollows.get(pk);
+    if (!f) { f = { authors: [], at: 0, loading: false }; ofFollows.set(pk, f); }
+    if (f.loading || (f.at && Date.now() - f.at < 600_000)) return;
+    f.loading = true;
+    liveProfileOf(pk); // their name and face for the title
+    queryOn([...new Set([...(def.relays || []), ...PROFILE_RELAYS, ...NOTE_RELAYS])], { kinds: [3], authors: [pk] }, 6000)
+      .catch(() => [])
+      .then((evs) => {
+        const newest = (evs || []).sort((a, b) => b.created_at - a.created_at)[0];
+        const had = f.at;
+        if (newest || !had) f.authors = newest ? hexList(newest.tags.filter((x) => x[0] === 'p').map((x) => x[1])) : [];
+        f.at = Date.now(); f.loading = false;
+        // whatever was built before the list was known
+        for (const id of [...feedStates.keys()]) {
+          if (feedDef(id)?.of !== pk || id === curFeedId) continue;
+          dropFeedState(id);
+        }
+        if (feedDef(curFeedId)?.of === pk) { dropFeedState(curFeedId); selectFeed(curFeedId); }
+        scheduleRepaint();
+      });
+  }
 
   function feedNow() {
     if (!feedDef(curFeedId)) curFeedId = FOLLOWING; // a feed deleted on another device
@@ -4276,10 +4393,10 @@ export function messagesFeature(ctx) {
       return;
     }
     try {
-      const events = await queryOn(feedRelaysOr(def, def && def.all ? FIREHOSE_RELAYS : NOTE_RELAYS), { kinds: [1], limit: FEED_PAGE,
+      const events = await queryOn(feedRelaysOr(def, def && def.all ? FIREHOSE_RELAYS : NOTE_RELAYS), { kinds: FEED_KINDS, limit: FEED_PAGE,
         ...(authors.length ? { authors } : {}), ...(topics.length ? { '#t': topics } : {}) }, 3000);
       if (c.stopped) return;
-      await mergeFeed(events.filter((e) => e.kind === 1 && !isReply(e) && !hidden(e))
+      await mergeFeed(events.filter((e) => FEED_KINDS.includes(e.kind) && !isReply(e) && !hidden(e))
         .sort((a, b) => b.created_at - a.created_at).slice(0, FEED_PAGE), {}, c);
     } catch {} finally {
       if (!c.stopped) {
@@ -4292,6 +4409,7 @@ export function messagesFeature(ctx) {
   // history restores ui.feedId and the view catches up from here.
   function selectFeed(id) {
     if (!feedDef(id)) return;
+    if (feedDef(id).of) loadOfFollows(feedDef(id));
     if (id !== curFeedId) {
       curFeedId = id;
       if (!adhocFeeds.has(id)) { try { localStorage.setItem(FEED_LS, id); } catch {} }
@@ -4299,7 +4417,7 @@ export function messagesFeature(ctx) {
     ui.feedId = id;
     stopFeedWatch();
     const c = feedNow();
-    c.unseen = 0; c.shown = FEED_PAGE;
+    c.unseen = 0; c.fresh = null; c.shown = FEED_PAGE;
     admitFeed(c.deferred || [], c, true);
     // An already warmed feed can paint synchronously on entry.
     if (!c.booting) c.presentations.clear();
@@ -4328,19 +4446,9 @@ export function messagesFeature(ctx) {
     const id = 'of:' + pk + (readFrom.length ? '@' + readFrom.join(',') : '');
     let def = adhocFeeds.get(id);
     if (!def) {
-      def = { id, name: '', follows: false, authors: [], packs: [], topics: [], of: pk, ofAt: 0, relays: readFrom };
+      def = { id, name: '', follows: false, authors: [], packs: [], topics: [], of: pk, relays: readFrom };
       adhocFeeds.set(id, def);
-      liveProfileOf(pk); // their name and face for the title
-      queryOn([...new Set([...relays, ...PROFILE_RELAYS, ...NOTE_RELAYS])], { kinds: [3], authors: [pk] }, 6000)
-        .catch(() => [])
-        .then((evs) => {
-          const newest = (evs || []).sort((a, b) => b.created_at - a.created_at)[0];
-          def.authors = newest ? hexList(newest.tags.filter((x) => x[0] === 'p').map((x) => x[1])) : [];
-          def.ofAt = Date.now();
-          dropFeedState(id); // whatever was built before the list was known
-          if (curFeedId === id) selectFeed(id);
-          scheduleRepaint();
-        });
+      loadOfFollows({ ...def, relays: [...relays, ...readFrom] });
     }
     showFeed(id);
   }
@@ -4683,8 +4791,43 @@ export function messagesFeature(ctx) {
     }
     const prev = feedPaint;
     feedPaint = presentation;
-    try { return keyed(noteRow(ev.pubkey, ev, displayName(ev.pubkey)), ev.id); }
+    try {
+      const row = keyed(noteRow(ev.pubkey, ev, displayName(ev.pubkey)), ev.id);
+      if (c.fresh && c.fresh.has(ev.id)) { row.classList.add('note-fresh'); watchFresh(c); }
+      return row;
+    }
     finally { feedPaint = prev; }
+  }
+
+  // New posts stay tinted until they've been in view for FRESH_SEEN_MS: a
+  // row at least half on screen (or filling most of it) starts its clock,
+  // leaving view stops it. Seen, it loses the tint in place — no repaint.
+  const FRESH_SEEN_MS = 2000;
+  let freshObserver = null;
+  const freshTimers = new Map();
+  function watchFresh(c) {
+    if (typeof IntersectionObserver === 'undefined') return;
+    freshObserver ||= new IntersectionObserver((entries) => {
+      for (const en of entries) {
+        const el = en.target, id = el.getAttribute('data-key');
+        const inView = en.isIntersecting && (en.intersectionRatio >= 0.5 || en.intersectionRect.height >= window.innerHeight * 0.5);
+        if (inView && !freshTimers.has(id)) {
+          freshTimers.set(id, setTimeout(() => {
+            freshTimers.delete(id);
+            if (!el.isConnected) return;
+            feed?.fresh?.delete(id);
+            el.classList.remove('note-fresh');
+            freshObserver.unobserve(el);
+          }, FRESH_SEEN_MS));
+        } else if (!inView && freshTimers.has(id)) {
+          clearTimeout(freshTimers.get(id)); freshTimers.delete(id);
+        }
+      }
+    }, { threshold: [0, 0.5, 1] });
+    // after the paint, when the row nodes are the mounted ones
+    requestAnimationFrame(() => {
+      for (const el of document.querySelectorAll('.notes-feed > .row.note-fresh')) freshObserver.observe(el);
+    });
   }
 
   // Posts at the door: filtered in synchronously, so the same note from a
@@ -4695,7 +4838,7 @@ export function messagesFeature(ctx) {
     if (!staged) feedStaged.set(c, staged = new Set());
     const known = new Set([...c.notes, ...(c.catchup || []), ...(c.deferred || [])].map((e) => e.id));
     for (const e of evs || []) noteForSpam(e);
-    let add = (evs || []).filter((e) => e.kind === 1 && !isReply(e) && !hidden(e)
+    let add = (evs || []).filter((e) => FEED_KINDS.includes(e.kind) && !isReply(e) && !hidden(e)
       && !known.has(e.id) && !staged.has(e.id) && known.add(e.id) && staged.add(e.id));
     if (!add.length) return false;
     const def = feedDef(c.id);
@@ -4740,20 +4883,56 @@ export function messagesFeature(ctx) {
     for (const id of c.presentations.keys()) if (!retained.has(id)) c.presentations.delete(id);
     saveFeedCache(c);
     if (rows.length) {
-      c.unseen = (c.unseen || 0) + result.added.filter((e) => e.created_at > topBefore).length;
+      const fresh = result.added.filter((e) => e.created_at > topBefore);
+      c.unseen = (c.unseen || 0) + fresh.length;
+      c.fresh ||= new Set();
+      for (const e of fresh) c.fresh.add(e.id);
       holdScroll(render);
     }
   }
 
-  // The pill's tap: the posts are already in, so this just goes up to them.
-  // Reaching the top by yourself clears it too (see the scroll listener).
+  // The pill's tap: the posts are already in, so this just goes up to them —
+  // to the OLDEST of them, the one right above where you were reading, so
+  // you read on upward through the rest. Reaching the top by yourself clears
+  // the pill too (see the scroll listener).
   function jumpToNew() {
     const c = feed;
     if (!c) return;
     admitFeed(c.deferred || [], c, true);
     c.unseen = 0;
     render();
-    glideToTop();
+    const list = c.winList ? c.winList() : [];
+    let i = -1;
+    for (let j = list.length - 1; j >= 0; j--) if (c.fresh && c.fresh.has(list[j].id)) { i = j; break; }
+    if (i < 0) { glideToTop(); return; }
+    glideToPost(c, list, i);
+  }
+  // Scroll so post i's top sits just under the top of the window. A row
+  // outside the rendered window is placed from the height cache first, then
+  // corrected once it's mounted.
+  function glideToPost(c, list, i) {
+    const id = list[i].id, MARGIN = 8;
+    const find = () => document.querySelector('.notes-feed > [data-key="' + CSS.escape(id) + '"]');
+    try {
+      const H = window.innerHeight || 800;
+      if (!find() && c.heights) {
+        let sum = 0, n = 0;
+        for (const v of c.heights.values()) { sum += v; n++; }
+        const avg = n ? sum / n : 200;
+        let y = 0;
+        for (let j = 0; j < i; j++) y += (c.heights.get(list[j].id) || avg) + ROW_GAP;
+        window.scrollTo(0, Math.max(0, (c.listTop || 0) + y - MARGIN));
+        render();
+      }
+      const el = find();
+      if (!el) { glideToTop(); return; }
+      const target = Math.max(0, window.scrollY + el.getBoundingClientRect().top - MARGIN);
+      const reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      if (reduce) { window.scrollTo({ top: target }); return; }
+      // a long way off: close most of the distance in one step, glide the rest
+      if (Math.abs(window.scrollY - target) > H * 2) window.scrollTo({ top: target + Math.sign(window.scrollY - target) * H * 2 });
+      requestAnimationFrame(() => { try { window.scrollTo({ top: target, behavior: 'smooth' }); } catch { window.scrollTo(0, target); } });
+    } catch { glideToTop(); }
   }
   // Up to the new posts as a glide, not a cut: an instant scrollTo read as a
   // page refresh. A long way down, most of the distance is closed in one
@@ -4775,6 +4954,13 @@ export function messagesFeature(ctx) {
   // as disruptive as a live arrival if you were reading halfway down, so it
   // goes behind the pill too. A first load, or paging older posts onto the
   // bottom, does not.
+  // The oldest event the relays handed back, admitted or not: a page of
+  // replies, muted or spam posts is not the end of the feed — the next ask
+  // goes on from there.
+  function sawBack(c, evs) {
+    for (const e of evs || []) if (e && e.created_at && !(c.seenBack <= e.created_at)) c.seenBack = e.created_at;
+    c.sawAny = (c.sawAny || 0) + ((evs || []).length);
+  }
   async function feedPass(extra = {}, merge = {}, c = feedNow()) {
     const def = feedDef(c.id);
     if (!def) return false;
@@ -4787,7 +4973,8 @@ export function messagesFeature(ctx) {
       // the firehose asks its relays for everything
       if (!topics.length && !def.all) return false;
       const relays = feedRelaysOr(def, def.all ? FIREHOSE_RELAYS : TOPIC_RELAYS);
-      const evs = await queryOn(relays, { kinds: [1], ...tag, limit: FEED_LIMIT, ...extra }, 5000).catch(() => []);
+      const evs = await queryOn(relays, { kinds: FEED_KINDS, ...tag, limit: FEED_LIMIT, ...extra }, 5000).catch(() => []);
+      sawBack(c, evs);
       if (await mergeFeed(evs, merge, c)) { got = true; scheduleRepaint(); }
       return got;
     }
@@ -4798,7 +4985,8 @@ export function messagesFeature(ctx) {
       const chunks = [];
       for (let i = 0; i < a.length; i += REQ_AUTHORS) chunks.push(a.slice(i, i + REQ_AUTHORS));
       return chunks.map(async (chunk) => {
-        const evs = await queryOn(relays, { kinds: [1], authors: chunk, ...tag, limit: FEED_LIMIT, ...extra }, 5000).catch(() => []);
+        const evs = await queryOn(relays, { kinds: FEED_KINDS, authors: chunk, ...tag, limit: FEED_LIMIT, ...extra }, 5000).catch(() => []);
+        sawBack(c, evs);
         if (await mergeFeed(evs, merge, c)) { got = true; scheduleRepaint(); }
       });
     }));
@@ -4969,11 +5157,11 @@ export function messagesFeature(ctx) {
     const on = (ev) => { mergeFeed([ev], { live: true }, c).then((ok) => { if (ok) scheduleRepaint(); }).catch(() => {}); };
     const authors = feedAuthors(def);
     if (def.curated) { const iv = setInterval(() => { if (c === feed && ui.chatOpen && ui.msgView === 'feed') refreshFeed({ force: true, live: true }, c).catch(() => {}); }, 120_000); feedUnsubs.push(() => clearInterval(iv)); return; }
-    if (!authors.length) { feedUnsubs.push(subscribeOn(feedRelaysOr(def, def.all ? FIREHOSE_RELAYS : TOPIC_RELAYS), { kinds: [1], ...tag, since }, on)); return; }
+    if (!authors.length) { feedUnsubs.push(subscribeOn(feedRelaysOr(def, def.all ? FIREHOSE_RELAYS : TOPIC_RELAYS), { kinds: FEED_KINDS, ...tag, since }, on)); return; }
     const plan = feedRelays(def) ? [{ relays: feedRelays(def), authors }] : outboxPlan(authors);
     for (const { relays, authors: a } of plan)
       for (let i = 0; i < a.length; i += REQ_AUTHORS)
-        feedUnsubs.push(subscribeOn(relays, { kinds: [1], authors: a.slice(i, i + REQ_AUTHORS), ...tag, since }, on));
+        feedUnsubs.push(subscribeOn(relays, { kinds: FEED_KINDS, authors: a.slice(i, i + REQ_AUTHORS), ...tag, since }, on));
   }
   function stopFeedWatch() {
     for (const u of feedUnsubs) { try { u(); } catch {} }
@@ -5009,8 +5197,14 @@ export function messagesFeature(ctx) {
       if (c.status !== 'ready' || c.end) return;
       const oldest = c.notes.at(-1);
       if (!oldest || !feedHasQuery(feedDef(c.id))) { c.end = true; return; }
-      if (await feedPass({ until: oldest.created_at - 1 }, {}, c)) c.shown = Math.min(c.shown + FEED_PAGE, c.notes.length);
-      else c.end = true;
+      let until = oldest.created_at - 1;
+      for (let tries = 0; tries < 3; tries++) {
+        c.sawAny = 0;
+        if (await feedPass({ until }, {}, c)) { c.shown = Math.min(c.shown + FEED_PAGE, c.notes.length); return; }
+        // nothing older at all (or no step back): that really is the end
+        if (!c.sawAny || !(c.seenBack <= until)) { c.end = true; return; }
+        until = c.seenBack - 1;
+      }
     } finally {
       c.loadingMore = false;
       if (c === feed) render();
@@ -5229,18 +5423,57 @@ export function messagesFeature(ctx) {
   // wanted, half a minute on, with any relay hints the reference carried.
   const QUOTE_RETRY_MS = 30_000;
   const quoted = new Map(); // id -> { status, ev, at }
+  // Where a referenced note may be: the reference's hints, its author's own
+  // relays, ours — and when none of those has it, a wider net of big public
+  // relays (a quoted note in the wild sat only on nostr.mom, which neither
+  // the reference nor its author's relay list named).
+  // (the archive-keeping ones hold what the big relays have pruned — a poll
+  // two days old was only on ditto and nostrplebs by 2026-09-30)
+  const WIDE_RELAYS = ['wss://nostr.mom', 'wss://relay.ditto.pub', 'wss://relay.nostrplebs.com', 'wss://nostr21.com',
+    'wss://nostr.wine', 'wss://relay.snort.social', 'wss://offchain.pub', 'wss://nostr.oxtr.dev',
+    'wss://relay.damus.io', 'wss://nos.lol', 'wss://relay.primal.net'];
+  // All at once, first answer wins: asked in turn, a note on a far relay
+  // took longer than the feed waits for a row.
+  function findNote(ref) {
+    const pick = (evs) => (evs || []).find((e) => e.id === ref.id) || null;
+    const ask = (relays) => (relays.length ? queryOn(relays, { ids: [ref.id] }, 4500).then(pick).catch(() => null) : Promise.resolve(null));
+    const near = [...new Set([...(ref.relays || []), ...zapRelays()])];
+    const asks = [
+      ask(near),
+      ref.author ? relaysOf(ref.author).catch(() => []).then((rs) => ask(rs.filter((r) => !near.includes(r)))) : Promise.resolve(null),
+      ask(WIDE_RELAYS.filter((r) => !near.includes(r))),
+    ];
+    return new Promise((resolve) => {
+      let left = asks.length;
+      for (const a of asks) a.then((ev) => { if (ev) resolve(ev); else if (--left === 0) resolve(null); });
+    });
+  }
   function quotedNote(ref) {
     let c = quoted.get(ref.id);
     if (c && (c.status !== 'missing' || Date.now() - (c.at || 0) < QUOTE_RETRY_MS)) return c;
     if (!c) { c = { status: 'loading', ev: null, at: 0 }; quoted.set(ref.id, c); }
     c.at = Date.now();
     c.promise = (async () => {
-      const relays = [...new Set([...(ref.relays || []), ...zapRelays()])];
-      const evs = await queryOn(relays, { ids: [ref.id] }, 4500).catch(() => []);
-      c.ev = (evs || [])[0] || c.ev || null;
+      c.ev = (await findNote(ref).catch(() => null)) || c.ev || null;
       c.status = c.ev ? 'ready' : 'missing';
+      if (c.ev) cacheNotifNotes([c.ev]);
+      // the open thread quotes it: keep it with the thread for the next reload
+      const th = c.ev && ui.noteThread && threadCache.get(ui.noteThread.rootId);
+      if (th && th.root) persistThread(th);
       scheduleRepaint();
     })();
+    return c;
+  }
+
+  // A feed row that froze before its quote arrived showed a link — and
+  // nothing asked for the note again. Keep asking, and once the note and its
+  // own faces/pictures are in, the row takes the card.
+  function quoteWarm(ref) {
+    const c = quotedNote(ref);
+    if (c.ev && !c.warm && !c.warming) {
+      c.warming = noteReady(c.ev, Date.now() + READY_MS, 1).catch(() => {})
+        .then(() => { c.warm = true; c.warming = null; scheduleRepaint(); });
+    }
     return c;
   }
 
@@ -5249,10 +5482,16 @@ export function messagesFeature(ctx) {
   // the note properly, which is where those live.
   function quoteCard(ref, depth) {
     if (feedPaint && !feedPaint.quotes.has(ref.id)) feedPaint.quotes.set(ref.id, { ...quoted.get(ref.id) });
-    const c = feedPaint ? feedPaint.quotes.get(ref.id) : quotedNote(ref);
-    if (feedPaint && !c?.ev) return h('a', {
-      href: '#', onClick: (e) => { e.preventDefault(); e.stopPropagation(); openNoteRef(ref); },
-    }, t('noteRefLink'));
+    let c = feedPaint ? feedPaint.quotes.get(ref.id) : quotedNote(ref);
+    if (feedPaint && !c?.ev) {
+      const live = quoteWarm(ref);
+      // not (yet) found: the card says so where the quote will be — never a
+      // bare "view note" link that only leads to the same answer
+      if (!(live.ev && live.warm)) return h('div', { class: 'quote-card' },
+        h('span', { class: 'small faint' }, t(live.status === 'missing' ? 'noteRefNotFound' : 'noteRefLoading')));
+      c = { ...live };
+      feedPaint.quotes.set(ref.id, c);
+    }
     if (c.status === 'loading') {
       return h('div', { class: 'quote-card quote-loading' },
         h('span', { class: 'spinner sm' }), h('span', { class: 'small faint' }, t('noteRefLoading')));
@@ -5274,13 +5513,27 @@ export function messagesFeature(ctx) {
       h('div', { class: 'note-text', style: 'white-space:pre-wrap;overflow-wrap:anywhere' },
         // one level deep only: a quote of a quote of a quote is a rabbit
         // hole, and the inner one stays a link you can follow
-        ...noteBody(ev.content, depth + 1, emojiTagMap(ev.tags))));
+        ...noteBody(ev.content, depth + 1, emojiTagMap(ev.tags))),
+      ev.kind === POLL ? pollBox(ev, { interactive: false }) : null);
   }
 
   // One URL, rendered as whatever it points at. `isImage` is markdown saying
   // so outright — plenty of perfectly good picture URLs carry no extension
   // (a CDN path, a /media/ route), and ![…] is the author telling us what it
   // is, which beats guessing from the filename.
+  // A picture is fitted inside its box (object-fit: contain), so a tall one
+  // leaves blank bands either side. A tap there is a tap on the post — it
+  // opens the thread — not on the picture.
+  function onPicture(e) {
+    const el = e.currentTarget;
+    const r = el.getBoundingClientRect();
+    const nw = el.naturalWidth, nh = el.naturalHeight;
+    if (!nw || !nh || !r.width || !r.height) return true;
+    const k = Math.min(r.width / nw, r.height / nh);
+    const w = nw * k, hh = nh * k;
+    const x = e.clientX - (r.left + (r.width - w) / 2), y = e.clientY - (r.top + (r.height - hh) / 2);
+    return x >= 0 && x <= w && y >= 0 && y <= hh;
+  }
   function urlNode(url, { label = null, isImage = false } = {}) {
     if (/\.(mp4|webm|mov|m4v)(\?[^\s]*)?$/i.test(url)) {
       return videoNode(url, { stable: !!feedPaint });
@@ -5294,7 +5547,7 @@ export function messagesFeature(ctx) {
         src: url, class: 'note-img clickable', loading: feedPaint ? 'eager' : 'lazy', alt: label || '',
         width: size?.width, height: size?.height,
         style: size ? 'height:auto;aspect-ratio:' + size.width + '/' + size.height : undefined,
-        onClick: (e) => { e.stopPropagation(); ctx.openImage && ctx.openImage(url); },
+        onClick: (e) => { if (!onPicture(e)) return; e.stopPropagation(); ctx.openImage && ctx.openImage(url); },
         // a picture we were TOLD was a picture and which won't load leaves
         // nothing behind — the alt text is already in the sentence above it
         onError: (e) => { if (!size) e.target.style.display = 'none'; },
@@ -5749,6 +6002,108 @@ export function messagesFeature(ctx) {
   }
 
   // React with whichever emoji was picked (NIP-25 takes any content).
+  // ---- polls (NIP-88) -------------------------------------------------------
+  // A kind 1068 poll is its question (content) plus ["option", id, label]
+  // tags; votes are kind 1018 events e-tagging it with ["response", id].
+  // Each person's LATEST vote counts (one option unless the poll says
+  // "multiplechoice"), and nothing cast after its endsAt.
+  const POLL = 1068, POLL_VOTE = 1018;
+  const pollOptions = (ev) => ev.tags.filter((x) => x[0] === 'option' && x[1] != null && x[2])
+    .map((x) => ({ id: String(x[1]), label: String(x[2]) }));
+  const pollMulti = (ev) => (ev.tags.find((x) => x[0] === 'polltype') || [])[1] === 'multiplechoice';
+  const pollEnds = (ev) => { const v = Number((ev.tags.find((x) => x[0] === 'endsAt') || [])[1]); return Number.isFinite(v) && v > 0 ? v : 0; };
+  const pollEnded = (ev) => !!pollEnds(ev) && Date.now() / 1000 > pollEnds(ev);
+  const pollRelays = async (ev) => [...new Set([
+    ...ev.tags.filter((x) => x[0] === 'relay' && /^wss?:\/\//i.test(x[1] || '')).map((x) => x[1]),
+    ...(await noteRelaysFor(ev).catch(() => zapRelays())),
+  ])].slice(0, 12);
+  const pollVotes = new Map(); // poll id -> { at, loaded, loading, by: Map(pk -> { t, ids }) }
+  function pollState(ev) {
+    let st = pollVotes.get(ev.id);
+    if (!st) { st = { at: 0, loaded: false, loading: false, by: new Map() }; pollVotes.set(ev.id, st); }
+    return st;
+  }
+  function pollCount(poll, v) {
+    const st = pollState(poll);
+    const ends = pollEnds(poll);
+    if (ends && v.created_at > ends) return;
+    const prev = st.by.get(v.pubkey);
+    if (prev && prev.t >= v.created_at) return;
+    const valid = new Set(pollOptions(poll).map((o) => o.id));
+    let ids = [...new Set(v.tags.filter((x) => x[0] === 'response').map((x) => String(x[1])))].filter((id) => valid.has(id));
+    if (!pollMulti(poll)) ids = ids.slice(0, 1);
+    st.by.set(v.pubkey, { t: v.created_at, ids });
+  }
+  // Votes are asked for when a poll is painted, and again a minute on.
+  function pollTally(ev) {
+    const st = pollState(ev);
+    if (!st.loading && Date.now() - st.at > 60_000) {
+      st.loading = true; st.at = Date.now();
+      (async () => {
+        const evs = await queryOn(await pollRelays(ev), { kinds: [POLL_VOTE], '#e': [ev.id], limit: 1000 }, 5000).catch(() => []);
+        for (const v of evs || []) if (v.kind === POLL_VOTE) pollCount(ev, v);
+      })().finally(() => { st.loading = false; st.loaded = true; scheduleRepaint(); });
+    }
+    return st;
+  }
+  async function votePoll(poll, optId) {
+    if (pollEnded(poll)) return;
+    const id = await requireIdentity();
+    const st = pollState(poll);
+    const prev = st.by.get(id.pubkey);
+    const mine = prev?.ids || [];
+    const ids = pollMulti(poll) ? (mine.includes(optId) ? mine.filter((x) => x !== optId) : [...mine, optId]) : [optId];
+    if (!pollMulti(poll) && mine[0] === optId) return;
+    const partial = {
+      kind: POLL_VOTE, content: '',
+      // strictly newer than our last vote, or relays and counters keep the old one
+      created_at: Math.max(Math.floor(Date.now() / 1000), (prev?.t || 0) + 1),
+      tags: [['e', poll.id], ['p', poll.pubkey], ...ids.map((x) => ['response', x]), CLIENT_TAG],
+    };
+    const evt = id.signer instanceof Uint8Array ? finalizeEvent(partial, id.signer) : await id.signer.signEvent(partial);
+    pollCount(poll, evt); // counted on screen before the relays answer
+    render();
+    const ok = await publishOn(await pollRelays(poll), evt).catch(() => false);
+    if (!ok) toast(t('msgSendFailed'));
+  }
+  // The options as rows with their share of the vote. In a quote card
+  // (`interactive` off) they are a picture of the poll — the tap opens it.
+  function pollBox(ev, { interactive = true } = {}) {
+    const opts = pollOptions(ev);
+    if (!opts.length) return null;
+    const st = pollTally(ev);
+    const counts = new Map(opts.map((o) => [o.id, 0]));
+    let voters = 0;
+    for (const v of st.by.values()) {
+      if (!v.ids.length) continue;
+      voters++;
+      for (const x of v.ids) counts.set(x, (counts.get(x) || 0) + 1);
+    }
+    const mine = new Set(myPubkeys().flatMap((pk) => st.by.get(pk)?.ids || []));
+    const ended = pollEnded(ev);
+    const canVote = interactive && !ended;
+    const shown = st.loaded || voters > 0;
+    const foot = [
+      shown ? t(voters === 1 ? 'pollVoter' : 'pollVoters', { n: voters }) : null,
+      pollMulti(ev) ? t('pollMulti') : null,
+      ended ? t('pollEnded') : pollEnds(ev) ? t('pollEndsAt', { when: new Date(pollEnds(ev) * 1000).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) }) : null,
+    ].filter(Boolean).join(' \u00b7 ');
+    return h('div', { class: 'poll' },
+      ...opts.map((o) => {
+        const n = counts.get(o.id) || 0;
+        const pct = voters ? Math.round((n / voters) * 100) : 0;
+        return h(canVote ? 'button' : 'div', {
+          class: 'poll-opt' + (mine.has(o.id) ? ' mine' : '') + (canVote ? '' : ' static'),
+          type: canVote ? 'button' : undefined,
+          onClick: canVote ? (e) => { e.stopPropagation(); votePoll(ev, o.id).catch(() => {}); } : undefined,
+        },
+          h('span', { class: 'poll-bar', style: 'width:' + (shown ? pct : 0) + '%' }),
+          h('span', { class: 'poll-label' }, (mine.has(o.id) ? '\u2713 ' : '') + o.label),
+          shown ? h('span', { class: 'poll-pct' }, pct + '%') : null);
+      }),
+      foot ? h('div', { class: 'small faint poll-foot' }, foot) : null);
+  }
+
   async function reactTo(ev, emoji) {
     const id = await requireIdentity();
     const relays = await noteRelaysFor(ev);
@@ -5795,7 +6150,7 @@ export function messagesFeature(ctx) {
     ui.msgView = 'feed';
     feedNow();
     render();
-    setTimeout(() => { const el = document.querySelector('.chat-page textarea'); if (el) { el.focus(); el.setSelectionRange(0, 0); } }, 80);
+    setTimeout(() => { const el = document.querySelector('.chat-page coinos-text'); if (el) { el.focus(); el.setSelectionRange(0, 0); } }, 80);
   }
 
   // ---- mute list (NIP-51 kind 10000) ---------------------------------------
@@ -6391,9 +6746,9 @@ export function messagesFeature(ctx) {
     // An event of a kind this app has no renderer for (a chess game, kind
     // 64, reached through a reaction to it) is shown as what its author's
     // client said it is (NIP-31 alt), never as raw content dressed as a post.
-    const foreign = ev.kind !== 1 && ev.kind !== 30023;
+    const foreign = ev.kind !== 1 && ev.kind !== 30023 && ev.kind !== POLL && ev.kind !== COMMENT;
     const altText = foreign ? ((ev.tags.find((x) => x[0] === 'alt') || [])[1] || t('noteForeignKind', { kind: ev.kind })) : null;
-    const isReply = !foreign && ev.tags.some((x) => x[0] === 'e');
+    const isReply = ev.kind === COMMENT || (!foreign && ev.tags.some((x) => x[0] === 'e'));
     const canZap = canZapPk(pk);
     // an optimistic post mid-publish: visible but not yet a real event —
     // dimmed, and no thread/reply/zap until its signed self takes over
@@ -6404,10 +6759,10 @@ export function messagesFeature(ctx) {
     const openable = open && !pending;
     if (!pending) watchZaps([ev.id]);
     return h('div', {
-      class: 'row',
+      class: 'row note-post',
       'data-zap-post': ev.id,
       'data-focus-note': focus ? '1' : undefined,
-      style: 'gap:10px;align-items:flex-start;padding:10px 0'
+      style: 'padding:10px 0'
         + (openable ? ';cursor:pointer' : '')
         + (pending ? ';opacity:.55' : '')
         // joined: the reply box continues this highlight below, so the
@@ -6420,8 +6775,8 @@ export function messagesFeature(ctx) {
       // the avatar is its own tap-target (profile), even inside an openable
       // row — its handler stops propagation, so the row still opens the thread
       avatar(pk, 'chat-avatar note-avatar'),
-      h('div', { class: 'col grow', style: 'min-width:0;gap:3px' },
-        h('div', { class: 'row between', style: 'align-items:center;gap:8px' },
+      h('div', { class: 'note-content' },
+        h('div', { class: 'row between note-header', style: 'align-items:center;gap:8px' },
           h('div', { class: 'row', style: 'gap:7px;align-items:baseline;min-width:0' },
             h('span', {
               // the name, like the avatar, is its own tap-target (profile)
@@ -6441,6 +6796,7 @@ export function messagesFeature(ctx) {
         foreign
           ? h('div', { class: 'note-text small muted', style: 'white-space:pre-wrap;overflow-wrap:anywhere' }, (ev.kind === 64 ? '\u265f ' : '') + altText)
           : h('div', { class: 'note-text', style: 'white-space:pre-wrap;overflow-wrap:anywhere' }, ...noteBody(ev.content, 0, emojiTagMap(ev.tags))),
+        ev.kind === POLL ? pollBox(ev) : null,
         pending ? null : noteActions(pk, ev, { canZap }),
         !pending && whoOpen(ev.id) ? whoPanel(ev) : null));
   }
@@ -6455,7 +6811,21 @@ export function messagesFeature(ctx) {
       const p = profiles.get(ev.pubkey);
       if (p && (p.name || p.picture)) faces[ev.pubkey] = p;
     }
-    threadStore.save(c, c.focusId, faces, c.counts);
+    // quoted posts inside the thread ride along, so a reload paints them
+    // instead of a "Fetching note…" spinner
+    const quotes = [];
+    for (const ev of [c.root, ...c.replies]) {
+      for (const m of (ev.content || '').matchAll(/nostr:((?:note|nevent)1[a-z0-9]+)/gi)) {
+        const ref = parseNostrRef(m[1].toLowerCase());
+        const q = ref && ref.type === 'event' && quoted.get(ref.id);
+        if (q && q.ev) {
+          quotes.push(q.ev);
+          const p = profiles.get(q.ev.pubkey);
+          if (p && (p.name || p.picture)) faces[q.ev.pubkey] = p;
+        }
+      }
+    }
+    threadStore.save(c, c.focusId, faces, c.counts, quotes);
   };
   function persistThreadProfile(pk) {
     const c = ui.noteThread && threadCache.get(ui.noteThread.rootId);
@@ -6491,7 +6861,16 @@ export function messagesFeature(ctx) {
     settle();
     requestAnimationFrame(settle);
   }
+  // ---- NIP-22 comments (kind 1111) ----
+  // The reply format for everything that isn't a kind 1 note — a poll, an
+  // article, a picture. Uppercase tags name the ROOT (E/A + K + P),
+  // lowercase the PARENT it answers (e/a + k + p). A kind 1 note is never
+  // answered with one (NIP-22), and never answers anything but a kind 1.
+  const COMMENT = 1111;
+  const tagVal = (ev, name) => (ev.tags.find((x) => x[0] === name && x[1]) || [])[1] || null;
+  const addrOf = (ev) => ev.kind >= 30000 && ev.kind < 40000 ? ev.kind + ':' + ev.pubkey + ':' + (tagVal(ev, 'd') || '') : null;
   function rootIdOf(ev) {
+    if (ev.kind === COMMENT) return tagVal(ev, 'E') || tagVal(ev, 'e') || ev.id;
     const es = ev.tags.filter((x) => x[0] === 'e');
     const marked = es.find((x) => x[3] === 'root');
     return (marked || es[0] || [])[1] || ev.id;
@@ -6527,6 +6906,7 @@ export function messagesFeature(ctx) {
         }
       }
     }
+    for (const q of stored?.quotes || []) if (!quoted.get(q.id)?.ev) quoted.set(q.id, { status: 'ready', ev: q, at: Date.now() });
     const rootId = stored?.rootId || requestedRootId;
     c = { status: stored ? 'ready' : 'loading', rootId, focusId: seed.id,
       root: stored?.root || (seed.id === rootId ? seed : null), replies: stored?.replies || [], counts: stored?.counts || {} };
@@ -6548,8 +6928,12 @@ export function messagesFeature(ctx) {
       };
       let relays = await relaysFor(c.root || seed);
       const [roots, replies] = await Promise.all([
-        c.root ? Promise.resolve([]) : queryOn(relays, { kinds: [1], ids: [rootId] }, 4000),
-        queryOn(relays, { kinds: [1], '#e': [rootId], limit: 80 }, 4500),
+        c.root ? Promise.resolve([]) : queryOn(relays, { ids: [rootId] }, 4000), // a root can be a poll
+        // kind 1 replies, and NIP-22 comments naming it as their root
+        Promise.all([
+          queryOn(relays, { kinds: [1], '#e': [rootId], limit: 80 }, 4500).catch(() => []),
+          queryOn(relays, { kinds: [COMMENT], '#E': [rootId], limit: 120 }, 4500).catch(() => []),
+        ]).then(([a, b]) => [...(a || []), ...(b || [])]),
       ]);
       if (!c.root) c.root = (roots || [])[0] || null;
       let all = [...c.replies, ...(replies || [])];
@@ -6562,8 +6946,8 @@ export function messagesFeature(ctx) {
         if (up === top.id) break;
         relays = [...new Set([...relays, ...(await relaysFor(top))])].slice(0, 14);
         const [ups, more] = await Promise.all([
-          queryOn(relays, { kinds: [1], ids: [up] }, 4000),
-          queryOn(relays, { kinds: [1], '#e': [up], limit: 80 }, 4500),
+          queryOn(relays, { ids: [up] }, 4000),
+          queryOn(relays, { kinds: [1, COMMENT], '#e': [up], limit: 80 }, 4500),
         ]);
         const upNote = (ups || [])[0];
         if (!upNote) break;
@@ -6575,6 +6959,9 @@ export function messagesFeature(ctx) {
         threadCache.set(topId, c);
         if (ui.noteThread && ui.noteThread.rootId === rootId) ui.noteThread.rootId = topId;
       }
+      // an article's comments may name it only by address
+      const addr = c.root && addrOf(c.root);
+      if (addr) all = [...all, ...(await queryOn(relays, { kinds: [COMMENT], '#A': [addr], limit: 120 }, 4500).catch(() => []) || [])];
       for (const e of all) noteForSpam(e);
       const seen = new Set([c.rootId]);
       c.replies = all
@@ -6601,6 +6988,7 @@ export function messagesFeature(ctx) {
     return c;
   }
   function openNoteThread(ev) {
+    rememberPlace('thread');
     ui.noteThread = { rootId: rootIdOf(ev), focusId: ev.id, seed: ev, scrollPending: true };
     ui.profOverThread = false; // a freshly opened thread goes on top
     render();
@@ -6613,9 +7001,7 @@ export function messagesFeature(ctx) {
     const cached = saved && (saved.root.id === ref.id ? saved.root : saved.replies.find((e) => e.id === ref.id));
     if (cached) { openNoteThread(cached); return; }
     toast(t('noteRefLoading'));
-    const relays = [...new Set([...(ref.relays || []), ...NOTE_RELAYS])];
-    const evs = await queryOn(relays, { ids: [ref.id] }, 4000).catch(() => []);
-    const ev = (evs || [])[0];
+    const ev = quoted.get(ref.id)?.ev || await findNote(ref).catch(() => null);
     if (ev) openNoteThread(ev);
     else toast(t('noteRefNotFound'));
   }
@@ -6677,7 +7063,28 @@ export function messagesFeature(ctx) {
     ])].filter((pk) => pk !== id.pubkey).slice(0, 8);
     const imeta = (ui.postMedia || []).filter((m) => m && m.url && text.includes(m.url))
       .map((m) => ['imeta', 'url ' + m.url, ...(m.m ? ['m ' + m.m] : [])]);
-    const partial = {
+    const root = c.root || (target.id === rootId ? target : null);
+    // the root's scope: from the root itself, or — not loaded yet — copied
+    // off the comment being answered, which carries it
+    const scope = root
+      ? [...(addrOf(root) ? [['A', addrOf(root), '']] : []), ['E', root.id, '', root.pubkey], ['K', String(root.kind)], ['P', root.pubkey]]
+      : target.kind === COMMENT ? target.tags.filter((x) => ['A', 'E', 'I', 'K', 'P'].includes(x[0])) : [];
+    const partial = target.kind === 1 || !scope.length ? null : {
+      // NIP-22: a comment on a poll, an article, or on another comment
+      kind: COMMENT,
+      content: text,
+      created_at: Math.floor(Date.now() / 1000),
+      tags: [
+        ...scope,
+        ...(root && target.id === root.id
+          ? [...(addrOf(root) ? [['a', addrOf(root), '']] : []), ['e', root.id, '', root.pubkey], ['k', String(root.kind)], ['p', root.pubkey]]
+          : [['e', target.id, '', target.pubkey], ['k', String(target.kind)], ['p', target.pubkey]]),
+        ...pTags.filter((pk) => pk !== target.pubkey && (!root || pk !== root.pubkey)).map((pk) => ['p', pk]),
+        ...imeta,
+        CLIENT_TAG,
+      ],
+    };
+    const note = partial || {
       kind: 1,
       content: text,
       created_at: Math.floor(Date.now() / 1000),
@@ -6689,7 +7096,7 @@ export function messagesFeature(ctx) {
         CLIENT_TAG,
       ],
     };
-    const evt = id.signer instanceof Uint8Array ? finalizeEvent(partial, id.signer) : await id.signer.signEvent(partial);
+    const evt = id.signer instanceof Uint8Array ? finalizeEvent(note, id.signer) : await id.signer.signEvent(note);
     const relays = [...new Set([...(await notesRelays(target.pubkey)), ...wallet.nostrRelays()])];
     const ok = await publishOn(relays, evt);
     if (!ok) throw new Error(t('msgSendFailed'));
@@ -6721,14 +7128,21 @@ export function messagesFeature(ctx) {
       style: 'gap:8px;margin:0 -8px;padding:' + (joined ? '2px' : '8px') + ' 8px 10px;background:var(--accent-soft,rgba(128,128,128,.08));border-radius:' + (joined ? '0 0 8px 8px' : '8px'),
     },
       s.preview ? draftPreview(s.draft) : null,
+      mediaBar(),
       // A textarea that grows with the reply, like the chat composer: Enter
       // sends, Shift+Enter (or Ctrl+J) breaks the line — a reply used to be
       // a one-line field with no way to write a paragraph.
-      h('textarea', {
+      h('coinos-text', {
         class: 'thread-reply-input', placeholder: t('threadReplyHint'),
-        rows: String(Math.min(6, Math.max(2, (s.draft || '').split('\n').length))),
-        style: 'font-family:var(--sans);resize:none;max-height:160px;overflow-y:auto;line-height:1.4;width:100%;box-sizing:border-box',
+        style: 'font-family:var(--sans);min-height:64px;max-height:160px',
         value: s.draft || '',
+        // a keyboard GIF or a pasted picture: attached like the paperclip's
+        onMedia: (f) => attachTo(f, (url) => {
+          s.draft = ((s.draft || '').replace(/\s+$/, '') + ' ' + url).trim();
+          const inp = document.querySelector('.thread-reply-input');
+          if (inp) inp.value = s.draft;
+          s.preview = true;
+        }),
         // a render per keystroke only while the preview is open; the morph
         // leaves a focused field alone, so this can't fight the typing
         onInput: (e) => { s.draft = e.target.value; growComposer(e.target); if (s.preview) render(); },
@@ -6749,7 +7163,7 @@ export function messagesFeature(ctx) {
       // A reply can carry a picture too — same upload, same imeta tag, same
       // paperclip. The URL lands in the draft, which is what every client
       // reads as the media.
-      ctx.uploadImage ? h('button', {
+      (ctx.uploadMedia || ctx.uploadImage) ? h('button', {
         class: 'attach-btn', title: t('feedAttach'), 'aria-label': t('feedAttach'), disabled: !!ui.postUploading,
         onClick: () => document.getElementById('reply-file')?.click(),
       }, ui.postUploading ? h('span', { class: 'spinner sm' }) : h('span', { style: 'display:flex', html: CLIP })) : null,
@@ -6814,6 +7228,9 @@ export function messagesFeature(ctx) {
     // first among a note's answers, so what you just wrote shows right
     // under the post instead of at the bottom of a long thread.
     const parentOf = (ev) => {
+      // a comment's parent is its lowercase e; one answering the root by
+      // address (an article) has only an a — the root
+      if (ev.kind === COMMENT) return tagVal(ev, 'e') || c.rootId;
       const es = ev.tags.filter((x) => x[0] === 'e');
       const marked = es.find((x) => x[3] === 'reply');
       return (marked || es[es.length - 1] || [])[1] || c.rootId;
@@ -7340,26 +7757,66 @@ export function messagesFeature(ctx) {
   // client reads media — with a NIP-92 imeta tag published beside it for the
   // ones that would rather have the metadata than sniff the URL.
   const composeText = () => (ui.profCompose == null ? draftFor(POST_DRAFT) : ui.profCompose || '');
+  let postAttachGeneration = 0;
   // Upload, then hand the URL to whichever draft asked for it.
   async function attachTo(file, place) {
-    if (!file || !ctx.uploadImage) return;
+    const upload = ctx.uploadMedia || ctx.uploadImage;
+    if (!file || !upload) return;
     ui.postUploading = true; render();
     try {
-      const url = await ctx.uploadImage(file);
-      (ui.postMedia ||= []).push({ url, m: file.type || '' });
-      place(url);
+      const url = await upload(file);
+      // A post canceled while its upload was in flight must stay canceled.
+      // `false` lets that composer reject the late result without affecting
+      // the reply composer, which shares this helper.
+      if (place(url) !== false) (ui.postMedia ||= []).push({ url, m: file.type || '' });
     } catch (e) { toast(e.message || String(e)); }
     ui.postUploading = false; render();
   }
-  const attachMedia = (file) => attachTo(file, (url) => {
-    const cur = composeText().replace(/\s+$/, '');
-    const next = (cur ? cur + '\n' : '') + url;
-    ui.profCompose = next;
-    setDraft(POST_DRAFT, next);
-    // you just attached a picture; showing it IS the answer to the question
-    // attaching one raises
-    ui.postPreview = true;
-  });
+  const attachMedia = (file) => {
+    const generation = postAttachGeneration;
+    return attachTo(file, (url) => {
+      if (generation !== postAttachGeneration) return false;
+      const cur = composeText().replace(/\s+$/, '');
+      const next = (cur ? cur + '\n' : '') + url;
+      ui.profCompose = next;
+      setDraft(POST_DRAFT, next);
+      // you just attached a picture; showing it IS the answer to the question
+      // attaching one raises
+      ui.postPreview = true;
+      return true;
+    });
+  };
+  function cancelPost() {
+    postAttachGeneration++;
+    ui.postCancelConfirm = false;
+    ui.profCompose = null;
+    ui.postMedia = [];
+    ui.postPreview = false;
+    discardDraft(POST_DRAFT);
+    render();
+  }
+  function requestCancelPost() {
+    if (composeText().length > 20 || ui.postUploading || (ui.postMedia || []).length) {
+      ui.postCancelConfirm = true;
+      render();
+      return;
+    }
+    cancelPost();
+  }
+  function postCancelWarning() {
+    if (!ui.postCancelConfirm) return null;
+    const keep = () => { ui.postCancelConfirm = false; render(); };
+    return h('div', {
+      class: 'confirm-pop-backdrop',
+      onClick: (event) => { if (event.target === event.currentTarget) keep(); },
+    },
+      h('div', { class: 'card col confirm-pop', style: 'gap:10px' },
+        h('h3', { style: 'margin:0' }, t('postDiscardTitle')),
+        h('div', { class: 'small muted' }, t('postDiscardBody')),
+        h('div', { class: 'row gap6' },
+          h('button', { class: 'btn-ghost grow', onClick: keep }, t('postKeepEditing')),
+          h('button', { class: 'btn-danger grow', onClick: cancelPost }, t('postDiscard')))));
+  }
   const CLIP = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:block"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>';
   const EYE = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:block"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
 
@@ -7378,6 +7835,16 @@ export function messagesFeature(ctx) {
         ? h('div', { class: 'note-text', style: 'white-space:pre-wrap;overflow-wrap:anywhere' }, ...noteBody(body))
         : h('div', { class: 'small faint' }, t('composePreviewEmpty')));
   }
+  // Shrinking, then uploading, as a labelled bar with its percentage — the
+  // paperclip's spinner said only "busy", however long a video took.
+  function mediaBar() {
+    const m = ui.mediaProgress;
+    if (!m) return null;
+    const label = t(m.stage === 'shrink' ? 'mediaShrinking' : 'mediaUploading');
+    return h('div', { class: 'media-progress', role: 'progressbar', 'aria-valuemin': '0', 'aria-valuemax': '100', 'aria-valuenow': String(m.pct), 'aria-label': label },
+      h('div', { class: 'row between small' }, h('span', { class: 'muted' }, label + '…'), h('span', { class: 'media-progress-pct' }, m.pct + '%')),
+      h('div', { class: 'media-progress-track' }, h('div', { class: 'media-progress-fill', style: 'width:' + m.pct + '%' })));
+  }
   const previewBtn = (on, toggle) => h('button', {
     class: 'attach-btn' + (on ? ' on' : ''),
     title: on ? t('composePreviewHide') : t('composePreview'),
@@ -7388,10 +7855,12 @@ export function messagesFeature(ctx) {
     if (ui.profCompose == null && !draftFor(POST_DRAFT)) return null;
     const text = composeText();
     return h('div', { class: 'col', style: 'gap:8px' },
-      h('textarea', {
-        rows: '3', placeholder: t('profComposePh'),
-        style: 'font-family:var(--sans);min-height:64px',
+      h('coinos-text', {
+        class: 'post-input', placeholder: t('profComposePh'),
+        style: 'font-family:var(--sans);min-height:84px;max-height:320px',
         value: text,
+        // the field is focused, so the morph leaves it: put the URL in by hand
+        onMedia: (f) => attachMedia(f).then(() => { const el = document.querySelector('.post-input'); if (el) el.value = composeText(); }),
         onInput: (ev) => {
           ui.profCompose = ev.target.value;
           setDraft(POST_DRAFT, ev.target.value);
@@ -7402,6 +7871,7 @@ export function messagesFeature(ctx) {
         },
       }),
       ui.postPreview ? draftPreview(text) : null,
+      mediaBar(),
       h('div', { class: 'row gap6' },
         h('button', { class: 'btn-primary grow', disabled: !!ui.postUploading, onClick: async () => {
           const body = composeText().trim();
@@ -7421,7 +7891,7 @@ export function messagesFeature(ctx) {
             render();
           }
         } }, t('profPostBtn')),
-        ctx.uploadImage ? h('button', {
+        (ctx.uploadMedia || ctx.uploadImage) ? h('button', {
           class: 'attach-btn', title: t('feedAttach'), 'aria-label': t('feedAttach'), disabled: !!ui.postUploading,
           onClick: () => document.getElementById('post-file')?.click(),
         }, ui.postUploading ? h('span', { class: 'spinner sm' }) : h('span', { style: 'display:flex', html: CLIP })) : null,
@@ -7430,7 +7900,8 @@ export function messagesFeature(ctx) {
           type: 'file', id: 'post-file', accept: 'image/*,video/*', style: 'display:none',
           onChange: async (e) => { const f = e.target.files && e.target.files[0]; e.target.value = ''; await attachMedia(f); },
         }),
-        h('button', { class: 'btn-ghost', onClick: () => { ui.profCompose = null; render(); } }, t('cancel'))));
+        h('button', { class: 'btn-ghost', onClick: requestCancelPost }, t('cancel'))),
+      postCancelWarning());
   }
 
   // ---- the feed view --------------------------------------------------------
@@ -7455,7 +7926,9 @@ export function messagesFeature(ctx) {
       ...items.map((f) => h('button', {
         class: 'feed-chip' + (f.id === curFeedId ? ' on' : ''), type: 'button', 'data-key': 'chip:' + f.id,
         onClick: () => switchFeed(f.id),
-      }, f.name)),
+        // someone's timeline carries the person, not a name — an empty
+        // label left a blank black pill
+      }, f.name || (f.of ? t('feedOfTitle', { name: displayName(f.of) }) : feedSummary(f)))),
       h('button', { class: 'feed-chip add', type: 'button', title: t('feedNew'), 'aria-label': t('feedNew'), onClick: () => openFeedEditor(null) }, '+'));
   }
   // The sheets a post (or a person) can open: the ⋯ menu, the reaction
@@ -7476,7 +7949,9 @@ export function messagesFeature(ctx) {
         item('\u{1F4E1}', t('feedRelays') + (feedRelays(def) ? ' \u00b7 ' + feedRelays(def).length : ''), () => { ui.feedRelayEdit = { id: def.id, input: '' }; }),
         def.builtin || visitor ? null
           : adhocFeeds.has(def.id)
-            ? item('\u{1F4BE}', t('feedSaveAdhoc'), () => openFeedEditor(def))
+            ? item('\u{1F4BE}', t('feedSaveAdhoc'), () => (def.of ? saveTimelineFeed(def) : openFeedEditor(def)))
+            // a saved timeline is the person, nothing to edit — only to drop
+            : def.of ? item('\u{1F5D1}', t('feedDelete'), () => deleteFeed(def.id))
             : item('\u270e', t('feedEdit'), () => openFeedEditor(def)),
         h('button', { class: 'btn-ghost btn-block', onClick: close }, t('back'))));
   }
@@ -7525,6 +8000,64 @@ export function messagesFeature(ctx) {
       } catch {}
     }, 0);
   }
+  function appBottomNav() {
+    const visitor = isVisitor();
+    const active = ui.noteThread || ui.profilePk ? 'feed' : ui.chatOpen
+      ? ui.msgView === 'feed' ? 'feed' : ui.msgView === 'notifs' ? 'notifs' : 'messages' : 'wallet';
+    const leavePage = () => {
+      stopFeedWatch(); stopNotifWatch();
+      // Top-level destinations must leave any feature page covering the shell.
+      for (const key of ['profilePk', 'profEdit', 'profEditFilled', 'profOverThread', 'noteThread', 'userSearch',
+        'zapSetup', 'hatShop', 'feedEdit', 'feedMenu', 'feedRelayEdit', 'noteSheet', 'reactPick', 'reportSheet',
+        'msgReplyTo', 'msgSheet', 'arkCoinsPage', 'arkExitPage', 'nameEditOpen', 'nostrReconnect', 'nostrLoginOpen',
+        'pos', 'lockedGift', 'viewGift', 'claimChoose', 'signinAsk']) ui[key] = null;
+      if (!visitor) { ui.screen = 'wallet'; ui.pubProf = null; }
+    };
+    // The chat list used to carry the notifications row and its count; the
+    // nav's bell carries the dot now.
+    const notifsWaiting = () => {
+      if (!myPubkeys().length) return 0;
+      refreshNotifs(); // throttled inside; keeps the count honest
+      return notifUnread();
+    };
+    const icon = (paths) => '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + paths + '</svg>';
+    const button = (id, label, paths, onClick) => h('button', {
+      type: 'button', class: 'app-nav-button' + (!visitor && (id === 'messages' ? hook('unreadMessages') : id === 'notifs' && notifsWaiting()) ? ' unread' : ''),
+      'aria-label': label, 'aria-current': active === id ? 'page' : undefined, onClick,
+    }, h('span', { html: icon(paths) }), h('span', {}, label));
+    return h('nav', {
+      class: 'app-bottom-nav', 'data-key': 'app-bottom-nav',
+    },
+      button('feed', t('feedTitle'), '<path d="M4 22h16a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2H8a2 2 0 0 0-2 2v16a2 2 0 0 1-2 2m0 0a2 2 0 0 1-2-2v-9c0-1.1.9-2 2-2h2"/><path d="M18 14h-8M15 18h-5M10 6h8v4h-8z"/>', () => {
+        // A destination tab is a destination: tapping Feed while already
+        // there always returns to its top. Only the explicit "x new posts"
+        // pill jumps to the first unread arrival.
+        // (someone's timeline or a #tag opened from a post isn't the Feed
+        // tab — the tab is your own feeds, the one you last had on)
+        const own = adhocFeeds.has(curFeedId) ? homeFeedId() : curFeedId;
+        if (active === 'feed' && ui.msgView === 'feed' && !ui.profilePk && !ui.noteThread && !ui.feedEdit && own === curFeedId) { glideToTop(); return; }
+        leavePage();
+        if (visitor) { ui.pubProf = true; openFirehose(); } else showFeed(own);
+        window.scrollTo({ top: 0 });
+      }),
+      button('messages', t('msgDmsTitle'), '<path d="M21 11.5a8.4 8.4 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.4 8.4 0 0 1-3.8-.9L3 21l1.9-5.7a8.4 8.4 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.4 8.4 0 0 1 3.8-.9h.5a8.5 8.5 0 0 1 8 8z"/>', () => {
+        if (visitor) { toFrontDoor(); return; }
+        leavePage(); ui.chatOpen = true; ui.msgView = 'home'; render();
+        window.scrollTo({ top: 0 });
+      }),
+      button('notifs', t('alertsTitle'), '<path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/>', () => {
+        if (visitor) { toFrontDoor(); return; }
+        leavePage(); openNotifs();
+        window.scrollTo({ top: 0 });
+      }),
+      button('wallet', t('settingsWallet'), '<path d="M20 8V5H5a2 2 0 0 0 0 4h16v11H5a2 2 0 0 1-2-2V7"/><path d="M21 12h-5v5h5"/><path d="M17 14.5h.01"/>', () => {
+        if (isVisitor()) { toFrontDoor(); return; }
+        leavePage();
+        ui.txDetail = null; ui.arkMoveDetail = null; ui.arkReconDetail = null; ui.arkExitDetail = null; ui.giftDetail = null;
+        ui.chatOpen = false; ui.msgView = null; ui.tab = 'receive';
+        render(); window.scrollTo({ top: 0 });
+      }));
+  }
   function feedView() {
     syncFollowSets().catch(() => {}); // throttled inside
     syncReports().catch(() => {}); // likewise
@@ -7564,31 +8097,42 @@ export function messagesFeature(ctx) {
           waiting === 1 ? t('feedOneNewWord') : t('feedNNewWord'))
       : null;
     // the chat shell draws the brand header; this is just the page under it
-    return h('div', { class: 'card col chat-page', style: 'gap:10px' },
+    return h('div', { class: 'card col chat-page feed-page', style: 'gap:10px' },
         h('div', { 'data-key': 'feed-notice', style: 'display:contents' }, pill),
         h('div', { class: 'row gap6', style: 'align-items:center' },
           backBtn(() => {
             stopFeedWatch();
+            // a feed opened from somewhere (a profile's timeline, a #tag, a
+            // pack link) goes back there — or, reached directly, to yours
+            if (!visitor && adhocFeeds.has(def.id)) { ctx.goBack(() => { ui.chatOpen = true; ui.msgView = 'feed'; selectFeed(homeFeedId()); }); return; }
             if (visitor) { ui.chatOpen = false; ui.msgView = null; ui.pubProf = null; } else ui.msgView = 'home';
             render();
           }),
           def.of ? avatar(def.of, 'chat-avatar mini', true) : null,
           h('h3', { style: 'margin:0;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' },
-            def.builtin && !def.all ? t('feedTitle') : def.of ? t('feedOfTitle', { name: displayName(def.of) }) : def.name),
+            def.builtin && !def.all ? t('feedTitle') : def.of && !def.name ? t('feedOfTitle', { name: displayName(def.of) }) : def.name),
           // one ⋯ for the feed itself (share, relays, save or edit) and one
           // pencil for a new post: the title keeps the room a phone has
           h('button', {
             class: 'btn-sm' + (feedRelays(def) ? ' on' : ''), title: t('feedMenu'), 'aria-label': t('feedMenu'), style: 'margin-left:auto;flex-shrink:0',
             onClick: () => { ui.feedMenu = true; render(); },
           }, '\u22ef'),
-          visitor ? null : h('button', {
-            class: 'btn-sm', style: 'flex-shrink:0', title: t('profNewPost'), 'aria-label': t('profNewPost'),
-            onClick: () => { ui.profCompose = ui.profCompose == null ? (draftFor(POST_DRAFT) || '') : null; render(); },
-            html: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:block"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>' })),
+          ),
         ui.feedRelayEdit && ui.feedRelayEdit.id === def.id ? relayPanel(def) : null,
         visitor ? null : feedChips(),
+        // floating bottom right, wherever the reader is in the feed: the
+        // composer opens at the top and takes the focus
+        visitor || ui.profCompose != null ? null : h('button', {
+          class: 'btn-primary feed-post-fab', 'data-key': 'feed-post-fab', type: 'button', title: t('profNewPost'), 'aria-label': t('profNewPost'),
+          onClick: () => {
+            ui.profCompose = draftFor(POST_DRAFT) || '';
+            render();
+            try { window.scrollTo({ top: 0, behavior: 'smooth' }); } catch { window.scrollTo(0, 0); }
+            setTimeout(() => document.querySelector('.post-input')?.focus(), 60);
+          },
+        }, h('span', { style: 'display:flex', html: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:block"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>' }), h('span', {}, t('feedPostFab'))),
         visitor ? null : postComposer(),
-        def.of && !def.ofAt
+        def.of && !ofLoaded(def)
           ? h('div', { class: 'row gap6', style: 'justify-content:center;align-items:center;padding:12px 0' },
               h('span', { class: 'spinner sm' }), h('span', { class: 'small muted' }, t('feedOfLoading')))
         : def.of && !hasQuery
@@ -7673,6 +8217,22 @@ export function messagesFeature(ctx) {
       save(s);
       deleteFollowSet(prev).catch(() => {});
     }
+  }
+  // "Save feed" on someone's timeline: into the chips at once. The editor
+  // would have copied their whole follow list in, one row per person.
+  function saveTimelineFeed(adhoc) {
+    const s = st();
+    const have = s.feeds.find((f) => f.of === adhoc.of && JSON.stringify(f.relays || []) === JSON.stringify(adhoc.relays || []));
+    const id = have ? have.id : 'f' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    if (!have) {
+      s.feeds.push({ id, name: '', follows: false, authors: [], packs: [], topics: [], of: adhoc.of,
+        ...(adhoc.relays && adhoc.relays.length ? { relays: adhoc.relays } : {}), at: Date.now() });
+      save(s);
+    }
+    adhocFeeds.delete(adhoc.id);
+    feedStates.delete(adhoc.id);
+    switchFeed(id);
+    toast(t('feedSaved'));
   }
   function deleteFeed(id) {
     const s = st();
@@ -8052,9 +8612,10 @@ export function messagesFeature(ctx) {
         type: 'file', id: 'msg-file', accept: 'image/*,video/*', style: 'display:none',
         onChange: (e) => { const f = e.target.files && e.target.files[0]; e.target.value = ''; if (f) onAttach(f); },
       }) : null,
-      h('textarea', {
-        class: 'grow', id: 'msg-draft', placeholder, rows: String(Math.min(5, draftFor(draftKey).split('\n').length)),
-        value: draftFor(draftKey), maxlength: '2000',
+      h('coinos-text', {
+        class: 'grow', id: 'msg-draft', placeholder,
+        value: draftFor(draftKey),
+        onMedia: onAttach ? (f) => onAttach(f) : null,
         onInput: (e) => { setDraft(draftKey, e.target.value); growComposer(e.target); updateEmojiAc(e.target, draftKey); if (onType && e.target.value) onType(); },
         onClick: (e) => updateEmojiAc(e.target, draftKey), // the caret moved
         onBlur: () => { if (ui.emojiAc) { ui.emojiAc = null; render(); } },
@@ -8158,45 +8719,6 @@ export function messagesFeature(ctx) {
     if (st().noPushService && !st().push)
       kids.push(h('div', { class: 'notice info small' }, pushAdvice()));
 
-    // ---- the feed, above the conversations: it's the thing you read, they're
-    // the things you answer
-    kids.push(h('div', { class: 'list' },
-      h('div', {
-        class: 'item chat-thread-row',
-        onClick: () => { ui.msgView = 'feed'; switchFeed(FOLLOWING); },
-      },
-      h('div', { class: 'chat-avatar fallback' }, '\u2605'),
-      h('div', { class: 'col grow', style: 'min-width:0;gap:1px' },
-        h('span', { class: 'chat-name' }, t('feedTitle')),
-        h('div', { class: 'muted small' },
-          followsNow().set.size === 1 ? t('feedFollowing1')
-            : followsNow().set.size ? t('feedFollowingN', { n: followsNow().set.size })
-            : t('feedNoFollowsShort')))),
-      // ...the feeds you made, each its own row under it
-      ...st().feeds.map((f) => h('div', {
-        class: 'item chat-thread-row',
-        onClick: () => { ui.msgView = 'feed'; switchFeed(f.id); },
-      },
-      h('div', { class: 'chat-avatar fallback' }, feedTopics(f).length && !f.follows && !(f.authors || []).length && !(f.packs || []).length ? '#' : '\u2605'),
-      h('div', { class: 'col grow', style: 'min-width:0;gap:1px' },
-        h('span', { class: 'chat-name' }, f.name),
-        h('div', { class: 'muted small chat-preview' }, feedSummary(f))))),
-      // ...and what happened to what you posted
-      (() => {
-        const n = myPubkeys().length ? notifUnread() : 0;
-        if (myPubkeys().length) refreshNotifs(); // throttled inside; keeps the count honest
-        return h('div', {
-          class: 'item chat-thread-row' + (n ? ' unread' : ''),
-          onClick: openNotifs,
-        },
-          h('div', { class: 'chat-avatar fallback' }, '\ud83d\udd14'),
-          h('div', { class: 'col grow', style: 'min-width:0;gap:1px' },
-            h('span', { class: 'chat-name' }, t('alertsTitle')),
-            h('div', { class: 'muted small' }, n ? t('alertsNew', { n }) : t('alertsSub'))),
-          // like a group row: the dot sits mid-height, padded off the edge
-          n ? h('i', { class: 'thread-dot' }) : null);
-      })()));
-
     // ---- DMs
     kids.push(h('div', { class: 'row between', style: 'align-items:baseline' },
       h('h3', { style: 'margin:0' }, t('msgDmsTitle')),
@@ -8232,11 +8754,10 @@ export function messagesFeature(ctx) {
             ? h('div', { class: 'list' }, resultRows(h, dmSearch.rows, (r) => openThread(r.pk), (pk, node) => hook('wrapAvatar', pk, node)))
             : h('div', { class: 'small muted' }, t('msgNoMatches'))));
     }
-    // A long DM history must not bury the communities below it: past a
-    // handful, the rest waits behind "show all". (No cap for barely-over —
-    // a "show 2 more" button costs more than the rows it hides.)
-    const DM_PREVIEW = 5;
-    const shownDms = (ui.msgAllDms || dmRows.length <= DM_PREVIEW + 2) ? dmRows : dmRows.slice(0, DM_PREVIEW);
+    // A long DM history must not bury the communities below it: past four,
+    // the rest waits behind "show all". Communities get the same cap.
+    const LIST_PREVIEW = 4;
+    const shownDms = ui.msgAllDms ? dmRows : dmRows.slice(0, LIST_PREVIEW);
     kids.push(
       dmRows.length
         ? h('div', { class: 'list' }, shownDms.map(({ peer, last, unread }) =>
@@ -8256,7 +8777,7 @@ export function messagesFeature(ctx) {
     if (shownDms.length < dmRows.length)
       kids.push(h('button', { class: 'linklike small', onClick: () => { ui.msgAllDms = true; render(); } },
         t('msgShowAllDms', { n: dmRows.length })));
-    else if (ui.msgAllDms && dmRows.length > DM_PREVIEW + 2)
+    else if (ui.msgAllDms && dmRows.length > LIST_PREVIEW)
       kids.push(h('button', { class: 'linklike small', onClick: () => { ui.msgAllDms = false; render(); } },
         t('msgShowFewerDms')));
 
@@ -8293,7 +8814,12 @@ export function messagesFeature(ctx) {
           value: ui.msgNewName || '', onInput: (e) => { ui.msgNewName = e.target.value; },
         }),
         h('button', { class: 'btn-sm', onClick: () => createCommunity(ui.msgNewName || '') }, t('msgCreate'))));
-    kids.push(h('div', { class: 'list' }, communities().map((jm) => {
+    const allRooms = communities();
+    const shownRooms = ui.msgAllRooms ? allRooms : allRooms.slice(0, LIST_PREVIEW);
+    // the rooms on the list get their faces while it sits there, so even a
+    // tap with no hover before it finds them ready
+    setTimeout(() => { for (const jm of shownRooms) if (rooms.has(jm.community_id)) warmRoom(jm); }, 300);
+    kids.push(h('div', { class: 'list' }, shownRooms.map((jm) => {
       const room = rooms.get(jm.community_id);
       const name = room?.folded?.metadata?.name || jm.name;
       // Last session's settled count anchors the number: while the guestbook
@@ -8307,7 +8833,9 @@ export function messagesFeature(ctx) {
       const unread = room ? roomUnread(room) : false;
       return h('div', {
         class: 'item chat-thread-row' + (unread ? ' unread' : ''),
-        onClick: () => { ui.msgView = 'room'; ui.msgCommunity = jm.community_id; ui.msgChannel = null; ui.msgStick = true; render(); },
+        onMouseenter: () => warmRoom(jm),
+        onPointerdown: () => warmRoom(jm),
+        onClick: () => openRoomWarm(jm, () => { ui.msgView = 'room'; ui.msgCommunity = jm.community_id; ui.msgChannel = null; ui.msgStick = true; }),
       },
       h('div', { class: 'chat-avatar fallback' }, name.slice(0, 2)),
       h('div', { class: 'col grow', style: 'min-width:0;gap:1px' },
@@ -8317,6 +8845,12 @@ export function messagesFeature(ctx) {
       // the row's own centring puts the dot mid-height, off the edge
       unread ? h('i', { class: 'thread-dot' }) : null);
     })));
+    if (shownRooms.length < allRooms.length)
+      kids.push(h('button', { class: 'linklike small', onClick: () => { ui.msgAllRooms = true; render(); } },
+        t('msgShowAllCommunities', { n: allRooms.length })));
+    else if (ui.msgAllRooms && allRooms.length > LIST_PREVIEW)
+      kids.push(h('button', { class: 'linklike small', onClick: () => { ui.msgAllRooms = false; render(); } },
+        t('msgShowFewerDms')));
 
     return h('div', { class: 'card col chat-page', style: 'gap:10px' }, ...kids);
   }
@@ -8351,6 +8885,45 @@ export function messagesFeature(ctx) {
   }
 
   // ---- room ---------------------------------------------------------------
+
+  // ---- a room's faces, before it opens -------------------------------------
+  // Opening a community painted everyone as a punk for a beat: their
+  // profiles weren't in memory yet. As SvelteKit preloads on hover, a
+  // pointer over (or pressing) a room's row starts the faces of its latest
+  // messages — profile, then the picture decoded — and the tap waits for
+  // them, a moment at most, before the room replaces the list.
+  const ROOM_READY_MS = 1500;
+  const roomWarm = new Map(); // cid -> { at, promise }
+  let roomOpenSeq = 0;
+  function roomFaces(jm) {
+    const room = ensureRoom(jm);
+    const ch = roomChannels(room)[0];
+    if (!ch) return [];
+    // everyone the channel paints, newest speakers first
+    const msgs = [...(room.byChannel.get(ch.id)?.values() || [])]
+      .sort((a, b) => eventMs(b.rumor) - eventMs(a.rumor));
+    return [...new Set(msgs.map((m) => m.author))].slice(0, 150);
+  }
+  // Each face is warmed once per half minute; a later call (the history
+  // still streaming in when the list first warmed) adds whoever is new.
+  function warmRoom(jm) {
+    let w = roomWarm.get(jm.community_id);
+    if (!w || Date.now() - w.at > 30_000) { w = { at: Date.now(), faces: new Map() }; roomWarm.set(jm.community_id, w); }
+    const deadline = Date.now() + 8000;
+    try {
+      for (const pk of roomFaces(jm)) if (!w.faces.has(pk)) w.faces.set(pk, warmAvatar(pk, deadline).catch(() => {}));
+    } catch {}
+    return Promise.all(w.faces.values());
+  }
+  async function openRoomWarm(jm, go) {
+    const seq = ++roomOpenSeq;
+    const from = ui.msgView;
+    await Promise.race([warmRoom(jm), new Promise((r) => setTimeout(r, ROOM_READY_MS))]);
+    // another tap, or the reader went elsewhere, while the faces loaded
+    if (seq !== roomOpenSeq || ui.msgView !== from || !ui.chatOpen) return;
+    go();
+    render();
+  }
 
   function messageRows(room, chId) {
     const my = myPubkeys();
@@ -8694,10 +9267,11 @@ export function messagesFeature(ctx) {
   // kept as a short list of what-happened rows rather than the raw events —
   // a zap receipt drags its whole request along, and the list rides in the
   // feature state. Painted from the last visit while the relays are asked.
-  const NOTIF_KINDS = [1, 6, 7, ...ZAP_KINDS];
+  const NOTIF_KINDS = [1, COMMENT, 6, 7, ...ZAP_KINDS];
   const NOTIF_KEEP = 150;
   let notif = null;      // { status, items }
   let notifAt = 0, notifUnsub = null;
+  const notifNoteAsking = new Set();
   const notifSeen = () => st().notifSeen || 0;
   // Notifications are about the IDENTITY, not the wallet: the stored list
   // remembers whose it is, and another identity on the same wallet starts
@@ -8708,7 +9282,17 @@ export function messagesFeature(ctx) {
       const s = st();
       const stored = (!s.notifsPk || s.notifsPk === identityPk()) ? (s.notifs || []) : [];
       notif = { status: stored.length ? 'ready' : 'loading', items: stored };
+      // Reply events and the notes reactions/zaps point at ride beside their
+      // notification rows. Seed the in-memory note caches synchronously, so
+      // opening Notifications after a reload never paints "Fetching note…".
+      const noteCache = s.notifNotesPk === identityPk() ? (s.notifNoteCache || {}) : {};
+      for (const note of Object.values(noteCache)) {
+        if (!note || !note.id) continue;
+        notifNotes.set(note.id, note);
+        quoted.set(note.id, { status: 'ready', ev: note, at: Date.now() });
+      }
       warmNotifFaces(stored);
+      warmNotifNotes(stored);
       refreshNotifs();
     }
     return notif;
@@ -8725,6 +9309,58 @@ export function messagesFeature(ctx) {
     for (const pk of pks) { notifWarmed.add(pk); liveProfileOf(pk); }
     const deadline = Date.now() + READY_MS;
     for (const pk of pks) warmAvatar(pk, deadline).catch(() => {});
+  }
+  // Keep only what rendering and opening a thread need. Signatures and relay
+  // metadata make this cache unnecessarily large; the relays remain the
+  // source of truth whenever the live notification refresh runs.
+  const savedNotifNote = (ev) => ev && ev.id ? ({
+    id: ev.id, pubkey: ev.pubkey, kind: ev.kind, created_at: ev.created_at,
+    content: ev.content || '', tags: ev.tags || [],
+  }) : null;
+  function persistNotifs() {
+    if (!notif) return;
+    const wanted = new Set();
+    for (const x of notif.items) {
+      const id = x.what === 'reply' || x.what === 'mention' ? x.id : x.target;
+      if (id) wanted.add(id);
+    }
+    const notes = {};
+    for (const id of wanted) if (notifNotes.has(id)) notes[id] = savedNotifNote(notifNotes.get(id));
+    const s2 = st();
+    s2.notifs = notif.items; s2.notifsPk = identityPk();
+    s2.notifNoteCache = notes; s2.notifNotesPk = identityPk();
+    save(s2);
+  }
+  function cacheNotifNotes(evs) {
+    if (!notif || !(evs || []).length) return false;
+    const byId = new Map((evs || []).filter((ev) => ev && ev.id).map((ev) => [ev.id, savedNotifNote(ev)]));
+    let changed = false;
+    const wanted = new Set();
+    for (const x of notif.items) wanted.add(x.what === 'reply' || x.what === 'mention' ? x.id : x.target);
+    for (const [id, note] of byId) {
+      if (!wanted.has(id) || notifNotes.has(id)) continue;
+      notifNotes.set(id, note);
+      quoted.set(id, { status: 'ready', ev: note, at: Date.now() });
+      changed = true;
+    }
+    if (changed) persistNotifs();
+    return changed;
+  }
+  // Old notification rows did not carry their note. Upgrade them in one
+  // bounded batch while the bell/chat home is visible, before the user opens
+  // the page. New rows take the same path as soon as they arrive.
+  function warmNotifNotes(items) {
+    const ids = [...new Set((items || [])
+      .filter((x) => x && x.target && x.what !== 'reply' && x.what !== 'mention' && !notifNotes.has(x.target))
+      .map((x) => x.target).filter((id) => !notifNoteAsking.has(id)))].slice(0, NOTIF_KEEP);
+    if (!ids.length) return;
+    for (const id of ids) notifNoteAsking.add(id);
+    (async () => {
+      const got = [];
+      for (let i = 0; i < ids.length; i += 60)
+        got.push(...await queryOn(zapRelays(), { ids: ids.slice(i, i + 60) }, 4500).catch(() => []));
+      if (cacheNotifNotes(got)) scheduleRepaint();
+    })().finally(() => { for (const id of ids) notifNoteAsking.delete(id); });
   }
   // What an event says happened, or null if it isn't about you after all.
   function notifItem(ev) {
@@ -8746,6 +9382,10 @@ export function messagesFeature(ctx) {
       return { id: ev.id, what: 'react', actor: ev.pubkey, target: lastE, hint, emoji, ts: ev.created_at };
     }
     if (ev.kind === 6) return lastE ? { id: ev.id, what: 'boost', actor: ev.pubkey, target: lastE, hint, ts: ev.created_at } : null;
+    if (ev.kind === COMMENT) {
+      const parent = tagVal(ev, 'e') || tagVal(ev, 'E');
+      return { id: ev.id, what: parent ? 'reply' : 'mention', actor: ev.pubkey, target: parent, text: String(ev.content || '').slice(0, 300), ts: ev.created_at, pubkey: ev.pubkey };
+    }
     if (ev.kind === 1) {
       const es = (ev.tags || []).filter((x) => x[0] === 'e' && x[1]);
       const replyTo = (es.find((x) => x[3] === 'reply') || es.find((x) => x[3] === 'root') || es.at(-1) || [])[1] || null;
@@ -8757,7 +9397,7 @@ export function messagesFeature(ctx) {
     const c = notifNow();
     const known = new Set(c.items.map((x) => x.id));
     for (const ev of evs || []) noteForSpam(ev);
-    const add = (evs || []).map((ev) => (ev.kind === 1 && hidden(ev) ? null : notifItem(ev)))
+    const add = (evs || []).map((ev) => ((ev.kind === 1 || ev.kind === COMMENT) && hidden(ev) ? null : notifItem(ev)))
       .filter((x) => x && !hiddenPk(x.actor) && !known.has(x.id) && known.add(x.id));
     if (!add.length) return false;
     warmNotifFaces(add);
@@ -8772,11 +9412,12 @@ export function messagesFeature(ctx) {
       kept.push(x);
     }
     c.items = kept.slice(0, NOTIF_KEEP);
-    // the rows already say who; a reply row also wants its reader-facing text,
-    // which it carries — the events themselves are not kept
-    const s2 = st(); s2.notifs = c.items; s2.notifsPk = identityPk(); save(s2);
-    // a reply is a note we can open straight away; keep it in hand
-    for (const ev of evs) if (ev.kind === 1) notifNotes.set(ev.id, ev);
+    // Keep the small notification rows and one deduplicated copy of each note
+    // they show. A reply is also a note we can open straight away.
+    for (const ev of evs) if (ev.kind === 1 || ev.kind === COMMENT) notifNotes.set(ev.id, ev);
+    cacheNotifNotes(evs);
+    warmNotifNotes(c.items);
+    persistNotifs();
     return true;
   }
   const notifNotes = new Map(); // reply id -> event, for opening the thread
@@ -8998,6 +9639,7 @@ export function messagesFeature(ctx) {
       if (!Object.keys(s.read || {}).length && !anyMsgs) return 1;
       return unreadCount();
     },
+    bottomNav: appBottomNav,
     notifySettingsCards() { return [notifyCard()]; },
     screenView() {
       // A profile deep link mid-resolution holds the frame over EVERY screen

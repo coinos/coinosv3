@@ -780,6 +780,8 @@
   "notifEnabled": "通知の有効化",
   "notifOnDevice": "通知は、このデバイスで行われます。",
   "notifPayRecv": "お支払いについて",
+  "notifZap": "投稿へのZap",
+  "notifReaction": "投稿へのリアクション",
   "notifDm": "ダイレクトメッセージ",
   "notifChatHint": "コミュニティチャットは、部屋のメニューから選択されます。",
   "notifPaySent": "接続されたアプリで送信された支払い",

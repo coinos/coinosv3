@@ -779,6 +779,8 @@
   "notifEnabled": "Bildirimler etkinleştirildi",
   "notifOnDevice": "Bildirimler bu cihaz için.",
   "notifPayRecv": "Ödemeler alındı",
+  "notifZap": "Gönderilerinize gelen zap'ler",
+  "notifReaction": "Gönderilerinize gelen tepkiler",
   "notifDm": "Doğrudan mesajlar",
   "notifChatHint": "Community chat oda başına opt-in - onu bir odadan menüsünden döndürür.",
   "notifPaySent": "Bağlantılı uygulamalar tarafından gönderilen ödemeler",

@@ -779,6 +779,8 @@
   "notifEnabled": "자주 묻는 질문",
   "notifOnDevice": "알림은이 기기에 있습니다.",
   "notifPayRecv": "지불받은",
+  "notifZap": "내 글에 받은 잽",
+  "notifReaction": "내 글에 달린 반응",
   "notifDm": "직접 메시지",
   "notifChatHint": "커뮤니티 채팅은 방당 선택 - 방 메뉴에서 켜집니다.",
   "notifPaySent": "연결된 앱으로 전송되는 결제",

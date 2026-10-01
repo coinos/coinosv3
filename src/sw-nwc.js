@@ -23,7 +23,7 @@ self.addEventListener('push', (e) => {
       // Money landing is exactly when a forwarding rule wants to run, and this
       // wake-up is the only moment the worker gets. Failures are recorded in
       // the mirror; the notification still goes out either way.
-      if (data.reason === 'payment') {
+      if (data.reason === 'payment' || data.reason === 'zap') {
         try { await bgAutoWithdraw({ log: (m) => console.log('[sw-aw]', m) }); }
         catch (err) { console.warn('[sw-aw] failed:', err && err.message); }
       }
@@ -40,19 +40,30 @@ self.addEventListener('push', (e) => {
           if (verdict && verdict.name) dmName = verdict.name;
         } catch (err) { console.warn('[sw-dm] could not classify:', err && err.message); }
       }
+      // A reaction names who, when this device knows them, and is dropped
+      // when they are muted here — the notifier can't know either.
+      let who = null;
+      if (data.reason === 'reaction' && data.from) {
+        const boxes = await allInboxes().catch(() => []);
+        if (boxes.some((b) => (b.muted || []).includes(data.from))) return;
+        who = boxes.map((b) => b.names && b.names[data.from]).find(Boolean) || null;
+      }
+      const emoji = !data.emoji || data.emoji === '+' ? '\u2764\ufe0f' : /^:[\w-]+:$/.test(data.emoji) ? data.emoji : data.emoji.slice(0, 8);
       const T = {
         payment: ['Payment received', data.amountSat ? `+${Number(data.amountSat).toLocaleString()} sats. Open coinos to see it.` : 'Open coinos to see it.'],
         dm: dmName ? [dmName, 'sent you a message.'] : ['New message', 'You have a new private message.'],
         chat: ['New chat activity', 'There are new messages in your communities.'],
         mention: [data.reply ? 'New reply to your post' : 'You were mentioned', data.text || 'Open coinos to see it.'],
+        zap: ['Zap received', data.amountSat ? `+${Number(data.amountSat).toLocaleString()} sats. Open coinos to see it.` : 'Someone zapped you. Open coinos to see it.'],
+        reaction: [who ? `${who} reacted ${emoji}` : `New reaction ${emoji}`, 'to your post. Open coinos to see it.'],
       };
       const [title, body] = T[data.reason] || T.chat;
       // a reply lands you in the Notifications list, where it is
-      const target = data.reason === 'mention' ? { url: './?open=notifs', view: 'notifs' } : { url: './' };
+      const target = data.reason === 'mention' || data.reason === 'reaction' ? { url: './?open=notifs', view: 'notifs' } : { url: './' };
       await self.registration.showNotification(title, {
         body,
         icon: 'icon-192.png', badge: 'badge-96.png',
-        tag: 'notify-' + (data.reason || 'chat'), renotify: data.reason === 'payment' || data.reason === 'mention',
+        tag: 'notify-' + (data.reason || 'chat'), renotify: ['payment', 'zap', 'mention'].includes(data.reason),
         data: target,
       });
     })());

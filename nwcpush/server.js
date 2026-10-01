@@ -138,8 +138,8 @@ function resubscribeNotify() {
   if (!ptags.length && !authors.length) return;
   const filters = [];
   // DMs / direct invites / zap receipts land p-tagged at the user
-  // ...as do replies and mentions (kind 1 naming the user)
-  if (ptags.length) filters.push({ kinds: [1059, 9735, 9737, 1], '#p': ptags, since: Math.floor(Date.now() / 1000) });
+  // ...as do replies and mentions (kind 1 naming the user) and reactions (7)
+  if (ptags.length) filters.push({ kinds: [1059, 9735, 9737, 1, 7], '#p': ptags, since: Math.floor(Date.now() / 1000) });
   // community chat: wraps authored by a channel's derived stream key
   if (authors.length) filters.push({ kinds: [1059], authors, since: Math.floor(Date.now() / 1000) });
   // one sub per filter — the pool API takes a single filter object
@@ -152,7 +152,7 @@ function resubscribeNotify() {
 // DMs are throttled barely at all now: the device drops the ones it decides
 // are noise (a stranger, or our own sent-copy), and a server-side cooldown
 // would let a discarded push swallow the friend's message that followed it.
-const COOLDOWN = { payment: 10_000, dm: 1_000, chat: 90_000, mention: 5_000 };
+const COOLDOWN = { payment: 10_000, zap: 10_000, dm: 1_000, chat: 90_000, mention: 5_000, reaction: 30_000 };
 const lastPush = new Map(); // endpointId:reason -> ts
 const seenNotifyEvents = new Map(); // event id -> ts
 function onNotifyEvent(ev) {
@@ -177,7 +177,20 @@ function onNotifyEvent(ev) {
     }
     return;
   }
-  const reason = ev.kind === 9735 || ev.kind === 9737 ? 'payment'
+  // A like or emoji on the user's post. Opt-in by an explicit flag: an app
+  // too old to send one has no words for it and would call it chat.
+  if (ev.kind === 7) {
+    const ps = (ev.tags || []).filter((t) => t[0] === 'p' && t[1]).map((t) => t[1]);
+    const extra = { from: ev.pubkey, emoji: String(ev.content || '+').slice(0, 16) };
+    for (const [id, r] of Object.entries(notifyRegs)) {
+      const mine = r.ptags || [];
+      if (r.reasons?.reaction !== true || mine.includes(ev.pubkey)) continue;
+      if (ps.some((x) => mine.includes(x))) pushNotify(id, r, 'reaction', extra).catch(() => {});
+    }
+    return;
+  }
+  const zap = ev.kind === 9735 || ev.kind === 9737;
+  const reason = zap ? 'payment'
     : p && notifyPtags().includes(p) ? 'dm' : 'chat';
   // A wrapped DM hides its sender from us by design, so we can't decide here
   // whether it's from a friend or a stranger — we hand the whole wrap to the
@@ -185,11 +198,16 @@ function onNotifyEvent(ev) {
   // around 4KB after encryption; anything larger goes as a bare nudge and the
   // device shows its generic notification.
   const extra = reason === 'dm' && JSON.stringify(ev).length < 3500 ? { wrap: ev } : {};
+  // a coinos zap receipt says how much in the clear
+  const amt = ev.kind === 9737 ? parseInt(ev.tags?.find((t) => t[0] === 'amount')?.[1], 10) : 0;
+  if (amt > 0) extra.amountSat = amt;
   for (const [id, r] of Object.entries(notifyRegs)) {
     const hit = reason === 'chat'
       ? (r.authors || []).includes(ev.pubkey)
       : p && (r.ptags || []).includes(p);
-    if (hit) pushNotify(id, r, reason, extra).catch(() => {});
+    // a zap is its own category for apps that know one; older apps keep
+    // getting it as a payment
+    if (hit) pushNotify(id, r, zap && typeof r.reasons?.zap === 'boolean' ? 'zap' : reason, extra).catch(() => {});
   }
 }
 
@@ -438,7 +456,7 @@ const server = Bun.serve({
         const id = Bun.hash(sub_.endpoint).toString(36);
         // per-category opt-outs; absent means everything on (older clients)
         const reasons = {};
-        for (const k of ['payment', 'dm', 'chat', 'mention']) {
+        for (const k of ['payment', 'zap', 'dm', 'chat', 'mention', 'reaction']) {
           if (typeof body.notify.reasons?.[k] === 'boolean') reasons[k] = body.notify.reasons[k];
         }
         notifyRegs[id] = {

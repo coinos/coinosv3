@@ -780,6 +780,8 @@
   "notifEnabled": "Permitidas notificaciones",
   "notifOnDevice": "Las notificaciones están en este dispositivo.",
   "notifPayRecv": "Pagos recibidos",
+  "notifZap": "Zaps en tus publicaciones",
+  "notifReaction": "Reacciones a tus publicaciones",
   "notifDm": "Mensajes directos",
   "notifChatHint": "El chat comunitario es opt-in por habitación, enciende desde el menú de la habitación.",
   "notifPaySent": "Pagos enviados por aplicaciones conectadas",

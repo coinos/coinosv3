@@ -780,6 +780,8 @@
   "notifEnabled": "已启用通知",
   "notifOnDevice": "这个装置的通知已经发出",
   "notifPayRecv": "实收付款",
+  "notifZap": "帖子收到的 Zap",
+  "notifReaction": "帖子收到的回应",
   "notifDm": "直接消息",
   "notifChatHint": "每个房间都选择社区聊天,",
   "notifPaySent": "由连接的应用程序发送付款",

@@ -780,6 +780,8 @@
   "notifEnabled": "Notifications activées",
   "notifOnDevice": "Les notifications sont en cours pour cet appareil.",
   "notifPayRecv": "Paiements reçus",
+  "notifZap": "Zaps sur vos publications",
+  "notifReaction": "Réactions à vos publications",
   "notifDm": "Messages directs",
   "notifChatHint": "Le chat communautaire est opt-in par chambre, allumez-le à partir d'un menu de chambre.",
   "notifPaySent": "Paiements envoyés par des applications connectées",

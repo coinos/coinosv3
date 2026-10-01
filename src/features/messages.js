@@ -2016,7 +2016,8 @@ export function messagesFeature(ctx) {
     // per-category opt-outs travel with the registration so the notifier
     // never sends what the user turned off (a suppressed-but-delivered push
     // would earn Chrome's generic "updated in background" nag instead)
-    const reasons = { payment: s.reasons?.payment !== false, dm: s.reasons?.dm !== false, mention: s.reasons?.mention !== false };
+    const want = (k) => s.reasons?.[k] !== false;
+    const reasons = { payment: want('payment'), zap: want('zap'), dm: want('dm'), mention: want('mention'), reaction: want('reaction') };
     // Stamp the network: the same seed makes the same nostr pubkey on mainnet
     // AND staging, so without this the notifier fans a mainnet payment push
     // out to the staging PWA's subscription too — and tapping it opened
@@ -2076,8 +2077,10 @@ export function messagesFeature(ctx) {
               } }, t('notifEnable'))
             : h('div', { class: 'small faint' }, t('notifOnDevice')),
       rowT(t('notifPayRecv'), 'payment'),
+      rowT(t('notifZap'), 'zap'),
       rowT(t('notifDm'), 'dm'),
       rowT(t('notifMention'), 'mention'),
+      rowT(t('notifReaction'), 'reaction'),
       h('div', { class: 'small faint' }, t('notifChatHint')));
   }
 

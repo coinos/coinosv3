@@ -780,6 +780,8 @@
   "notifEnabled": "Benachrichtigungen aktiviert",
   "notifOnDevice": "Benachrichtigungen sind für dieses Gerät.",
   "notifPayRecv": "Zahlungen",
+  "notifZap": "Zaps auf deine Beiträge",
+  "notifReaction": "Reaktionen auf deine Beiträge",
   "notifDm": "Direkte Nachrichten",
   "notifChatHint": "Community-Chat ist opt-in pro Zimmer drehen Sie es von einem Raum-Menü.",
   "notifPaySent": "Zahlungen durch verbundene Apps",

@@ -3131,6 +3131,11 @@ export function messagesFeature(ctx) {
   // ...and, in the same REQ, what else happened to a note: likes (kind 7)
   // and boosts (kind 6). One round trip for all three.
   const NOTE_KINDS = [9735, 9737, 7, 6];
+  // Replies (kind 1, and NIP-22 comments) so the reply button can say how
+  // many — asked separately: relays cap a REQ's answer, and a busy post's
+  // replies must not crowd its likes and zaps out of it.
+  const REPLY_KINDS = [1, 1111];
+  const replyIds = new Map(); // note id -> Map(reply id -> author pubkey)
   const reacts = new Map();  // note id -> Map([emoji, url] -> { emoji, url, who: Set<pubkey> })
   // Resolve from this reaction's own tag: packs can reuse the same shortcode
   // for different pictures, and an unrelated event must not change its face.
@@ -3196,6 +3201,7 @@ export function messagesFeature(ctx) {
   // Where an event about a note goes. A zap receipt is money and has its own
   // bookkeeping (see below); a like and a boost are just tallies of who.
   function noteEvent(ev) {
+    if (ev.kind === 1 || ev.kind === 1111) { noteReply(ev); return; }
     if (ev.kind === 7 || ev.kind === 6) {
       if (seenNoteEv.has(ev.id)) return;
       seenNoteEv.add(ev.id);
@@ -3225,6 +3231,28 @@ export function messagesFeature(ctx) {
       return;
     }
     noteReceipt(ev);
+  }
+
+  // A reply counts under every post of the conversation it names: NIP-10's
+  // root and reply (or the bare positional e tags of older clients), NIP-22's
+  // E and e. A 'mention' e tag is a quote, not a reply.
+  function noteReply(ev) {
+    let changed = false;
+    for (const x of ev.tags || []) {
+      if (!x[1] || x[1] === ev.id) continue;
+      if (!(x[0] === 'e' || (ev.kind === 1111 && x[0] === 'E')) || x[3] === 'mention') continue;
+      let m = replyIds.get(x[1]);
+      if (!m) replyIds.set(x[1], m = new Map());
+      if (!m.has(ev.id)) { m.set(ev.id, ev.pubkey); changed = true; }
+    }
+    if (changed) scheduleRepaint();
+  }
+  function replyCount(id) {
+    const m = replyIds.get(id);
+    if (!m) return 0;
+    let n = 0;
+    for (const pk of m.values()) if (!hiddenPk(pk)) n++;
+    return n;
   }
 
   function noteReceipt(ev) {
@@ -3264,6 +3292,7 @@ export function messagesFeature(ctx) {
       const relays = zapRelays();
       for (let i = 0; i < batch.length; i += 150) {
         const slice = batch.slice(i, i + 150);
+        queryOn(relays, { kinds: REPLY_KINDS, '#e': slice }, 4000).then((evs) => evs.forEach(noteReply)).catch(() => {});
         queryOn(relays, { kinds: NOTE_KINDS, '#e': slice }, 4000)
           .then((evs) => {
             evs.forEach(noteEvent);
@@ -3283,7 +3312,7 @@ export function messagesFeature(ctx) {
       }
       zapRecent = [...batch.reverse(), ...zapRecent.filter((x) => !batch.includes(x))].slice(0, 200);
       if (zapLiveUnsub) { try { zapLiveUnsub(); } catch {} }
-      zapLiveUnsub = subscribeOn(relays, { kinds: NOTE_KINDS, '#e': zapRecent, since: Math.floor(Date.now() / 1000) - 60 }, noteEvent);
+      zapLiveUnsub = subscribeOn(relays, { kinds: [...NOTE_KINDS, ...REPLY_KINDS], '#e': zapRecent, since: Math.floor(Date.now() / 1000) - 60 }, noteEvent);
     }, 250);
   }
   // Tallies are asked of the relays again on every boot, and that takes
@@ -6817,7 +6846,7 @@ export function messagesFeature(ctx) {
     const zapMine = !!((z && z.mine) || optimistic);
     const zapLabel = zapFlying ? t('zapSending') : zapSats ? t('zapTallyTitle', { n: zapSats.toLocaleString() }) : t('zapTitle');
     return h('div', { class: 'row note-acts' },
-      btn(I_REPLY, t('msgReply'), 0, false, () => { if (!signinAsk()) replyToNote(ev); }),
+      btn(I_REPLY, t('msgReply'), replyCount(ev.id), false, () => { if (!signinAsk()) replyToNote(ev); }),
       btn(I_BOOST, t('postBoost'), boostN, iBoosted(ev.id), () => boostNote(ev).catch(() => {})),
       btn(I_QUOTE, t('postQuote'), 0, false, () => { if (!signinAsk()) quoteNote(ev); }),
       // tap to choose how you feel about it; tap again to take it back
@@ -7269,6 +7298,7 @@ export function messagesFeature(ctx) {
     const ok = await publishOn(relays, evt);
     if (!ok) throw new Error(t('msgSendFailed'));
     c.replies = [...c.replies, evt];
+    noteReply(evt); // the count under the post goes up at once
     persistThread(c);
     return evt;
   }
@@ -7276,6 +7306,8 @@ export function messagesFeature(ctx) {
   function threadScreen() {
     const s = ui.noteThread;
     const c = threadFor(s.seed);
+    // the conversation on screen is the best count of its own replies
+    for (const e of c.replies) noteReply(e);
     const boxUnder = (ev) => !!(s.replying || (s.draft || '').trim()) && (ev.id === s.focusId || (!s.focusId && c.root && ev.id === c.root.id));
     const row = (ev) => {
       const focus = ev.id === s.focusId && ev.id !== c.rootId;

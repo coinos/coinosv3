@@ -4696,6 +4696,61 @@ export function messagesFeature(ctx) {
     mediaWarming.set(url, task);
     return task;
   };
+  // A video's shape, so the feed paints its box at the clip's own aspect
+  // instead of a 16:9 frame with black bands either side of a portrait clip.
+  // The post's imeta `dim` says it for free (Amethyst, Primal and others
+  // publish it); otherwise the metadata alone is fetched — a few KB for a
+  // moov-first file — with a short cap, since it gates the row. Remembered
+  // on disk so a clip seen once is never probed again.
+  const VIDEO_RE = /\.(mp4|webm|mov|m4v)(\?[^\s]*)?$/i;
+  const VIDEO_PROBE_MS = 3000, VIDEO_DIMS_KEEP = 400, VIDEO_DIMS_KEY = 'coinos-video-dims';
+  const videoDims = new Map(); // url -> { width, height }
+  const videoUnknown = new Set(); // probed this session and no answer: paint 16:9, don't ask again
+  try { for (const [u, d] of JSON.parse(localStorage.getItem(VIDEO_DIMS_KEY) || '[]')) videoDims.set(u, d); } catch {}
+  let videoDimsFlush = null;
+  const rememberVideo = (url, width, height) => {
+    if (!(width > 0 && height > 0)) return;
+    const d = { width, height };
+    mediaReady.set(url, d);
+    if (videoDims.get(url)?.width === width && videoDims.get(url)?.height === height) return;
+    videoDims.delete(url); videoDims.set(url, d);
+    if (videoDimsFlush) return;
+    videoDimsFlush = setTimeout(() => {
+      videoDimsFlush = null;
+      try { localStorage.setItem(VIDEO_DIMS_KEY, JSON.stringify([...videoDims].slice(-VIDEO_DIMS_KEEP))); } catch {}
+    }, 1000);
+  };
+  const imetaDim = (ev, url) => {
+    for (const tag of ev?.tags || []) {
+      if (tag[0] !== 'imeta' || !tag.includes('url ' + url)) continue;
+      const m = /^dim (\d+)x(\d+)$/.exec(tag.find((x) => /^dim /.test(x)) || '');
+      if (m) return { width: +m[1], height: +m[2] };
+    }
+    return null;
+  };
+  const warmVideo = (url, dim) => {
+    if (!url || mediaReady.has(url)) return Promise.resolve();
+    const known = videoDims.get(url) || dim;
+    if (known) { rememberVideo(url, known.width, known.height); return Promise.resolve(); }
+    if (typeof document === 'undefined' || videoUnknown.has(url)) return Promise.resolve();
+    if (mediaWarming.has(url)) return mediaWarming.get(url);
+    const task = new Promise((resolve) => {
+      const v = document.createElement('video');
+      const done = () => {
+        clearTimeout(timer);
+        v.onloadedmetadata = v.onerror = null;
+        if (v.videoWidth && v.videoHeight) rememberVideo(url, v.videoWidth, v.videoHeight);
+        else videoUnknown.add(url);
+        v.removeAttribute('src'); try { v.load(); } catch {} // let go of the connection
+        resolve();
+      };
+      const timer = setTimeout(done, VIDEO_PROBE_MS);
+      v.onloadedmetadata = done; v.onerror = done;
+      v.muted = true; v.preload = 'metadata'; v.src = url;
+    }).finally(() => mediaWarming.delete(url));
+    mediaWarming.set(url, task);
+    return task;
+  };
   // ---- link previews --------------------------------------------------
   // A plain link in a post becomes the card its page describes (Open Graph:
   // title, a line, a picture), fetched through the registrar because a
@@ -4778,6 +4833,15 @@ export function messagesFeature(ctx) {
     }
     return urls;
   }
+  function noteVideoUrls(content) {
+    const urls = [];
+    for (const part of String(content || '').split(NOTE_SPLIT)) {
+      const md = part && MD_PARTS.exec(part);
+      const url = md ? md[3] : (/^https?:\/\//i.test(part || '') ? part : null);
+      if (url && !(md && md[1]) && VIDEO_RE.test(url)) urls.push(url);
+    }
+    return urls;
+  }
   const avatarUrl = (p, pk) => p?.picture
     ? localPunk(p.picture) || (p.thumbFor === p.picture && p.thumb) || p.picture
     : punkSmallUrl(pk);
@@ -4792,6 +4856,7 @@ export function messagesFeature(ctx) {
   }
   async function noteReady(ev, deadline = Date.now() + READY_MS, depth = 0) {
     const tasks = [warmAvatar(ev.pubkey, deadline), ...noteMediaUrls(ev.content).map(warmMedia),
+      ...noteVideoUrls(ev.content).map((u) => warmVideo(u, imetaDim(ev, u))),
       ...notePreviewUrls(ev.content).map(warmPreview),
       ...[...emojiTagMap(ev.tags).values()].map(warmMedia)];
     for (const part of String(ev.content || '').split(NOTE_SPLIT)) {
@@ -5323,11 +5388,18 @@ export function messagesFeature(ctx) {
   // window unmounting the row and mounting it again, a quoted note loading.
   // Pinning the box alone left every one of those a muted restart.
   const unmutedClips = new Set();
+  // A feed box takes the clip's own shape when it's known, as wide as the
+  // column allows but never taller than three quarters of the screen.
+  const videoBoxStyle = (d) => d && d.width && d.height
+    ? `width:min(100%, calc(75vh * ${d.width} / ${d.height}));aspect-ratio:${d.width}/${d.height};max-height:none;object-fit:contain`
+    : 'width:100%;aspect-ratio:16/9;object-fit:contain';
   function videoNode(url, { stable = false } = {}) {
     const loud = unmutedClips.has(url);
     const v = h('video', { src: url, class: 'note-video', controls: true,
       preload: 'metadata', playsinline: true, muted: loud ? undefined : true, // play() in view fetches; a window of videos must not all stream
-      style: stable ? 'width:100%;aspect-ratio:16/9;object-fit:contain' : undefined,
+      style: stable ? videoBoxStyle(feedMedia(url)) : undefined,
+      // learned now, used by the next paint of any row with this clip
+      onLoadedmetadata: (e) => rememberVideo(url, e.target.videoWidth, e.target.videoHeight),
       onError: (e) => { if (!stable) { const b = e.target.parentElement; if (b) b.style.display = 'none'; } } });
     v.muted = !loud; // the property, not just the attribute: a script-made element autoplays only muted
     const box = h('div', { class: 'note-video-box' }, v);
@@ -5572,7 +5644,7 @@ export function messagesFeature(ctx) {
     return x >= 0 && x <= w && y >= 0 && y <= hh;
   }
   function urlNode(url, { label = null, isImage = false } = {}) {
-    if (/\.(mp4|webm|mov|m4v)(\?[^\s]*)?$/i.test(url)) {
+    if (VIDEO_RE.test(url)) {
       return videoNode(url, { stable: !!feedPaint });
     }
     if (isImage || /\.(png|jpe?g|gif|webp|avif)(\?[^\s]*)?$/i.test(url)) {

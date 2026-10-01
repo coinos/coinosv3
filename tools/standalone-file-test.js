@@ -12,7 +12,7 @@ try {
   page.on('pageerror', (e) => errors.push(String(e)));
   page.on('requestfailed', (r) => { if (r.url().startsWith('file:')) failed.push(r.url()); });
   await page.setViewport({ width: 390, height: 844 });
-  await page.goto('file://' + resolve('dist/standalone.html'));
+  await page.goto('file://' + resolve(process.argv[2] || 'dist/standalone.html'));
   await sleep(1500);
   const click = (x) => page.evaluate((x) => { const e = [...document.querySelectorAll('button')].find((n) => n.textContent.trim().toLowerCase().includes(x)); e?.click(); return !!e; }, x);
   assert(await page.evaluate(async () => { await document.fonts.ready; return document.fonts.check('16px "Public Sans"') && [...document.fonts].some((f) => f.status === 'loaded'); }), 'the embedded font loads');

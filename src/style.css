@@ -727,7 +727,7 @@ html:has(#app .chat-card), body:has(#app .chat-card) { overflow: hidden; }
    four don't fit across, the row wraps a whole button to the next line */
 .prof-actions > button { white-space: nowrap; }
 /* the field inside the panel: a quiet hairline, the panel is the frame */
-.thread-reply .thread-reply-input { border: 1px solid var(--line); background: var(--surface, #fff); border-radius: 10px; }
+.thread-reply .thread-reply-input { border: 1px solid var(--line); background: var(--paper); color: var(--ink); border-radius: 10px; }
 .thread-reply .thread-reply-input:focus { border-color: var(--ink); outline: none; }
 /* Cancel and Reply: one size, the icon buttons' height */
 .thread-reply .reply-tools .thread-reply-cancel, .thread-reply .reply-tools .thread-reply-send {

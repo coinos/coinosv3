@@ -7445,7 +7445,10 @@ export function messagesFeature(ctx) {
       // the public no-wallet surface drops the action row)
       ctx.brandHeader(!ui.pubProf && wallet.loaded),
       h('div', { class: 'card col thread-card', style: 'gap:0;padding:2px 14px' }, ...kids),
-      h('button', { class: 'btn-ghost btn-block', onClick: () => { ui.noteThread = null; render(); } }, t('back')),
+      // a real Back: the history entry under the thread restores the feed
+      // (or profile) and its scroll place; ui-only only when the thread was
+      // opened straight from a link and there is nothing under it
+      h('button', { class: 'btn-ghost btn-block', onClick: () => ctx.goBack(() => { ui.noteThread = null; }) }, t('back')),
       ...noteOverlays());
   }
 
@@ -7911,7 +7914,7 @@ export function messagesFeature(ctx) {
                 h('span', { class: 'spinner sm' }))
             : null);
       })(),
-      h('button', { class: 'btn-ghost btn-block', onClick: () => { ui.profilePk = null; ui.profOverThread = false; ui.pubProf = null; ui.profEdit = null; ui.profEditFilled = false; ui.profCompose = null; render(); } }, t('back')),
+      h('button', { class: 'btn-ghost btn-block', onClick: () => { ui.profCompose = null; ctx.goBack(() => { ui.profilePk = null; ui.profOverThread = false; ui.pubProf = null; ui.profEdit = null; ui.profEditFilled = false; }); } }, t('back')),
       mine ? logoutPop() : null,
       mine ? switchPop() : null,
       ...noteOverlays());

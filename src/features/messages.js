@@ -13,7 +13,7 @@
 // listens for both identities and decrypts with whichever keys are present.
 
 import {
-  subscribeOn, publishOn, queryOn, fetchInboxRelays, relayAlive, liveRelayList, resetRelay,
+  subscribeOn, publishOn, queryOn, queryStreamOn, fetchInboxRelays, relayAlive, liveRelayList, resetRelay,
   npubOf, neventOf, parseNostrPubkey, parseNostrRef, generateSecretKey, getPublicKey, finalizeEvent, nip44,
   PROFILE_RELAYS, openWrapsOffthread, unwrapDMsOffthread, verifyEventsAsync,
 } from '../nostr.js';
@@ -3610,7 +3610,8 @@ export function messagesFeature(ctx) {
       // back at the top by yourself: the new posts are under your eyes, so
       // the notice has done its job (only the pill repaints — the rows are
       // keyed and stay put, so nothing moves under a finger)
-      if (!ui.profilePk && feed && feed.unseen && atFeedTop()) { feed.unseen = 0; render(); }
+      if (!ui.profilePk && feed && feed.unseen && atFeedTop()
+        && !feed.deferred?.some((e) => feed.fresh?.has(e.id))) { feed.unseen = 0; render(); }
       if (!ui.profilePk && feed?.deferred?.length) admitFeed(feed.deferred, feed);
       if (window.innerHeight + window.scrollY < (document.documentElement.scrollHeight || 0) - (ui.profilePk ? 600 : Math.max(2400, window.innerHeight * 3))) return;
       if (ui.profilePk) loadOlderNotes(ui.profilePk).catch(() => {});
@@ -4147,10 +4148,10 @@ export function messagesFeature(ctx) {
       const ids = candidates.ids;
       if (!ids.length) continue;
       const asks = [];
-      for (let i = 0; i < ids.length; i += 40) asks.push(queryOn(wide, { ids: ids.slice(i, i + 40) }, 4500).catch(() => []));
-      const posts = (await Promise.all(asks)).flat().filter(candidates.qualifies);
+      for (let i = 0; i < ids.length; i += 40) asks.push(queryFeed(wide, { ids: ids.slice(i, i + 40) }, merge, c, 4500, candidates.qualifies)
+        .then((ok) => { if (ok) got = true; }));
+      await Promise.all(asks);
       if (c.stopped) return got;
-      if (await mergeFeed(posts, merge, c)) { got = true; scheduleRepaint(); }
       if (got && round >= 0 && (c.notes.length >= FEED_PAGE || extra.until != null)) break;
     }
     return got;
@@ -4447,6 +4448,7 @@ export function messagesFeature(ctx) {
       // side, so an offscreen image cannot delay the whole feed.
       c.boot = notesReady(stored.slice(0, FEED_PAGE)).finally(() => {
         c.booting = false;
+        c.prepared = null;
         if (!c.stopped && ui.chatOpen && ui.msgView === 'feed' && c === feed) scheduleRepaint();
       });
       c.boot.then(() => {
@@ -4464,18 +4466,16 @@ export function messagesFeature(ctx) {
     const authors = feedAuthors(def).slice(0, REQ_AUTHORS), topics = feedTopics(def);
     if (!authors.length && !topics.length && !(def && def.all)) { c.status = 'ready'; return; }
     c.at = Date.now();
+    const merge = { newerThan: c.notes.length ? c.notes[0].created_at : Infinity };
     if (def && def.curated) {
-      try { await popularPass({}, {}, c, def); } catch {} finally {
+      try { await popularPass({}, merge, c, def); } catch {} finally {
         if (!c.stopped) { c.status = 'ready'; if (c === feed && ui.chatOpen && ui.msgView === 'feed') { scheduleRepaint(); watchFeed(); } }
       }
       return;
     }
     try {
-      const events = await queryOn(feedRelaysOr(def, def && def.all ? FIREHOSE_RELAYS : NOTE_RELAYS), { kinds: FEED_KINDS, limit: FEED_PAGE,
-        ...(authors.length ? { authors } : {}), ...(topics.length ? { '#t': topics } : {}) }, 3000);
-      if (c.stopped) return;
-      await mergeFeed(events.filter((e) => FEED_KINDS.includes(e.kind) && !isReply(e) && !hidden(e))
-        .sort((a, b) => b.created_at - a.created_at).slice(0, FEED_PAGE), {}, c);
+      await queryFeed(feedRelaysOr(def, def && def.all ? FIREHOSE_RELAYS : NOTE_RELAYS), { kinds: FEED_KINDS, limit: FEED_PAGE,
+        ...(authors.length ? { authors } : {}), ...(topics.length ? { '#t': topics } : {}) }, merge, c, 3000);
     } catch {} finally {
       if (!c.stopped) {
         c.status = 'ready';
@@ -5015,7 +5015,7 @@ export function messagesFeature(ctx) {
   async function mergeFeed(evs, opts = {}, c = feedNow()) {
     let staged = feedStaged.get(c);
     if (!staged) feedStaged.set(c, staged = new Set());
-    const known = new Set([...c.notes, ...(c.catchup || []), ...(c.deferred || [])].map((e) => e.id));
+    const known = new Set([...c.notes, ...(c.deferred || [])].map((e) => e.id));
     for (const e of evs || []) noteForSpam(e);
     let add = (evs || []).filter((e) => FEED_KINDS.includes(e.kind) && !isReply(e) && !hidden(e)
       && !known.has(e.id) && !staged.has(e.id) && known.add(e.id) && staged.add(e.id));
@@ -5027,7 +5027,6 @@ export function messagesFeature(ctx) {
       add = kept;
       if (!add.length) return false;
     }
-    if (c.booting) await c.boot;
     if (c.stopped) return false;
     if (opts.immediate && !c.notes.length && !opts.catchup) {
       // The public snapshot already contains verified posts and profiles.
@@ -5038,48 +5037,66 @@ export function messagesFeature(ctx) {
       admitFeed(add, c);
       c.boot = notesReady(c.notes.slice(0, FEED_PAGE)).finally(() => {
         c.booting = false;
+        c.prepared = null;
         if (!c.stopped && c === feed) scheduleRepaint();
       });
       scheduleRepaint();
       return true;
     }
-    await notesReady(add);
-    if (c.stopped) return false;
-    for (const e of add) staged.delete(e.id);
-    // A catch-up is settled once, after every relay has answered (see
-    // settleCatchup) — not chunk by chunk, which is what made the pill count
-    // up in steps and land on the same round number every time.
-    if (opts.catchup) {
-      c.catchup = [...(c.catchup || []), ...add];
+    // Each row waits only for its own presentation. A slow photo or quote
+    // cannot hold ready text posts (or their new-post notice) behind it.
+    const ready = await Promise.all(add.map(async (e) => {
+      await noteReady(e);
+      staged.delete(e.id);
+      if (c.stopped) return false;
+      // Cached rows can still be warming. This new row is already prepared
+      // and can take its stable presentation without waiting for that page.
+      if (c.booting) { c.prepared ||= new Set(); c.prepared.add(e.id); }
+      admitFeed([...(c.deferred || []), e], c, false, opts.newerThan);
+      scheduleRepaint();
       return true;
-    }
-    admitFeed([...(c.deferred || []), ...add], c);
-    return true;
+    }));
+    return ready.some(Boolean);
   }
 
   // Never insert between the rows currently under the reader's eyes. Gap
   // fills wait until that part of the feed is offscreen; new posts above
   // the reading position can be inserted immediately with an anchor.
-  function admitFeed(add, c, explicit = false) {
+  function admitFeed(add, c, explicit = false, newerThan = c.notes[0]?.created_at || 0) {
     const onScreen = c === feed && ui.chatOpen && ui.msgView === 'feed' && !ui.profilePk && !ui.noteThread;
     const rows = onScreen && !explicit ? [...document.querySelectorAll('.notes-feed > .row[data-key]')] : [];
-    const topBefore = c.notes[0]?.created_at || 0;
+    // An empty feed has no original head. Once its first row paints, a
+    // newer row arriving later still needs a notice if it must wait.
+    if (newerThan === Infinity) newerThan = c.notes[0]?.created_at ?? Infinity;
+    // Count against the head when the query began, so posts arriving out of
+    // order still count. Include deferred prepends: the notice can reveal
+    // them explicitly without moving the header out from under the reader.
+    let noticed = false;
+    if (rows.length) {
+      c.fresh ||= new Set();
+      const known = new Set(c.notes.map((e) => e.id));
+      for (const e of add) if (e.created_at > newerThan && !known.has(e.id) && !c.fresh.has(e.id)) {
+        c.fresh.add(e.id);
+        c.unseen = (c.unseen || 0) + 1;
+        noticed = true;
+      }
+    }
     const result = mergeFeedWindow(c.notes, c.shown, add, {
       rows: rows.map((r) => ({ id: r.getAttribute('data-key'), top: r.getBoundingClientRect().top, bottom: r.getBoundingClientRect().bottom })),
       height: typeof window === 'undefined' ? 0 : window.innerHeight, keep: FEED_KEEP, page: FEED_PAGE,
     });
     c.deferred = result.deferred;
-    if (!result.added.length) return;
+    if (!result.added.length) { if (noticed) scheduleRepaint(); return; }
     c.shown = c.opened ? result.shown : FEED_PAGE;
     c.notes = result.notes;
     const retained = new Set(c.notes.map((e) => e.id));
     for (const id of c.presentations.keys()) if (!retained.has(id)) c.presentations.delete(id);
+    if (c.prepared) {
+      const waiting = new Set(c.deferred.map((e) => e.id));
+      for (const id of c.prepared) if (!retained.has(id) && !waiting.has(id)) c.prepared.delete(id);
+    }
     saveFeedCache(c);
     if (rows.length) {
-      const fresh = result.added.filter((e) => e.created_at > topBefore);
-      c.unseen = (c.unseen || 0) + fresh.length;
-      c.fresh ||= new Set();
-      for (const e of fresh) c.fresh.add(e.id);
       holdScroll(render);
     }
   }
@@ -5154,6 +5171,15 @@ export function messagesFeature(ctx) {
     for (const e of evs || []) if (e && e.created_at && !(c.seenBack <= e.created_at)) c.seenBack = e.created_at;
     c.sawAny = (c.sawAny || 0) + ((evs || []).length);
   }
+  async function queryFeed(relays, filter, merge, c, maxWait = 5000, qualifies = () => true) {
+    let got = false;
+    await queryStreamOn(relays, filter, async (ev) => {
+      if (c.stopped) return;
+      sawBack(c, [ev]);
+      if (qualifies(ev) && await mergeFeed([ev], merge, c)) got = true;
+    }, maxWait);
+    return got;
+  }
   async function feedPass(extra = {}, merge = {}, c = feedNow()) {
     const def = feedDef(c.id);
     if (!def) return false;
@@ -5166,23 +5192,38 @@ export function messagesFeature(ctx) {
       // the firehose asks its relays for everything
       if (!topics.length && !def.all) return false;
       const relays = feedRelaysOr(def, def.all ? FIREHOSE_RELAYS : TOPIC_RELAYS);
-      const evs = await queryOn(relays, { kinds: FEED_KINDS, ...tag, limit: FEED_LIMIT, ...extra }, 5000).catch(() => []);
-      sawBack(c, evs);
-      if (await mergeFeed(evs, merge, c)) { got = true; scheduleRepaint(); }
-      return got;
+      return queryFeed(relays, { kinds: FEED_KINDS, ...tag, limit: FEED_LIMIT, ...extra }, merge, c);
     }
-    let plan;
-    if (feedRelays(def)) plan = [{ relays: feedRelays(def), authors }];
-    else { await fetchRelayLists(authors); plan = outboxPlan(authors); }
-    await Promise.all(plan.flatMap(({ relays, authors: a }) => {
-      const chunks = [];
-      for (let i = 0; i < a.length; i += REQ_AUTHORS) chunks.push(a.slice(i, i + REQ_AUTHORS));
-      return chunks.map(async (chunk) => {
-        const evs = await queryOn(relays, { kinds: FEED_KINDS, authors: chunk, ...tag, limit: FEED_LIMIT, ...extra }, 5000).catch(() => []);
-        sawBack(c, evs);
-        if (await mergeFeed(evs, merge, c)) { got = true; scheduleRepaint(); }
-      });
-    }));
+    const readPlan = async (plan) => {
+      await Promise.all(plan.flatMap(({ relays, authors: a }) => {
+        const chunks = [];
+        for (let i = 0; i < a.length; i += REQ_AUTHORS) chunks.push(a.slice(i, i + REQ_AUTHORS));
+        return chunks.map(async (chunk) => {
+          if (await queryFeed(relays, { kinds: FEED_KINDS, authors: chunk, ...tag, limit: FEED_LIMIT, ...extra }, merge, c)) got = true;
+        });
+      }));
+    };
+    if (feedRelays(def)) await readPlan([{ relays: feedRelays(def), authors }]);
+    else {
+      const initial = outboxPlan(authors);
+      const reading = readPlan(initial);
+      // Read known/default relays now. Discovery can add coverage later,
+      // without holding every post behind a sequence of relay-list queries.
+      await Promise.all([reading, (async () => {
+        await fetchRelayLists(authors);
+        if (c.stopped) return;
+        const asked = new Map();
+        for (const p of initial) for (const relay of p.relays) {
+          const key = normRelay(relay);
+          if (!asked.has(key)) asked.set(key, new Set());
+          for (const pk of p.authors) asked.get(key).add(pk);
+        }
+        const additional = outboxPlan(authors).flatMap((p) => p.relays.map((relay) => ({ relays: [relay],
+          authors: p.authors.filter((pk) => !asked.get(normRelay(relay))?.has(pk)),
+        })).filter((p) => p.authors.length));
+        await readPlan(additional);
+      })()]);
+    }
     return got;
   }
   // Whatever a refresh finds goes behind the pill whenever posts are already
@@ -5190,26 +5231,17 @@ export function messagesFeature(ctx) {
   // beat after the page painted, moving what you had started reading. Only
   // a first load (nothing to disturb) or a rebuilt follow list goes straight in.
   async function refreshFeed(opts = {}, c = feedNow()) {
-    // the relays are asked at once; what they answer waits for the warm-up
-    // at the door (mergeFeed), not the asking
+    // Ask at once; each answer prepares its own row at the door (mergeFeed).
     if (!feedHasQuery(feedDef(c.id))) { c.status = 'ready'; return; }
     if (!opts.force && Date.now() - c.at < 30_000) return;
     c.at = Date.now();
     const catchup = opts.live != null ? !!opts.live : !!c.notes.length;
-    try { await feedPass({}, { catchup }, c); } catch {} finally {
+    const newerThan = c.notes.length ? c.notes[0].created_at : Infinity;
+    try { await feedPass({}, { catchup, newerThan }, c); } catch {} finally {
       c.status = 'ready';
-      if (catchup) settleCatchup(c); else scheduleRepaint();
+      scheduleRepaint();
     }
     if (c === feed) watchFeed();
-  }
-  // Catch-up uses the same anchor even after a long absence. Only an
-  // explicit tap on the new-post notice takes the reader to the top.
-  function settleCatchup(c = feed) {
-    if (!c) return;
-    const add = c.catchup || [];
-    c.catchup = [];
-    admitFeed([...(c.deferred || []), ...add], c);
-    scheduleRepaint();
   }
   // Repaint with the page held still: the post at the top of the viewport
   // stays where it was, however much was inserted above it. Measured after
@@ -5345,9 +5377,10 @@ export function messagesFeature(ctx) {
     const def = feedDef();
     if (!feedHasQuery(def) || !ui.chatOpen || ui.msgView !== 'feed') return;
     const c = feedNow();
+    const newerThan = c.notes.length ? c.notes[0].created_at : Infinity;
     const since = Math.floor(Date.now() / 1000) - 60;
     const topics = feedTopics(def), tag = topics.length ? { '#t': topics } : {};
-    const on = (ev) => { mergeFeed([ev], { live: true }, c).then((ok) => { if (ok) scheduleRepaint(); }).catch(() => {}); };
+    const on = (ev) => { mergeFeed([ev], { live: true, newerThan }, c).then((ok) => { if (ok) scheduleRepaint(); }).catch(() => {}); };
     const authors = feedAuthors(def);
     if (def.curated) { const iv = setInterval(() => { if (c === feed && ui.chatOpen && ui.msgView === 'feed') refreshFeed({ force: true, live: true }, c).catch(() => {}); }, 120_000); feedUnsubs.push(() => clearInterval(iv)); return; }
     if (!authors.length) { feedUnsubs.push(subscribeOn(feedRelaysOr(def, def.all ? FIREHOSE_RELAYS : TOPIC_RELAYS), { kinds: FEED_KINDS, ...tag, since }, on)); return; }
@@ -8288,7 +8321,8 @@ export function messagesFeature(ctx) {
     // own node; the rest keep theirs.
     const list = visible.slice(0, c.shown || FEED_PAGE);
     c.winList = () => c.notes.filter((ev) => !hidden(ev)).slice(0, c.shown || FEED_PAGE);
-    const rows = windowedRows(c, list, (ev) => (c.booting ? keyed(noteRow(ev.pubkey, ev, displayName(ev.pubkey)), ev.id) : feedRow(c, ev)));
+    const rows = windowedRows(c, list, (ev) => (c.booting && !c.prepared?.has(ev.id)
+      ? keyed(noteRow(ev.pubkey, ev, displayName(ev.pubkey)), ev.id) : feedRow(c, ev)));
     // Posts that went in above you while you were reading. A floating pill
     // that says how many are up there; the tap takes you up to them.
     // Keyed, so the morph keeps this very node while the count changes —

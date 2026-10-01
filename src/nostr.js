@@ -246,6 +246,25 @@ export async function queryOn(relays, filter, maxWait = 1500) {
     return evs.filter((_, i) => oks[i]);
   } catch { return []; }
 }
+// A bounded query that delivers verified events before the slowest relay's
+// EOSE. Completion also waits for verification and the consumer's work.
+export async function queryStreamOn(relays, filter, onEvent, maxWait = 1500) {
+  probeRelays(relays);
+  const pending = [];
+  try {
+    const live = liveRelays(relays);
+    if (!live.length) return;
+    await new Promise((resolve) => {
+      pool.subscribeManyEose(live, filter, {
+        maxWait,
+        onevent(event) {
+          pending.push(verifyOneAsync(event).then((ok) => ok && onEvent(event)).catch(() => {}));
+        },
+        onclose: resolve,
+      });
+    });
+  } catch {} finally { await Promise.all(pending); }
+}
 export async function publishOn(relays, evt) {
   try {
     const live = liveRelays(relays);

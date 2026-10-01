@@ -3495,7 +3495,11 @@ export function messagesFeature(ctx) {
     relayListCache.set(pk, p);
     return p;
   }
-  const notesRelays = async (pk) => [...new Set([...NOTE_RELAYS, ...(await relaysOf(pk))])];
+  // Plus relays that keep history: the big ones prune within days, and an
+  // author without a NIP-65 list (Joe Nakamoto, 2026-10-01) otherwise shows
+  // only whatever primal still holds — 2 posts of 22.
+  const PROFILE_ARCHIVE_RELAYS = ['wss://relay.ditto.pub', 'wss://nostr21.com', 'wss://offchain.pub'];
+  const notesRelays = async (pk) => [...new Set([...NOTE_RELAYS, ...(await relaysOf(pk)), ...PROFILE_ARCHIVE_RELAYS])];
 
   // Posts of theirs we already hold. Tapping a face in the feed is the
   // common way onto a profile, and the feed we just came from is full of
@@ -3513,35 +3517,51 @@ export function messagesFeature(ctx) {
     return [...out.values()].sort((a, b) => b.created_at - a.created_at);
   }
 
+  // Asked again when the page is reopened after this long: one bad answer
+  // (a relay down, the phone just back from sleep) must not freeze a
+  // profile at two posts for the rest of the session.
+  const NOTES_REFRESH_MS = 60_000;
   function notesFor(pk) {
     let c = notesCache.get(pk);
-    if (c) return c;
+    if (c) {
+      if (!c.fetching && Date.now() - (c.fetchedAt || 0) > NOTES_REFRESH_MS) fetchNotes(pk, c);
+      return c;
+    }
     // stored posts paint the page instantly; the relay fetch below freshens
     const stored = pageCache().notes[pk];
     const seed = stored ? stored.v : notesInHand(pk);
     // Seeded from memory the status stays 'loading': these are posts we
-    // happen to have, not their page, so the real answer still replaces
-    // them — but there is something to read while it comes.
+    // happen to have, not their page, so there is something to read while
+    // the real answer comes.
     c = stored
       ? { status: 'ready', notes: stored.v }
       : { status: 'loading', notes: seed };
     notesCache.set(pk, c);
+    fetchNotes(pk, c);
+    return c;
+  }
+  function fetchNotes(pk, c) {
+    c.fetching = true;
     (async () => {
       const evs = await queryOn(await notesRelays(pk), { kinds: FEED_KINDS, authors: [pk], limit: 30 }, 4500);
-      const seen = new Set();
-      const fresh = (evs || [])
-        .filter((e) => !seen.has(e.id) && seen.add(e.id))
-        .sort((a, b) => b.created_at - a.created_at);
-      if (fresh.length || !c.notes.length) {
-        await notesReady(fresh.slice(0, FEED_PAGE)); // the first screen arrives whole
-        c.notes = fresh;
-        persistPage('notes', pk, fresh.slice(0, 20).map(slimNote)); // cache stays bounded
-      }
+      // Merged with what's already on the page, never swapped for it: the
+      // relays answer unevenly (primal held 2 of Joe Nakamoto's posts, ours
+      // 18, the archives 30), and a thin answer used to erase a full page.
+      const byId = new Map(c.notes.map((e) => [e.id, e]));
+      let added = 0;
+      for (const e of evs || []) if (!byId.has(e.id)) { byId.set(e.id, e); added++; }
+      if (!added && c.notes.length) return;
+      const merged = [...byId.values()].sort((a, b) => b.created_at - a.created_at);
+      await notesReady(merged.slice(0, FEED_PAGE)); // the first screen arrives whole
+      c.notes = merged;
+      c.end = false;
+      persistPage('notes', pk, merged.slice(0, 20).map(slimNote)); // cache stays bounded
     })().catch(() => {}).finally(() => {
       c.status = 'ready';
+      c.fetching = false;
+      c.fetchedAt = Date.now();
       if (ui.profilePk === pk) render();
     });
-    return c;
   }
 
   // Infinite scroll: pull the next page of OLDER notes (until = oldest seen)

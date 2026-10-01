@@ -117,6 +117,7 @@ const SICK_MS = 10 * 60_000;
 const SICK_MAX_MS = 24 * 60 * 60_000;
 const SICK_KEY = 'coinos-sick-relays';
 const relayKey = (u) => { try { return normalizeURL(u); } catch { return u; } };
+const HOME_RELAYS = ['wss://relay.coinos.io', 'wss://nos.lol', 'wss://relay.damus.io', 'wss://relay.primal.net'];
 const sick = new Map(); // normalized url -> { until, n }
 try {
   const saved = JSON.parse(localStorage.getItem(SICK_KEY) || '{}');
@@ -125,12 +126,22 @@ try {
 const saveSick = () => {
   try { localStorage.setItem(SICK_KEY, JSON.stringify(Object.fromEntries([...sick].slice(-200)))); } catch {}
 };
+// The relays the app stands on are never written off for long: a phone
+// asleep or between networks fails every socket at once, and an escalating
+// verdict on relay.coinos.io then kept a profile at the 2 posts primal still
+// held for hours after the network was back (2026-10-01).
+const HOME_SICK_MS = 60_000;
+const isHomeRelay = (n) => HOME_RELAYS.some((u) => relayKey(u) === n);
+// Failures while the tab is hidden or offline say nothing about the relay.
+const offline = () => typeof navigator !== 'undefined' && navigator.onLine === false;
+const hiddenTab = () => typeof document !== 'undefined' && document.visibilityState === 'hidden';
 export function markRelaySick(url, why) {
   if (!url) return;
   const n = relayKey(url);
+  if (offline() || hiddenTab()) { resetRelay(url); return; }
   const prev = sick.get(n);
   const strikes = prev ? (prev.n || 1) + 1 : 1;
-  const ms = Math.min(SICK_MAX_MS, SICK_MS * 2 ** (strikes - 1));
+  const ms = isHomeRelay(n) ? HOME_SICK_MS : Math.min(SICK_MAX_MS, SICK_MS * 2 ** (strikes - 1));
   if (!prev) dlog(`nostr: ${url} unreachable (${why || 'connect failed'}) — skipping for ${Math.round(ms / 60_000)} min`);
   sick.set(n, { until: Date.now() + ms, n: strikes });
   saveSick();
@@ -139,6 +150,18 @@ export function markRelaySick(url, why) {
   resetRelay(url);
 }
 const isSick = (u) => sick.has(relayKey(u));
+// Back online or back on screen: the home relays get a fresh chance at once
+// (verdicts saved by older builds could still be hours long).
+function forgiveHomeRelays() {
+  let changed = false;
+  for (const u of [...sick.keys()]) if (isHomeRelay(u)) { sick.delete(u); changed = true; }
+  if (changed) saveSick();
+}
+forgiveHomeRelays();
+if (typeof window !== 'undefined') {
+  window.addEventListener('online', forgiveHomeRelays);
+  document.addEventListener('visibilitychange', () => { if (!hiddenTab()) forgiveHomeRelays(); });
+}
 // Drop known-bad relays, but never hand back an empty set: if everything is
 // sick the network probably is, and one doomed attempt beats doing nothing.
 function liveRelays(list) {
@@ -301,7 +324,7 @@ export function nsecOf(sk) { try { return nsecEncode(sk); } catch { return null;
 // against a real 862-follow list: nos.lol carries 267 of them, damus.io 249,
 // primal 170 — and damus wasn't here, which left 232 follows with no relay
 // list of their own leaning on two relays instead of three.
-export const PROFILE_RELAYS = ['wss://relay.coinos.io', 'wss://nos.lol', 'wss://relay.damus.io', 'wss://relay.primal.net'];
+export const PROFILE_RELAYS = HOME_RELAYS;
 // Fetch a recipient's profile (name + picture) for a pubkey, newest across relays.
 export async function fetchNostrProfile(pubkeyHex, relays = PROFILE_RELAYS) {
   let events;

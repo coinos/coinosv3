@@ -464,6 +464,7 @@ export function zapsFeature(ctx) {
       begin({ kind: 'npub', pk, eventId: eventId || null }, shortNpub(npub || npubOf(pk)));
       return true;
     },
+    resetSend() { ui.zap = null; },
     sendView() { return zapView(); },
     // Settings → Nostr: the one-tap zap amount.
     nostrSettingsCards() {

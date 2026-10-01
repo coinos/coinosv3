@@ -1895,7 +1895,7 @@ export function arkFeature(ctx) {
 
   function arkZapView() {
     // While resolving, show the SHAPE of the card that's coming — same
-    // title, same recipient chip, a spinner where the form will be. The
+    // title, same recipient portrait, a spinner where the form will be. The
     // screen fills in rather than being replaced.
     if (ui.arkZap && ui.arkZap.status === 'lookup') return zapSkeleton(ui.arkZap.pk, ui.arkZap.npub);
     if (ui.arkZapped) {
@@ -3487,6 +3487,11 @@ export function arkFeature(ctx) {
         return true;
       }
       return false;
+    },
+    resetSend() {
+      ui.arkLnFromSavings = null; ui.arkLnFromSavingsOk = false; ui.arkOffboardSend = null;
+      ui.arkLnPaid = null; ui.arkLnPay = null; ui.arkZapped = null; ui.arkZap = null;
+      ui.arkSent = null; ui.arkSend = null;
     },
     sendView() {
       if (ui.arkLnFromSavings) return arkLnFromSavingsView();

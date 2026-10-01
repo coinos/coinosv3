@@ -252,7 +252,7 @@ export function makeSearcher(onUpdate) {
         if (my === seq) onUpdate(q, rows);
       }, wait);
     },
-    clear() { seq++; clearTimeout(timer); onUpdate('', null); },
+    clear(notify = true) { seq++; clearTimeout(timer); if (notify) onUpdate('', null); },
   };
 }
 

@@ -1224,9 +1224,15 @@ body::after {
   border: 0; border-radius: 7px; background: var(--accent-soft); color: var(--muted); cursor: pointer;
 }
 .amt-max:hover { background: var(--surface2); color: var(--ink); }
-/* recipient chip: large variant for pay/zap screens */
-.zap-chip.lg { gap: 8px; padding: 4px 12px 4px 4px; font-weight: 600; }
-.chat-avatar.chip-lg { width: 30px; height: 30px; font-size: 11px; flex-shrink: 0; }
+/* The selected person leads the payment form, with their name below. */
+.send-person {
+  display: flex; flex-direction: column; align-items: center; align-self: center;
+  max-width: 100%; gap: 12px; padding: 12px; border: 0; border-radius: 0;
+  background: transparent; text-align: center; font-size: 18px; font-weight: 650;
+  overflow-wrap: anywhere;
+}
+.send-person:hover { background: transparent; }
+.chat-avatar.send-avatar { width: 96px; height: 96px; font-size: 28px; }
 /* the clickable way to change account (swiping only helps on touch) */
 .balance-switch {
   display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0;

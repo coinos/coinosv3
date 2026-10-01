@@ -929,6 +929,7 @@ export function namesFeature(ctx) {
       if (!ui.send || ui.send.recipients.length !== 1) return false;
       return beginResolve(text);
     },
+    resetSend() { ui.nameResolve = null; },
     // DNS resolution takes visible time — say so under the recipient field
     // instead of leaving a picked name looking ignored.
     sendFormNote(a) {

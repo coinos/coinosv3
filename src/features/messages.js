@@ -2964,10 +2964,10 @@ export function messagesFeature(ctx) {
         //
         // The thumbnail we keep locally is the whole picture at this size, so
         // a 30px circle never asks the network for the original again. The
-        // 64px profile avatar layers them: CSS paints the first layer that
+        // Larger profile/payment avatars layer them: CSS paints the first layer that
         // has arrived, so the thumbnail shows instantly and the full-size
         // original takes over on top when it lands.
-        ? h('div', { class: cls + ' ava-img', style: 'background-image:' + avatarBg(p, cls.includes('profile-avatar')) })
+        ? h('div', { class: cls + ' ava-img', style: 'background-image:' + avatarBg(p, cls.includes('profile-avatar') || cls.includes('send-avatar')) })
         : fallbackAvatar(h, pk, p.name, cls);
     // A face we keep painting is one worth keeping a thumbnail of.
     if (!feedPaint && p && p.picture) makeThumb(pk, p);
@@ -7924,7 +7924,8 @@ export function messagesFeature(ctx) {
                   ui.noteThread = null;
                   ui.userSearch = null;
                   ui.chatOpen = false;
-                  ctx.showSend(); // and never a lingering payment detail
+                  ctx.showSend({ fresh: true });
+                  ui.send.recipients[0].address = npubStr;
                   render();
                   hook('matchSendText', npubStr);
                 } }, t('profPay')),
@@ -7988,7 +7989,8 @@ export function messagesFeature(ctx) {
       ...noteOverlays());
   }
 
-  const backBtn = (onClick) => h('button', { class: 'iconbtn chat-back', onClick }, '‹');
+  const backBtn = (toParent) => h('button', { class: 'iconbtn chat-back',
+    onClick: () => ctx.goBack(toParent) }, '‹');
 
   // ---- the post composer ----------------------------------------------------
   // Shared by the profile page and the feed. A picture is uploaded the moment
@@ -9982,10 +9984,11 @@ export function messagesFeature(ctx) {
     // Accounts page switches to that identity before showing its profile)
     profileChip(pk, size, onOpen) {
       const big = size === 'lg';
-      return h('span', {
-        class: 'zap-chip' + (big ? ' lg' : ''),
+      return h(big ? 'button' : 'span', {
+        class: big ? 'send-person' : 'zap-chip',
+        type: big ? 'button' : undefined,
         onClick: (e) => { e.stopPropagation(); if (onOpen) onOpen(); else openProfile(pk); },
-      }, avatar(pk, 'chat-avatar ' + (big ? 'chip-lg' : 'mini'), false),
+      }, avatar(pk, 'chat-avatar ' + (big ? 'send-avatar' : 'mini'), false),
         h('span', { class: big ? '' : 'small' }, displayName(pk)));
     },
     // A sign-in (Google, passkey, key) that found no wallet on its identity:

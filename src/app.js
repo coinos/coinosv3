@@ -9,7 +9,7 @@ import { qrSvg } from './qr.js';
 import './rich-text.js'; // <coinos-text>, the composers' field
 import { makeSearcher, resultRows, searchable, punkUrl, warmSearch } from './recipient-search.js';
 import { assetUrl } from './asset-url.js';
-import { npubOf, seedPubkey, neventOf } from './nostr.js';
+import { npubOf, seedPubkey, neventOf, parseNostrPubkey } from './nostr.js';
 import { nip98Header } from './nip98.js';
 import { uploadPublicMedia, MediaUploadError } from './media-upload.js';
 import { NOSTR_MARK } from './features/nostrlogin.js';
@@ -114,15 +114,27 @@ const ui = {
   sendResult: null, // { txid } | { signedHex, txid }
   busy: false,
 };
+let sendPageOpen = false, sendPageRendered = false;
+
+function clearSend() {
+  ui.send = blankSend();
+  ui.draft = null; ui.broadcastTx = null; ui.sendResult = null; ui.sendError = '';
+  featureAll('resetSend');
+  sendSearcher.clear(false);
+  sendSearch.rows = null; sendSearch.sync = null; sendSearch.pick = null; sendSearch.el = null;
+  clearTimeout(sendRevealTimer);
+}
 
 // Take the wallet to the Send pane: any payment detail left open (a tapped
 // history row — which claims the whole tab area, whichever tab is picked)
 // closes first. A feature that jumped straight to ui.tab = 'send' used to
 // land on a renewal's detail card instead of the form.
-function showSend() {
+// A new recipient also clears previous payment reviews and results.
+function showSend({ fresh = false } = {}) {
   ui.txDetail = null; ui.arkMoveDetail = null; ui.arkReconDetail = null; ui.arkExitDetail = null; ui.giftDetail = null;
   ui.bump = null;
   ui.sendError = '';
+  if (fresh) clearSend();
   ui.tab = 'send';
 }
 
@@ -754,6 +766,7 @@ function renderInner() {
   // there. Declining still lands back exactly where the tap happened,
   // because nothing else moves. Onboarding keeps its precedence.
   const lockAsk = ui.pw && ui.pw.purpose === 'lock' && !(ui.onb || onbInProgress());
+  sendPageRendered = false;
   const screen =
     (lockAsk && h('div', { class: 'col', style: 'gap:16px' }, brandHeader(false), pwPromptCard()))
     || featureHook('screenView')
@@ -774,6 +787,10 @@ function renderInner() {
               // deliberate choice and still paints; this one waits.
             ? h('div', { class: 'col', style: 'gap:16px' }, BOOT_NAV ? null : brandHeader(false))
               : shouldOnboard() ? onboardScreen() : unlockScreen());
+  // Track the pane actually rendered: a profile or chat hides Send even
+  // when its wallet tab is still selected. Reviews/results stay in Send.
+  if (sendPageOpen && !sendPageRendered) clearSend();
+  sendPageOpen = sendPageRendered;
   // Navigation animates; background repaints must not. The key is every
   // ui field that decides which page is on screen.
   const navKey = [ui.screen, ui.tab === 'settings', ui.chatOpen, ui.msgView, ui.msgPeer, ui.msgCommunity,
@@ -4564,11 +4581,11 @@ function tabContent() {
   // getting back to it is scrolling, not hunting for the toggle. A history
   // DETAIL (a tapped row) still claims the whole area — you're reading one
   // payment, not browsing — as does the receive celebration takeover.
-  const pane = ui.tab === 'receive' ? receiveTab() : sendTab();
   const hist = historyTab();
   const detailOpen = ui.bump || ui.txDetail || ui.arkMoveDetail
     || ui.arkReconDetail || ui.arkExitDetail || ui.giftDetail;
   if (detailOpen) return hist;
+  const pane = ui.tab === 'receive' ? receiveTab() : sendTab();
   return h('div', { class: 'col', style: 'gap:16px' },
     pane,
     h('div', { class: 'small faint', style: 'text-transform:uppercase;letter-spacing:.06em;margin-top:4px' }, t('tabHistory')),
@@ -4710,6 +4727,7 @@ function loadSeedCard() {
 }
 
 function sendTab() {
+  sendPageRendered = true;
   // Watch-only wallet (e.g. restored after a session wipe without "Save to
   // device"): prompt to re-enter the seed before spending.
   if (wallet.watchOnly) {
@@ -5096,8 +5114,8 @@ function recipientRow(s, r, i) {
     ),
     check,
     via ? h('div', { class: 'row gap6 send-via', style: 'align-items:center' },
-      via.pk ? featureHook('avatarNode', via.pk) : null,
-      h('span', { class: 'small' }, via.name),
+      via.pk && !single ? featureHook('avatarNode', via.pk) : null,
+      via.pk && single ? null : h('span', { class: 'small' }, via.name),
       h('span', { class: 'small faint' }, t('sendNameHint'))) : null,
     suggest,
     r._ready ? h('div', { class: 'input-group' },
@@ -5145,6 +5163,9 @@ function sendForm() {
   // show only the destination input (a Lightning invoice auto-advances instead).
   const ready = destReady((s.recipients[0] || {}).address);
   const plainAddr = (s.recipients[0] || {}).address;
+  const via = s.recipients[0]?.via;
+  const recipientPk = s.recipients.length === 1
+    ? (via?.ark === plainAddr && via.pk) || parseNostrPubkey(plainAddr) : null;
   const arkDest = s.recipients.length === 1 && !!featureHook('hideSendControls', plainAddr);
   const feeOpts = [
     ['economyFee', t('feeEconomy')],
@@ -5155,6 +5176,7 @@ function sendForm() {
   return h(
     'div',
     { class: 'card col' },
+    recipientPk ? featureHook('profileChip', recipientPk, 'lg') : null,
     h(
       'div',
       { class: 'field' },

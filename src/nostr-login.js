@@ -40,6 +40,7 @@ import { getPublicKey, finalizeEvent, nip44 } from './nostr.js';
 import { SimplePool } from 'nostr-tools/pool';
 import { generateSecretKey } from 'nostr-tools/pure';
 import { decode as nip19decode } from 'nostr-tools/nip19';
+import { assetUrl } from './asset-url.js';
 
 // NIP-46 loads lazily from dist/nip46.js (same pattern as the QR decoder):
 // bunker logins are rare, and the module is heavy. Tests running outside a
@@ -50,7 +51,7 @@ function loadNip46() {
   if (typeof globalThis !== 'undefined' && globalThis.__nip46) return (_nip46 = Promise.resolve(globalThis.__nip46));
   _nip46 = new Promise((resolve, reject) => {
     const s = document.createElement('script');
-    s.src = 'nip46.js';
+    s.src = assetUrl('nip46.js');
     s.onload = () => (window.__nip46 ? resolve(window.__nip46) : reject(new Error('signer module unavailable')));
     s.onerror = () => { _nip46 = null; reject(new Error('could not load the remote-signer module')); };
     document.head.appendChild(s);

@@ -9,6 +9,7 @@
 // prefixes already seen.
 
 import { queryOn, parseNostrPubkey, npubOf, PROFILE_RELAYS } from './nostr.js';
+import { assetUrl } from './asset-url.js';
 
 // coinos punks: the deterministic default avatar — same formula the coinos
 // app uses (last byte of the pubkey picks one of 64). Initials show through
@@ -16,8 +17,7 @@ import { queryOn, parseNostrPubkey, npubOf, PROFILE_RELAYS } from './nostr.js';
 // Self-hosted (dist/punks) — coinos.io's own copies 502 for a third of the
 // set. Same deterministic formula the coinos app uses.
 const punkN = (pk) => Math.floor((parseInt(pk.slice(-2), 16) / 256) * 64) + 1;
-export const punkImageUrl = (n, small = false) =>
-  `${typeof location !== 'undefined' && location.protocol === 'file:' ? '' : '/'}punks${small ? '-sm' : ''}/${n}.webp`;
+export const punkImageUrl = (n, small = false) => assetUrl(`/punks${small ? '-sm' : ''}/${n}.webp`);
 export const punkUrl = (pk) => punkImageUrl(punkN(pk));
 // The art is 240px, which is what a punk published as someone's nostr
 // picture should be — and eight times what a 30px circle needs. We ship a

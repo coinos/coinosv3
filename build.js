@@ -397,12 +397,18 @@ ${pwa && !NO_SW ? SW_REGISTER + '\n' : ''}</body>
 }
 
 // Self-contained single file (dev server, test tools, save-and-open-offline).
-export async function buildHtml({ minify = true, pwa = minify, features = process.env.HAL_FEATURES, staging = isStaging() } = {}) {
+export async function buildHtml({ minify = true, pwa = minify, features = process.env.HAL_FEATURES, staging = isStaging(), inlineFonts = false } = {}) {
   const outputs = await bundleApp({ minify, features, staging });
   let js = await outputs[0].text();
   // Guard against a literal </script> inside the bundle closing our tag early.
   js = js.replaceAll('</script', '<\\/script');
-  const css = await Bun.file('./src/style.css').text();
+  let css = await Bun.file('./src/style.css').text();
+  // the standalone file has no fonts beside it on a disk, and the site's
+  // copies are same-origin only — so it carries its own
+  if (inlineFonts) for (const f of ['PublicSans.woff2', 'PublicSans-Italic.woff2']) {
+    const b64 = Buffer.from(await Bun.file('static/' + f).arrayBuffer()).toString('base64');
+    css = css.replaceAll(`url("/${f}")`, `url(data:font/woff2;base64,${b64})`);
+  }
   const html = await pageHtml({ css, staging, pwa, scriptHtml: `<script>${js}</script>` });
   return html.replaceAll('{{COMMIT}}', gitCommit());
 }
@@ -453,7 +459,7 @@ if (import.meta.main) {
   // included), no PWA plumbing — meant to be downloaded from /standalone.html
   // and opened straight from a disk. Network features still reach out when
   // online; the wallet itself needs no server.
-  await Bun.write('dist/standalone.html', await buildHtml({ minify: true, pwa: false }));
+  await Bun.write('dist/standalone.html', await buildHtml({ minify: true, pwa: false, inlineFonts: true }));
 
   // Lazy-loaded QR decoder — kept out of index.html, fetched only when a
   // browser without BarcodeDetector opens the scanner.

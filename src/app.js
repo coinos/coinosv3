@@ -8,6 +8,7 @@ import { Wallet, newMnemonic, isValidMnemonic, accountXpubFor, cacheKeyFor, utxo
 import { qrSvg } from './qr.js';
 import './rich-text.js'; // <coinos-text>, the composers' field
 import { makeSearcher, resultRows, searchable, punkUrl, warmSearch } from './recipient-search.js';
+import { assetUrl } from './asset-url.js';
 import { npubOf, seedPubkey, neventOf } from './nostr.js';
 import { nip98Header } from './nip98.js';
 import { uploadPublicMedia, MediaUploadError } from './media-upload.js';
@@ -3467,7 +3468,7 @@ const PUNK_PICKS = [7, 14, 21, 3, 33, 40, 47, 36, 61, 26, 12, 50];
 // becomes this person's picture on every nostr client. The tiles in the
 // picker are 56px, so they load the small copies.
 const punkImg = (n) => `punks/${n}.webp`;
-const punkTile = (n) => `punks-sm/${n}.webp`;
+const punkTile = (n) => assetUrl(`punks-sm/${n}.webp`);
 
 async function onbUpload(file) {
   const fd = new FormData();
@@ -3752,7 +3753,7 @@ function onboardScreen() {
       title(t('onbAvatarTitle')),
       h('p', { class: 'muted', style: 'margin:0' }, t('onbAvatarBody')),
       preview ? h('img', {
-        class: 'onb-avatar', src: preview, alt: '',
+        class: 'onb-avatar', src: /^(https?|data|blob):/i.test(preview) ? preview : assetUrl(preview), alt: '',
         style: ui.onbBusy ? 'opacity:.5' : '',
         onError: (e) => { e.target.style.visibility = 'hidden'; },
       }) : null,

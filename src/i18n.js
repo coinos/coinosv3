@@ -1,3 +1,4 @@
+import { assetUrl } from './asset-url.js';
 // Lightweight i18n. t('key', {vars}) interpolates {var} and falls back to the
 // English string (then the key). The chosen language persists in localStorage;
 // otherwise it's guessed from the browser. Arabic/Urdu render right-to-left.
@@ -1307,7 +1308,7 @@ const _inflight = new Map();
 export function loadLocale(code) {
   if (code === 'en' || STR[code] || !SUPPORTED.has(code)) return Promise.resolve();
   if (_inflight.has(code)) return _inflight.get(code);
-  const p = fetch('locales/' + code + '.json')
+  const p = fetch(assetUrl('locales/' + code + '.json'))
     .then((r) => (r.ok ? r.json() : null))
     .then((d) => { if (d) STR[code] = d; })
     .catch(() => {})

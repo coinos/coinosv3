@@ -1,3 +1,4 @@
+import { assetUrl } from './asset-url.js';
 // Camera QR scanner. Opens a fullscreen overlay, streams the back camera, and
 // resolves with the decoded string (or null if the user cancels).
 //
@@ -16,7 +17,7 @@ function loadJsQR() {
   if (!jsqrLoader) {
     jsqrLoader = new Promise((resolve, reject) => {
       const s = document.createElement('script');
-      s.src = 'jsqr.js';
+      s.src = assetUrl('jsqr.js');
       s.onload = () => (window.jsQR ? resolve(window.jsQR) : reject(new Error('decoder unavailable')));
       s.onerror = () => reject(new Error('decoder unavailable'));
       document.head.appendChild(s);

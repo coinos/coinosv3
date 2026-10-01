@@ -36,6 +36,8 @@ try {
   check('avatar opens Accounts with sign-in and logout', await page.evaluate(() => ['Accounts', 'Sign into another account', 'Log out'].every((s) => document.body.innerText.includes(s))));
   const saved = await page.evaluate(() => localStorage.getItem('btc-wallet-watch'));
   await click('Sign into another account');
+  check('sign-in opens on Create new, not the seed import box', await page.evaluate(() =>
+    document.querySelector('.tabs .active')?.textContent.includes('Create new') && !document.querySelector('.card textarea')));
   // Expand the Nostr login card without supplying a private key.
   await click('Sign in with Nostr');
   await page.waitForSelector('input[placeholder="nsec, private key, or bunker://…"]');

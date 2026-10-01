@@ -1,17 +1,20 @@
 // Disposable public feed cache. Budget is conservative UTF-16 storage bytes.
+// The feeds read most recently keep a full page; the rest keep a few seed
+// posts, so switching to any feed paints something before the relays answer.
 export const FEED_CACHE_POSTS = 30;
-const MAX_FEEDS = 4, MAX_UNITS = 256_000, MAX_AGE = 7 * 86400_000;
+export const FEED_SEED_POSTS = 5;
+const FULL_FEEDS = 4, MAX_FEEDS = 12, MAX_UNITS = 256_000, MAX_AGE = 7 * 86400_000;
 export function createFeedCache(storage, prefix, now = Date.now) {
   const keyOf = (id) => id === 'following' ? prefix : prefix + ':' + id;
-  const valid = (e) => e?.kind === 1 && typeof e.id === 'string' && typeof e.pubkey === 'string'
+  const valid = (e) => (e?.kind === 1 || e?.kind === 1068) && typeof e.id === 'string' && typeof e.pubkey === 'string'
     && typeof e.content === 'string' && Number.isFinite(e.created_at) && Array.isArray(e.tags);
-  function compact(notes) {
+  function compact(notes, max = FEED_CACHE_POSTS) {
     const kept = []; let size = 0;
     for (const e of (Array.isArray(notes) ? notes : []).filter(valid).sort((a, b) => b.created_at - a.created_at)) {
       const cost = JSON.stringify(e).length;
       if (size + cost > MAX_UNITS - 1000) continue;
       kept.push(e); size += cost;
-      if (kept.length === FEED_CACHE_POSTS) break;
+      if (kept.length === max) break;
     }
     return kept;
   }
@@ -23,19 +26,24 @@ export function createFeedCache(storage, prefix, now = Date.now) {
       try {
         const text = storage.getItem(key);
         const raw = JSON.parse(text);
-        const entry = Array.isArray(raw) ? { at: now(), notes: compact(raw) } : raw;
+        const entry = Array.isArray(raw) ? { at: now(), notes: raw } : raw;
         if (!entry || !Number.isFinite(entry.at) || now() - entry.at > MAX_AGE) entries.push({ key });
-        else entries.push({ key, text, value: { at: entry.at, notes: compact(entry.notes) } });
+        else entries.push({ key, text, entry });
       } catch { entries.push({ key }); }
     }
-    entries.sort((a, b) => (b.key === preferred) - (a.key === preferred) || (b.value?.at || 0) - (a.value?.at || 0));
+    // A feed that was read beats one only warmed in the background (seed).
+    entries.sort((a, b) => (b.key === preferred) - (a.key === preferred)
+      || (!a.entry?.seed) - (!b.entry?.seed) || (b.entry?.at || 0) - (a.entry?.at || 0));
     let units = 0, count = 0;
     for (const e of entries) {
-      const json = e.value && JSON.stringify(e.value);
+      const max = count < FULL_FEEDS && !e.entry?.seed ? FEED_CACHE_POSTS : FEED_SEED_POSTS;
+      const value = e.entry && { at: e.entry.at, notes: compact(e.entry.notes, max), ...(e.entry.seed ? { seed: true } : {}) };
+      const json = value && JSON.stringify(value);
       if (!json || count >= MAX_FEEDS || units + json.length > MAX_UNITS) storage.removeItem(e.key);
       else { if (e.text !== json) storage.setItem(e.key, json); units += json.length; count++; }
     }
   }
+  const peek = (id) => { try { return JSON.parse(storage.getItem(keyOf(id)) || 'null'); } catch { return null; } };
   return {
     read(id) {
       try {
@@ -48,6 +56,17 @@ export function createFeedCache(storage, prefix, now = Date.now) {
     },
     save(id, notes) {
       try { storage.setItem(keyOf(id), JSON.stringify({ at: now(), notes: compact(notes) })); sweep(keyOf(id)); } catch {}
+    },
+    // Whether a feed already has posts on disk (without counting as a read).
+    has: (id) => !!peek(id)?.notes?.length,
+    // A few posts fetched ahead for a feed not yet opened. Never replaces
+    // posts a read left behind, and ranks below every feed that was read.
+    seed(id, notes) {
+      try {
+        if (peek(id)?.notes?.length) return;
+        storage.setItem(keyOf(id), JSON.stringify({ at: now(), seed: true, notes: compact(notes, FEED_SEED_POSTS) }));
+        sweep(null);
+      } catch {}
     },
   };
 }

@@ -81,7 +81,7 @@ try {
   // quoting carries the post into the composer as a nostr: reference
   await page.evaluate(() => { const b = [...document.querySelectorAll('.note-act')].find((x) => x.getAttribute('aria-label') === 'Quote'); b.click(); });
   await sleep(900);
-  const draft = await page.evaluate(() => (document.querySelector('.chat-page textarea') || {}).value || '');
+  const draft = await page.evaluate(() => (document.querySelector('.chat-page coinos-text') || {}).value || '');
   check('quoting opens the composer with the reference in it', /nostr:nevent1/.test(draft), draft.slice(0, 40) || 'empty');
 
   // A reply can carry a picture, the same as a post can.

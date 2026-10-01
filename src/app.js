@@ -6,9 +6,11 @@
 
 import { Wallet, newMnemonic, isValidMnemonic, accountXpubFor, cacheKeyFor, utxoId, parseExtendedKey, xpubToZpub, encryptVault, decryptVault } from './wallet.js';
 import { qrSvg } from './qr.js';
+import './rich-text.js'; // <coinos-text>, the composers' field
 import { makeSearcher, resultRows, searchable, punkUrl, warmSearch } from './recipient-search.js';
 import { npubOf, seedPubkey, neventOf } from './nostr.js';
 import { nip98Header } from './nip98.js';
+import { uploadPublicMedia, MediaUploadError } from './media-upload.js';
 import { NOSTR_MARK } from './features/nostrlogin.js';
 import { scanQr } from './scan.js';
 import { dataSources, getSource, setSource, getNetwork, setNetwork, NETWORKS } from './api.js';
@@ -232,7 +234,10 @@ function morph(a, b) {
   // <details open> is the user's doing (the browser toggles the attribute on
   // click), like a field's value: a render that doesn't set `open` leaves it
   // alone instead of collapsing the section on every background repaint.
-  const userOwned = (at) => a.nodeName === 'DETAILS' && at.name === 'open';
+  // <coinos-text> sets its own editing attributes when it joins the page;
+  // the freshly built copy doesn't have them yet, and must not strip them
+  const userOwned = (at) => (a.nodeName === 'DETAILS' && at.name === 'open')
+    || (a.nodeName === 'COINOS-TEXT' && /^(contenteditable|role|aria-multiline|aria-placeholder|data-empty)$/.test(at.name));
   for (const at of [...a.attributes]) {
     if (b.hasAttribute(at.name) || userOwned(at)) continue;
     if (at.name === 'src' && b.hasAttribute('data-lazy-src')) continue; // the lazy source stands for it
@@ -259,6 +264,12 @@ function morph(a, b) {
       if (a.checked !== b.checked) a.checked = b.checked;
     }
     if (a.disabled !== b.disabled) a.disabled = b.disabled;
+  }
+  // the contenteditable field: its text is its value, owned like a
+  // textarea's — synced when not being edited, children never diffed
+  if (tag === 'COINOS-TEXT') {
+    if (document.activeElement !== a && a.value !== b.value) a.value = b.value;
+    return;
   }
   // innerHTML-authored subtrees (svg icons, QRs): compare source, not nodes
   if (b._html != null) {
@@ -561,12 +572,110 @@ setTimeout(() => { if (_bootDeciding) { _bootDeciding = false; render(); } }, 40
 function imageViewer() {
   if (!ui.lightbox) return null;
   const close = () => goBack(() => { ui.lightbox = null; });
-  return h('div', {
+  // a tap on the picture closes it too (the × is small and far) — unless
+  // it's zoomed, or the tap is half of a double-tap (see attachZoom)
+  const img = h('img', { src: ui.lightbox, alt: '', draggable: 'false' });
+  const box = h('div', {
     class: 'lightbox', onClick: close,
     role: 'dialog', 'aria-modal': 'true',
-  }, h('img', { src: ui.lightbox, alt: '', onClick: (e) => { e.stopPropagation(); close(); } }), // a tap on the picture closes it too: the × is small and far
+  }, img,
      // stop the bubble: the backdrop closes too, and two pops walk out of the room
      h('button', { class: 'lightbox-x', 'aria-label': t('close'), onClick: (e) => { e.stopPropagation(); close(); } }, '\u00d7'));
+  attachZoom(box, img, close);
+  return box;
+}
+// Pinch to zoom (up to 5×) around the fingers, drag to pan a zoomed picture,
+// double-tap (or double-click) to zoom in at a spot and again to reset, the
+// wheel to zoom on a desktop. The page's viewport meta turns browser zoom
+// off, so the picture does its own. Only the first-mounted nodes keep these
+// listeners: later renders morph into them, and the img is left out of the
+// morph so its transform survives a background render.
+function attachZoom(box, img, close) {
+  img._skipMorph = true;
+  const MAX = 5, pts = new Map();
+  let s = 1, x = 0, y = 0, pinch = null, pan = null, moved = false, lastTap = 0, tapTimer = 0;
+  const base = () => ({ bx: img.offsetLeft + img.offsetWidth / 2, by: img.offsetTop + img.offsetHeight / 2 });
+  const clamp = () => {
+    if (s <= 1) { s = 1; x = 0; y = 0; return; }
+    const mx = Math.max(0, (img.offsetWidth * s - window.innerWidth) / 2), my = Math.max(0, (img.offsetHeight * s - window.innerHeight) / 2);
+    x = Math.min(mx, Math.max(-mx, x)); y = Math.min(my, Math.max(-my, y));
+  };
+  const apply = (animate) => {
+    img.style.transition = animate ? 'transform .2s ease' : 'none';
+    img.style.transform = s === 1 && !x && !y ? '' : `translate(${x}px, ${y}px) scale(${s})`;
+    img.style.cursor = s > 1 ? 'grab' : '';
+  };
+  // scale to ns keeping the picture point under (cx, cy) where it is
+  const zoomAt = (ns, cx, cy) => {
+    const { bx, by } = base();
+    const px = (cx - bx - x) / s, py = (cy - by - y) / s;
+    s = Math.min(MAX, Math.max(1, ns));
+    x = cx - bx - px * s; y = cy - by - py * s;
+  };
+  box.addEventListener('pointerdown', (e) => {
+    if (e.target.closest('.lightbox-x')) return;
+    pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pts.size === 1) moved = false;
+    begin();
+  });
+  const begin = () => {
+    const p = [...pts.values()];
+    if (p.length >= 2) {
+      const { bx, by } = base();
+      const mx = (p[0].x + p[1].x) / 2, my = (p[0].y + p[1].y) / 2;
+      pinch = { d: Math.hypot(p[0].x - p[1].x, p[0].y - p[1].y) || 1, s, px: (mx - bx - x) / s, py: (my - by - y) / s };
+      pan = null;
+    } else if (p.length === 1) {
+      pinch = null;
+      pan = { sx: p[0].x, sy: p[0].y, x, y };
+    }
+  };
+  box.addEventListener('pointermove', (e) => {
+    if (!pts.has(e.pointerId)) return;
+    pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    const p = [...pts.values()];
+    if (pinch && p.length >= 2) {
+      const { bx, by } = base();
+      const d = Math.hypot(p[0].x - p[1].x, p[0].y - p[1].y);
+      const mx = (p[0].x + p[1].x) / 2, my = (p[0].y + p[1].y) / 2;
+      s = Math.min(MAX, Math.max(0.8, pinch.s * d / pinch.d)); // a little give below 1, snapped back on release
+      x = mx - bx - pinch.px * s; y = my - by - pinch.py * s;
+      moved = true;
+      apply(false);
+    } else if (pan && p.length === 1) {
+      const dx = p[0].x - pan.sx, dy = p[0].y - pan.sy;
+      if (Math.abs(dx) + Math.abs(dy) > 8) moved = true;
+      if (s > 1) { x = pan.x + dx; y = pan.y + dy; clamp(); apply(false); }
+    }
+  });
+  const end = (e) => {
+    if (!pts.delete(e.pointerId)) return;
+    if (pts.size) { begin(); return; } // one finger lifted mid-pinch: carry on as a pan
+    pinch = pan = null;
+    clamp(); apply(true);
+  };
+  box.addEventListener('pointerup', end);
+  box.addEventListener('pointercancel', end);
+  // a drag or a pinch is not a tap: nothing closes after one
+  box.addEventListener('click', (e) => {
+    if (moved) { moved = false; e.stopImmediatePropagation(); e.preventDefault(); return; }
+    if (e.target !== img) return;
+    e.stopPropagation();
+    const now = Date.now();
+    if (now - lastTap < 300) {
+      clearTimeout(tapTimer); lastTap = 0;
+      if (s > 1) { s = 1; x = 0; y = 0; } else { zoomAt(2.5, e.clientX, e.clientY); clamp(); }
+      apply(true);
+      return;
+    }
+    lastTap = now;
+    if (s === 1) tapTimer = setTimeout(close, 300);
+  }, true);
+  box.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    zoomAt(s * Math.exp(-e.deltaY * 0.002), e.clientX, e.clientY);
+    clamp(); apply(false);
+  }, { passive: false });
 }
 if (typeof window !== 'undefined') {
   window.addEventListener('keydown', (e) => { if (e.key === 'Escape' && ui.lightbox) goBack(() => { ui.lightbox = null; }); });
@@ -625,7 +734,7 @@ function renderInner() {
   // payment push, an SP scan) can't kick the user out of a field they're editing.
   const a = document.activeElement;
   let fpath = null, selStart = null, selEnd = null;
-  if (a && root.contains(a) && /^(INPUT|SELECT|TEXTAREA)$/.test(a.tagName)) {
+  if (a && root.contains(a) && /^(INPUT|SELECT|TEXTAREA|COINOS-TEXT)$/.test(a.tagName)) {
     fpath = focusPath(a);
     try { selStart = a.selectionStart; selEnd = a.selectionEnd; } catch {}
   }
@@ -681,12 +790,16 @@ function renderInner() {
     ui.navAnimSkip = false;
   }
   applyAnim(screen, 'anim-page', (performance.now() - _navAt) < 340 ? performance.now() - _navAt : -1);
-  morphChildren(root, [screen, footer(), ...(ui.lightbox ? [imageViewer()] : [])]);
+  // The bottom nav rides every page of a signed-in wallet and a visitor's
+  // public pages — never over sign-in, onboarding or the lock prompt.
+  const navPage = ui.pubProf || (activeAccount() && ['wallet', 'accounts', 'accountSettings'].includes(ui.screen) && !(ui.onb || onbInProgress()));
+  const bottomNav = navPage && !lockAsk && !_bootDeciding ? featureHook('bottomNav') : null;
+  morphChildren(root, [screen, footer(), ...(bottomNav ? [bottomNav] : []), ...(ui.lightbox ? [imageViewer()] : [])]);
   promoteLazySrc(root); // sources on the nodes that actually made it into the page
   try { document.documentElement.classList.toggle('no-scroll', !!ui.lightbox); } catch {}
   if (fpath) {
     const el = nodeAtPath(fpath);
-    if (el && el !== a && /^(INPUT|SELECT|TEXTAREA)$/.test(el.tagName)) {
+    if (el && el !== a && /^(INPUT|SELECT|TEXTAREA|COINOS-TEXT)$/.test(el.tagName)) {
       try { el.focus({ preventScroll: true }); if (selStart != null && el.setSelectionRange) el.setSelectionRange(selStart, selEnd); } catch {}
     }
   }
@@ -737,7 +850,7 @@ wallet.subscribe(scheduleRender);
 // lightbox: a full-screen photo is a place too — the phone's Back must close
 // it, not pop the screen under it (which once walked a viewer straight back
 // to the start page, so the photo's × then looked like a logout).
-const NAV_FIELDS = ['screen', 'tab', 'txDetail', 'arkMoveDetail', 'arkReconDetail', 'arkExitDetail', 'giftDetail', 'bump', 'giftMode', 'claimStep', 'chatOpen', 'msgView', 'feedId', 'arkCoinsPage', 'arkExitPage', 'msgCommunity', 'msgPeer', 'profilePk', 'profEdit', 'profEditFilled', 'profOverThread', 'settingsPage', 'nameEditOpen', 'noteThread', 'userSearch', 'zapSetup', 'hatShop', 'lightbox'];
+const NAV_FIELDS = ['screen', 'tab', 'txDetail', 'arkMoveDetail', 'arkReconDetail', 'arkExitDetail', 'giftDetail', 'bump', 'giftMode', 'claimStep', 'chatOpen', 'msgView', 'feedId', 'pubProf', 'arkCoinsPage', 'arkExitPage', 'msgCommunity', 'msgPeer', 'profilePk', 'profEdit', 'profEditFilled', 'profOverThread', 'settingsPage', 'nameEditOpen', 'noteThread', 'userSearch', 'zapSetup', 'hatShop', 'lightbox'];
 function navSnapshot() {
   const s = {};
   for (const f of NAV_FIELDS) s[f] = ui[f] ?? null;
@@ -1615,7 +1728,9 @@ async function activateAccount(acc, opts = {}) {
 // by the Accounts screen and the profile page.
 function signInAnother() {
   clearSeedDrafts();
-  ui.fromWallet = true; ui.unlockError = ''; ui.unlockTab = 'import'; ui.screen = 'unlock';
+  ui.fromWallet = true; ui.unlockError = ''; ui.screen = 'unlock';
+  // Starts on Create new (its Generate button), not the seed-import box.
+  ui.unlockTab = 'create'; ui.createStep = 'gen'; ui.draftMnemonic = ''; ui.confirm = [];
   ui.profilePk = null; ui.profEdit = null; ui.profEditFilled = false; ui.chatOpen = false;
   render();
 }
@@ -2488,23 +2603,6 @@ function lockBtn() {
   }, h('span', { style: 'font-size:15px;line-height:1;margin-right:6px' }, locked ? '\u{1F512}' : '\u{1F513}'), locked ? t('unlock') : t('lockWallet'));
 }
 
-// Messages sit one tap away, left of the wallet selector. The dot is presence,
-// not a count — it says "someone's waiting", and the chat list says who.
-function messagesBtn() {
-  const me = (featureHook('nostrLoginIdentity') || {}).pubkey || (wallet.nostrPubkey && wallet.nostrPubkey());
-  if (!me) return null;
-  const unread = featureHook('unreadMessages') || 0;
-  return h('button', {
-    class: 'header-msgs' + (unread ? ' unread' : ''),
-    title: t('msgDmsTitle'),
-    'aria-label': t('msgDmsTitle'),
-    onClick: () => { clearFeatureNav(); ui.screen = 'wallet'; ui.chatOpen = true; ui.msgView = 'home'; render(); },
-  }, h('span', {
-    class: 'hm-ico',
-    html: '<svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>',
-  }));
-}
-
 // Find anyone on nostr from the header — results open their profile.
 function searchBtn() {
   if (!featureHook('userSearchAvailable')) return null;
@@ -2539,7 +2637,6 @@ function brandHeader(withLock) {
     withLock
       ? h('div', { class: 'row gap6', style: 'align-items:center' },
           searchBtn(),
-          messagesBtn(),
           settingsBtn(),
           avatarMenu())
       : ui.pubProf && !acc ? visitorButtons() : null
@@ -2885,6 +2982,14 @@ function goHome() {
     ui.addrScan = false;
     ui.arkMoveOpen = false;
     ui.nameEditOpen = null;
+    // ...and every other page the history tracks (the vtxo list, a
+    // transaction's detail, the hat shop, a lightbox…): home is home,
+    // whatever was open. The chat's own position is kept for its next visit.
+    for (const f of NAV_FIELDS) {
+      if (['screen', 'tab', 'msgView', 'msgCommunity', 'msgPeer', 'feedId'].includes(f)) continue;
+      ui[f] = ['chatOpen', 'giftMode', 'profEditFilled', 'profOverThread'].includes(f) ? false : null;
+    }
+    ui.arkCoinsSel = null; ui.pos = null; ui.feedEdit = null; ui.feedMenu = null;
     ui.tab = wallet.offline ? 'settings' : 'history';
     ui.draft = null;
     ui.sendResult = null;
@@ -3368,19 +3473,44 @@ async function onbUpload(file) {
   const fd = new FormData();
   fd.append('file', file);
   const endpoint = 'https://nostr.build/api/v2/upload/files';
-  // nostr.build no longer takes anonymous uploads — sign with the wallet's
-  // nostr key, the one key that's always available without a signer prompt.
-  const headers = {};
-  try {
-    if (wallet.nostrPubkey && wallet.nostrPubkey()) {
-      headers.authorization = await nip98Header({ signEvent: (e) => wallet.nostrSign(e) }, endpoint, 'POST');
-    }
-  } catch {}
-  const r = await fetch(endpoint, { method: 'POST', body: fd, headers });
-  const j = await r.json();
-  const url = j?.data?.[0]?.url;
+  const authorization = await nip98Header({ signEvent: (event) => wallet.nostrSign(event) }, endpoint, 'POST');
+  const response = await fetch(endpoint, {
+    method: 'POST', body: fd, headers: { authorization }, signal: AbortSignal.timeout(60_000),
+  });
+  let body = null;
+  try { body = await response.json(); } catch {}
+  const url = response.ok && body?.data?.[0]?.url;
   if (!url) throw new Error(t('onbUploadFailed'));
   return url;
+}
+
+// ui.mediaProgress = { stage: 'shrink' | 'upload', pct } while a picture or
+// video is on its way; the composers draw it as a bar under the field.
+// A render per whole percent, no more.
+function mediaProgress(stage, fraction) {
+  const pct = Math.max(0, Math.min(100, Math.floor(fraction * 100)));
+  const cur = ui.mediaProgress;
+  if (cur && cur.stage === stage && cur.pct === pct) return;
+  ui.mediaProgress = { stage, pct };
+  render();
+}
+async function publicMediaUpload(file) {
+  try {
+    // a phone video is shrunk on the device first (see video-compress.js)
+    if (/^video\//.test(file?.type || '')) {
+      mediaProgress('shrink', 0);
+      const { compressVideo } = await import('./video-compress.js');
+      file = await compressVideo(file, (p) => mediaProgress('shrink', p));
+    }
+    mediaProgress('upload', 0);
+    return await uploadPublicMedia(file, (event) => wallet.nostrSign(event), { onProgress: (p) => mediaProgress('upload', p) });
+  } catch (error) {
+    if (error instanceof MediaUploadError && error.code === 'too-big') throw new Error(t('mediaUploadTooBig'));
+    if (error instanceof MediaUploadError && error.code === 'unsupported') throw new Error(t('mediaUploadUnsupported'));
+    throw new Error(t('msgUploadFailed'));
+  } finally {
+    ui.mediaProgress = null;
+  }
 }
 
 // Whether the wizard can offer Spending at all: an Ark-capable build on a
@@ -4846,7 +4976,7 @@ function destReady(a) {
 
 // Recipient search under the destination input: usernames and npubs resolve
 // to candidates with avatars; picking one runs the same path as pasting.
-const sendSearch = { rows: null, sync: null };
+const sendSearch = { rows: null, sync: null, pick: null, el: null };
 let sendRevealTimer = null;
 // With the phone keyboard up, the space under the recipient field is scarce —
 // park the field at the top of the view so the candidate list gets what's
@@ -4896,12 +5026,19 @@ function recipientRow(s, r, i) {
   };
   // The suggestions panel gets the same imperative treatment — see the
   // sendSearcher note: a render between key repeats kills backspace-hold.
-  const suggest = i === 0 ? h('div', { class: 'list send-suggest', style: 'display:none', 'data-fresh': '1' }) : null;
+  // One panel for the life of the page, rows rebuilt only when the results
+  // change: a background render must not swap the row under the pointer
+  // (a fresh node drops :hover, and the highlight blinked on every tick).
+  // data-fresh still installs this exact node wherever the morph lands it.
+  const suggest = i === 0 ? (sendSearch.el ||= h('div', { class: 'list send-suggest', style: 'display:none', 'data-fresh': '1' })) : null;
   const syncSuggest = () => {
     if (!suggest) return;
-    const show = sendSearch.rows && sendSearch.rows.length && searchable(r.address);
-    suggest.replaceChildren(...(show ? resultRows(h, sendSearch.rows, pickRecipient, (pk, node) => featureHook('wrapAvatar', pk, node)) : []));
-    suggest.style.display = show ? '' : 'none';
+    const show = !!(sendSearch.rows && sendSearch.rows.length && searchable(r.address));
+    const rows = show ? sendSearch.rows : null;
+    if (suggest._rows === rows) return;
+    suggest._rows = rows;
+    suggest.replaceChildren(...(rows ? resultRows(h, rows, (cand) => sendSearch.pick(cand), (pk, node) => featureHook('wrapAvatar', pk, node)) : []));
+    suggest.style.display = rows ? '' : 'none';
   };
   if (i === 0) sendSearch.sync = syncSuggest;
 
@@ -4996,6 +5133,7 @@ function recipientRow(s, r, i) {
     ) : null
   );
   syncCheck();
+  if (i === 0) sendSearch.pick = pickRecipient; // the persistent rows call this render's
   syncSuggest();
   return row;
 }
@@ -5628,9 +5766,10 @@ const ctx = {
   setAccount: (a, dir) => setAccountSel(a, dir),
   // Open (or create) a wallet from a mnemonic — used by nostr login.
   openMnemonic: async (mnemonic, passphrase, opts) => enterWallet(mnemonic, passphrase, opts),
-  // Upload an image (avatar) and get back its URL — the same signed
-  // nostr.build path the onboarding picker uses.
+  // Profile pictures retain the metadata-scrubbing image uploader. Public
+  // post media uses resilient Blossom storage and media-specific failures.
   uploadImage: (file) => onbUpload(file),
+  uploadMedia: (file) => publicMediaUpload(file),
   // A nostr login that lands mid-wizard: a restored wallet has been through
   // onboarding elsewhere, so the wizard ends without tour or prompts; a fresh
   // one falls through to the wallet + tour on the next render.

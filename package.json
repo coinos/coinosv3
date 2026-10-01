@@ -8,6 +8,7 @@
   "description": "coinos v3 — offline-capable, single-file self-custody Bitcoin wallet for the browser",
   "scripts": {
     "dev": "bun run dev.js",
+    "feed:serve": "bun run feed/server.js",
     "build": "bun run build.js",
     "build:minimal": "HAL_FEATURES=none bun run build.js"
   },

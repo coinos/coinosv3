@@ -6,6 +6,11 @@
 // localhost or from a phone over the LAN/Tailscale — no per-device config, no
 // CORS. HTTP backends by path prefix; WebSocket backends by exact path.
 
+import { startFeedCache } from './feed/service.js';
+import { snapshotResponse } from './feed/cache.js';
+
+const publicFeedCache = await startFeedCache();
+
 import { buildHtml, buildJsQr, buildNip46, buildVerifyWorker } from './build.js';
 
 const port = Number(process.env.PORT || 5173);
@@ -23,6 +28,7 @@ Bun.serve({
     try {
       const url = new URL(req.url);
       const path = url.pathname;
+      if (path === '/api/feed') return snapshotResponse(publicFeedCache, req);
       // WebSocket proxies (Fulcrum electrum, SP-indexer push) — upgrade + relay.
       if (WS_PROXY[path]) {
         if (server.upgrade(req, { data: { target: WS_PROXY[path] } })) return;

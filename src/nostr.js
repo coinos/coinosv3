@@ -55,7 +55,7 @@ const _verifySync = (events) => events.map((e) => { try { return verifyEvent(e);
 // Verify a batch; resolves to a boolean[] aligned to `events`. Off-thread when
 // the worker is available, else synchronous. Never resolves an event as valid
 // without an actual check.
-function verifyEventsAsync(events) {
+export function verifyEventsAsync(events) {
   if (!events.length) return Promise.resolve([]);
   const w = verifyWorker();
   if (!w) return Promise.resolve(_verifySync(events));

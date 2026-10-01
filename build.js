@@ -84,6 +84,9 @@ self.addEventListener('fetch', (e) => {
   // cached "unconfirmed"). Straight to network, always.
   if (/^\\/(esplora|sp|lnurlp|electrum)\\//.test(u.pathname) || u.pathname.startsWith('/.well-known/')) return;
 
+  // Feed snapshots have their own short HTTP lifetime; never freeze one in Cache Storage.
+  if (u.pathname === '/api/feed') return;
+
   if (req.mode === 'navigate') {
     e.respondWith(
       fetch(req)

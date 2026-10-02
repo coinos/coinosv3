@@ -5574,10 +5574,11 @@ export function messagesFeature(ctx) {
   // window unmounting the row and mounting it again, a quoted note loading.
   // Pinning the box alone left every one of those a muted restart.
   const unmutedClips = new Set();
-  // A feed box takes the clip's own shape when it's known, as wide as the
-  // column allows but never taller than three quarters of the screen.
+  // A feed box spans the column and takes the clip's own shape when it's
+  // known, never taller than three quarters of the screen; a tall clip sits
+  // in the middle of a black frame rather than in a strip at the left.
   const videoBoxStyle = (d) => d && d.width && d.height
-    ? `width:min(100%, calc(75vh * ${d.width} / ${d.height}));aspect-ratio:${d.width}/${d.height};max-height:none;object-fit:contain`
+    ? `width:100%;aspect-ratio:${d.width}/${d.height};max-height:75vh;object-fit:contain`
     : 'width:100%;aspect-ratio:16/9;object-fit:contain';
   function videoNode(url, { stable = false } = {}) {
     const loud = unmutedClips.has(url);

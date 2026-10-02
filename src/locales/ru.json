@@ -815,7 +815,7 @@
   "arkSendTitle": "Отправить",
   "arkSendHint": "Адрес ковчега, отправляется мгновенно вне сети, без платы за майнинг.",
   "arkPayTo": "To",
-  "arkNoFee": "Нет, мгновенный off-chain send",
+  "arkNoFee": "нет",
   "arkSendBtn": "Отправить",
   "arkSentTitle": "Отправлено!",
   "arkBoarded": "Посадили в ковчег",

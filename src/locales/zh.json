@@ -815,7 +815,7 @@
   "arkSendTitle": "发送",
   "arkSendHint": "方舟地址，立即发送出离链,不收取采矿费.",
   "arkPayTo": "改为:",
-  "arkNoFee": "无，即时下链发送",
+  "arkNoFee": "无",
   "arkSendBtn": "发送",
   "arkSentTitle": "发送!",
   "arkBoarded": "登入方舟号",

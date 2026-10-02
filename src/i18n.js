@@ -1273,7 +1273,7 @@ const STR = {
     arkLnExceedsSpending: 'That invoice asks for {need} but Spending holds {have}.',
     arkPayFromSpending: 'Ark payments come from your Spending balance. Switch to Spending to send this.',
     arkPayTo: 'To',
-    arkNoFee: 'none, instant off-chain send',
+    arkNoFee: 'none',
     arkSendBtn: 'Send',
     arkSentTitle: 'Sent!',
     arkBoarded: 'Boarded to Ark',

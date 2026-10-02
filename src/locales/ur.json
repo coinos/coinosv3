@@ -217,5 +217,9 @@
   "followHistRestored": "{n} فالو بحال ہو گئے۔",
   "securityTitle": "سیکیورٹی",
   "arkCoinsNone": "خرچ میں ابھی کوئی کوائن نہیں۔",
-  "profKeyLink": "پبلک کی"
+  "profKeyLink": "پبلک کی",
+  "feedRelaysFormHelp": "یہ فیڈ صرف ان ریلے سے پڑھیں۔ معمول کے ریلے کے لیے خالی چھوڑ دیں۔",
+  "feedAllToggle": "ان ریلے پر ہر پوسٹ (فائر ہوز)",
+  "feedAllCurated": "صرف مقبول پوسٹس: بوٹس اور بغیر ردعمل والی پوسٹس چھپائیں",
+  "feedAllNeedsRelays": "وہ ریلے بتائیں جن سے سب کچھ پڑھنا ہے۔"
 }

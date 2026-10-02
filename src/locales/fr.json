@@ -881,5 +881,9 @@
   "followHistRestored": "{n} abonnements restaurés.",
   "securityTitle": "Sécurité",
   "arkCoinsNone": "Aucune pièce dans Dépenses pour l’instant.",
-  "profKeyLink": "Clé publique"
+  "profKeyLink": "Clé publique",
+  "feedRelaysFormHelp": "Lire ce fil uniquement depuis ces relais. Laisser vide pour les relais habituels.",
+  "feedAllToggle": "Toutes les publications de ces relais (firehose)",
+  "feedAllCurated": "Seulement les publications populaires : masquer les bots et les publications sans réaction",
+  "feedAllNeedsRelays": "Indiquez les relais dont tout lire."
 }

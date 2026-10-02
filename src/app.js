@@ -795,7 +795,7 @@ function renderInner() {
   // ui field that decides which page is on screen.
   const navKey = [ui.screen, ui.tab === 'settings', ui.chatOpen, ui.msgView, ui.msgPeer, ui.msgCommunity,
     ui.profilePk, ui.settingsPage, ui.addrScan, ui.arkExitPage, ui.txDetail, ui.giftMode, ui.claimStep, ui.nameEditOpen,
-    ui.noteThread && ui.noteThread.focusId, !!ui.userSearch, !!ui.zapSetup, !!ui.hatShop].join('|');
+    ui.noteThread && ui.noteThread.focusId, !!ui.userSearch, !!ui.zapSetup, !!ui.hatShop, !!ui.feedEdit, ui.settingsView].join('|');
   // A deep-linked profile landing is ONE page settling, not a chain of
   // navigations: boot screens shuffle beneath the shell (unlock → restored
   // wallet), then the resolved profile replaces the shell in place. The key
@@ -868,7 +868,7 @@ wallet.subscribe(scheduleRender);
 // lightbox: a full-screen photo is a place too — the phone's Back must close
 // it, not pop the screen under it (which once walked a viewer straight back
 // to the start page, so the photo's × then looked like a logout).
-const NAV_FIELDS = ['screen', 'tab', 'txDetail', 'arkMoveDetail', 'arkReconDetail', 'arkExitDetail', 'giftDetail', 'bump', 'giftMode', 'claimStep', 'chatOpen', 'msgView', 'feedId', 'pubProf', 'arkCoinsPage', 'arkExitPage', 'msgCommunity', 'msgPeer', 'profilePk', 'profEdit', 'profEditFilled', 'profOverThread', 'settingsPage', 'nameEditOpen', 'noteThread', 'userSearch', 'zapSetup', 'hatShop', 'lightbox'];
+const NAV_FIELDS = ['screen', 'tab', 'txDetail', 'arkMoveDetail', 'arkReconDetail', 'arkExitDetail', 'giftDetail', 'bump', 'giftMode', 'claimStep', 'chatOpen', 'msgView', 'feedId', 'pubProf', 'arkCoinsPage', 'arkExitPage', 'msgCommunity', 'msgPeer', 'profilePk', 'profEdit', 'profEditFilled', 'profOverThread', 'settingsPage', 'nameEditOpen', 'noteThread', 'userSearch', 'zapSetup', 'hatShop', 'lightbox', 'feedEdit', 'settingsView'];
 function navSnapshot() {
   const s = {};
   for (const f of NAV_FIELDS) s[f] = ui[f] ?? null;
@@ -877,6 +877,7 @@ function navSnapshot() {
   // keystroke must never mint a history entry.
   if (ui.noteThread) s.noteThread = { rootId: ui.noteThread.rootId, focusId: ui.noteThread.focusId, seed: ui.noteThread.seed };
   if (ui.userSearch) s.userSearch = { q: '', rows: null };
+  if (ui.feedEdit) s.feedEdit = { ...ui.feedEdit, q: '', rows: null, pq: '', packRows: null, pt: null };
   if (ui.zapSetup) s.zapSetup = { pk: ui.zapSetup.pk, npub: ui.zapSetup.npub, eventId: ui.zapSetup.eventId, amount: '21' };
   // Keep the editable fields in this history entry so a refresh restores the
   // draft. Copy them: later keystrokes must not mutate earlier snapshots.
@@ -970,7 +971,7 @@ function restoreNavFromHistory(renderNow = true) {
     // the vault prompt); with an account open now, those screens are stale.
     // Restoring one painted the start page over a perfectly good wallet.
     if (['unlock', 'vault'].includes(nav.screen) && activeAccount()) nav.screen = 'wallet';
-    for (const f of NAV_FIELDS) if (f in nav) ui[f] = f === 'profEdit' && nav[f] ? structuredClone(nav[f]) : nav[f];
+    for (const f of NAV_FIELDS) if (f in nav) ui[f] = (f === 'profEdit' || f === 'feedEdit') && nav[f] ? structuredClone(nav[f]) : nav[f];
     ui.lightbox = null; nav.lightbox = null; // an object URL doesn't survive a reload
     navStack = [nav];
     navIndex = 0;
@@ -997,7 +998,7 @@ window.addEventListener('popstate', (e) => {
   }
   restoringHistory = true;
   try {
-    for (const f of NAV_FIELDS) ui[f] = f === 'profEdit' && snap[f] ? structuredClone(snap[f]) : f in snap ? snap[f] : null;
+    for (const f of NAV_FIELDS) ui[f] = (f === 'profEdit' || f === 'feedEdit') && snap[f] ? structuredClone(snap[f]) : f in snap ? snap[f] : null;
     if (st && typeof st.i === 'number') navIndex = st.i;
     else { const i = navStack.findIndex((s) => navSig(s) === navSig(snap)); if (i >= 0) navIndex = i; }
     render();

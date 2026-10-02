@@ -964,11 +964,14 @@ html.no-scroll { overflow: hidden; scrollbar-gutter: auto; }
    side shadows carry the tint through the list's padding to its edges. */
 .notes-feed > .row { transition: background-color 3s ease-out, box-shadow 3s ease-out; }
 .notes-feed > .row.note-fresh {
-  --fresh-bg: color-mix(in srgb, var(--green) 9%, var(--paper));
+  /* 9% was a whisper on white; dark mode keeps it (the green carries more there) */
+  --fresh-bg: color-mix(in srgb, var(--green) 16%, var(--paper));
   background-color: var(--fresh-bg);
   box-shadow: -14px 0 0 var(--fresh-bg), 14px 0 0 var(--fresh-bg);
 }
 
+
+:root[data-theme="dark"] .notes-feed > .row.note-fresh { --fresh-bg: color-mix(in srgb, var(--green) 9%, var(--paper)); }
 
 /* Inline move-money panel on the balance card. */
 .balance-move { gap: 10px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); text-align: left; }

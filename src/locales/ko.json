@@ -880,5 +880,9 @@
   "followHistRestored": "팔로우 {n}명을 복원했습니다.",
   "securityTitle": "보안",
   "arkCoinsNone": "지출에 아직 코인이 없습니다.",
-  "profKeyLink": "공개 키"
+  "profKeyLink": "공개 키",
+  "feedRelaysFormHelp": "이 피드를 이 릴레이에서만 읽습니다. 비워 두면 평소 릴레이를 씁니다.",
+  "feedAllToggle": "이 릴레이의 모든 게시물 (파이어호스)",
+  "feedAllCurated": "인기 게시물만: 봇과 반응 없는 게시물 숨기기",
+  "feedAllNeedsRelays": "모두 읽어 올 릴레이를 지정하세요."
 }

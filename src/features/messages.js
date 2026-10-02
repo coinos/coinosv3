@@ -8894,8 +8894,10 @@ export function messagesFeature(ctx) {
     const isNew = !def || adhocFeeds.has(def.id);
     ui.feedEdit = def
       ? { id: def.id, name: def.name || '', follows: !!def.follows, authors: [...(def.authors || [])], priv: [...(def.priv || [])], packs: [...(def.packs || [])],
-          topics: feedTopics(def).map((x) => '#' + x).join(' '), q: '', rows: null, pq: '', packRows: null, isNew, d: def.d || null, publish: isNew || !!def.d }
-      : { id: null, name: '', follows: false, authors: [], priv: [], packs: [], topics: '', q: '', rows: null, pq: '', packRows: null, isNew: true, d: null, publish: true };
+          topics: feedTopics(def).map((x) => '#' + x).join(' '), q: '', rows: null, pq: '', packRows: null, isNew, d: def.d || null, publish: isNew || !!def.d,
+          relays: (def.relays || []).map((r) => r.replace(/^wss:\/\//, '')).join(' '), all: !!def.all && !def.builtin, curated: !!def.curated }
+      : { id: null, name: '', follows: false, authors: [], priv: [], packs: [], topics: '', q: '', rows: null, pq: '', packRows: null, isNew: true, d: null, publish: true,
+          relays: '', all: false, curated: false };
     render();
   }
   const feedPeopleSearcher = makeSearcher((q, rows) => {
@@ -8907,12 +8909,20 @@ export function messagesFeature(ctx) {
     const e = ui.feedEdit;
     if (!e) return;
     const topics = [...new Set(e.topics.split(/[\s,]+/).map(normTopic).filter(Boolean))].slice(0, 20);
-    if (!e.follows && !e.authors.length && !e.packs.length && !topics.length) { toast(t('feedNoQuery')); return; }
-    const name = e.name.trim().slice(0, 40) || (topics.length ? '#' + topics[0] : t('feedNewName'));
+    const words = String(e.relays || '').split(/[\s,]+/).filter(Boolean);
+    const relays = [...new Set(words.map(normRelay).filter(Boolean))].slice(0, 12);
+    if (relays.length < words.length) { toast(t('feedRelayBad')); return; }
+    // every post on its relays: a firehose needs the relays, nothing else
+    if (e.all && !relays.length) { toast(t('feedAllNeedsRelays')); return; }
+    if (!e.all && !e.follows && !e.authors.length && !e.packs.length && !topics.length) { toast(t('feedNoQuery')); return; }
+    const name = e.name.trim().slice(0, 40) || (e.all ? relays[0].replace(/^wss:\/\//, '') : topics.length ? '#' + topics[0] : t('feedNewName'));
     const s = st();
     const keep = e.id && !adhocFeeds.has(e.id) && s.feeds.some((f) => f.id === e.id);
     const id = keep ? e.id : 'f' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-    const def = { id, name, follows: e.follows, authors: e.authors.slice(0, FEED_AUTHORS_MAX), packs: e.packs.slice(0, 20), topics, at: Date.now() };
+    const def = e.all
+      ? { id, name, follows: false, authors: [], packs: [], topics: [], all: true, curated: !!e.curated, relays, at: Date.now() }
+      : { id, name, follows: e.follows, authors: e.authors.slice(0, FEED_AUTHORS_MAX), packs: e.packs.slice(0, 20), topics, relays, all: false, curated: false, at: Date.now() };
+    if (!relays.length) delete def.relays;
     const prev = keep ? s.feeds.find((f) => f.id === id) : null;
     // d, listAt, listContent and priv ride along from the previous copy
     if (keep) s.feeds = s.feeds.map((f) => (f.id === id ? { ...f, ...def } : f)); else s.feeds.push(def);
@@ -9008,7 +9018,19 @@ export function messagesFeature(ctx) {
       h('label', { class: 'col', style: 'gap:4px' },
         h('span', { class: 'small muted' }, t('feedName')),
         h('input', { type: 'text', value: e.name, placeholder: t('feedNameHint'), maxlength: '40', onInput: (ev) => { e.name = ev.target.value; } })),
-      h('div', { class: 'col', style: 'gap:8px' },
+      // where the feed reads, and whether it takes everything there
+      h('div', { class: 'col', style: 'gap:6px' },
+        h('span', { class: 'small muted' }, t('feedRelays')),
+        h('input', { type: 'text', class: 'feed-relays-input', value: e.relays || '', placeholder: 'nos.lol relay.damus.io',
+          autocapitalize: 'none', autocomplete: 'off', spellcheck: 'false', onInput: (ev) => { e.relays = ev.target.value; } }),
+        h('div', { class: 'small faint' }, t('feedRelaysFormHelp')),
+        h('label', { class: 'row gap6', style: 'align-items:center;cursor:pointer' },
+          h('input', { type: 'checkbox', class: 'feed-all-toggle', checked: !!e.all, style: 'width:18px;height:18px;accent-color:var(--accent);margin:0', onChange: (ev) => { e.all = ev.target.checked; render(); } }),
+          h('span', {}, t('feedAllToggle'))),
+        e.all ? h('label', { class: 'row gap6', style: 'align-items:center;cursor:pointer;margin-left:26px' },
+          h('input', { type: 'checkbox', checked: !!e.curated, style: 'width:18px;height:18px;accent-color:var(--accent);margin:0', onChange: (ev) => { e.curated = ev.target.checked; } }),
+          h('span', { class: 'small' }, t('feedAllCurated'))) : null),
+      e.all ? null : h('div', { class: 'col', style: 'gap:8px' },
         h('span', { class: 'small muted' }, t('feedPeople')),
         h('label', { class: 'row gap6', style: 'align-items:center;cursor:pointer' },
           h('input', { type: 'checkbox', checked: e.follows, style: 'width:18px;height:18px;accent-color:var(--accent);margin:0', onChange: (ev) => { e.follows = ev.target.checked; render(); } }),
@@ -9030,7 +9052,7 @@ export function messagesFeature(ctx) {
               e.authors.push(r.pk); e.q = ''; e.rows = null; render();
             }, (pk, node) => hook('wrapAvatar', pk, node)))
           : null),
-      h('div', { class: 'col', style: 'gap:8px' },
+      e.all ? null : h('div', { class: 'col', style: 'gap:8px' },
         h('span', { class: 'small muted' }, t('feedPacks')),
         ...e.packs.map((p) => packRow(p, null,
           h('button', { class: 'btn-sm', type: 'button', 'aria-label': t('remove'), onClick: () => { e.packs = e.packs.filter((x) => packKey(x) !== packKey(p)); render(); } }, '\u00d7'))),
@@ -9045,12 +9067,12 @@ export function messagesFeature(ctx) {
           e.pq = ''; e.packRows = null; render();
         })),
         e.packRows && !e.packRows.length ? h('div', { class: 'small faint' }, t('searchNoResults')) : null),
-      h('label', { class: 'col', style: 'gap:4px' },
+      e.all ? null : h('label', { class: 'col', style: 'gap:4px' },
         h('span', { class: 'small muted' }, t('feedTopics')),
         h('input', { type: 'text', value: e.topics, placeholder: t('feedTopicsHint'), autocapitalize: 'none', autocomplete: 'off', onInput: (ev) => { e.topics = ev.target.value; } }),
         h('div', { class: 'small faint' }, t('feedTopicsHelp'))),
       // a feed of people is a nostr list (NIP-51 follow set) unless told not to be
-      e.authors.length || (e.priv || []).length || e.d
+      !e.all && (e.authors.length || (e.priv || []).length || e.d)
         ? h('div', { class: 'col', style: 'gap:4px' },
             h('label', { class: 'row gap6', style: 'align-items:center;cursor:pointer' },
               h('input', { type: 'checkbox', class: 'feed-list-toggle', checked: !!e.publish, style: 'width:18px;height:18px;accent-color:var(--accent);margin:0', onChange: (ev) => { e.publish = ev.target.checked; } }),

@@ -881,5 +881,9 @@
   "followHistRestored": "{n}人のフォローを復元しました。",
   "securityTitle": "セキュリティ",
   "arkCoinsNone": "支出にはまだコインがありません。",
-  "profKeyLink": "公開鍵"
+  "profKeyLink": "公開鍵",
+  "feedRelaysFormHelp": "このフィードはこれらのリレーからだけ読み込みます。空欄ならいつものリレーです。",
+  "feedAllToggle": "これらのリレーのすべての投稿（ファイアホース）",
+  "feedAllCurated": "人気の投稿のみ：ボットと反応のない投稿を隠す",
+  "feedAllNeedsRelays": "すべてを読み込むリレーを指定してください。"
 }

@@ -881,5 +881,9 @@
   "followHistRestored": "已恢复 {n} 个关注。",
   "securityTitle": "安全",
   "arkCoinsNone": "支出账户中还没有币。",
-  "profKeyLink": "公钥"
+  "profKeyLink": "公钥",
+  "feedRelaysFormHelp": "仅从这些中继读取此动态。留空则使用常用中继。",
+  "feedAllToggle": "这些中继上的每一条帖子（全量流）",
+  "feedAllCurated": "仅热门帖子：隐藏机器人和无人互动的帖子",
+  "feedAllNeedsRelays": "请填写要读取全部内容的中继。"
 }

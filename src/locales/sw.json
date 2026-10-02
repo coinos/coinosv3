@@ -217,5 +217,9 @@
   "followHistRestored": "Umerejesha unaowafuata {n}.",
   "securityTitle": "Usalama",
   "arkCoinsNone": "Bado hakuna sarafu kwenye Matumizi.",
-  "profKeyLink": "Ufunguo wa umma"
+  "profKeyLink": "Ufunguo wa umma",
+  "feedRelaysFormHelp": "Soma mlisho huu kutoka relay hizi tu. Acha tupu kwa zile za kawaida.",
+  "feedAllToggle": "Kila chapisho kwenye relay hizi (firehose)",
+  "feedAllCurated": "Machapisho maarufu tu: ficha boti na machapisho yasiyo na majibu",
+  "feedAllNeedsRelays": "Taja relay za kusoma kila kitu."
 }

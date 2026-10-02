@@ -881,5 +881,9 @@
   "followHistRestored": "{n} Follows wiederhergestellt.",
   "securityTitle": "Sicherheit",
   "arkCoinsNone": "Noch keine Coins in Ausgaben.",
-  "profKeyLink": "Öffentlicher Schlüssel"
+  "profKeyLink": "Öffentlicher Schlüssel",
+  "feedRelaysFormHelp": "Diesen Feed nur von diesen Relays lesen. Leer lassen für die üblichen.",
+  "feedAllToggle": "Jeder Beitrag auf diesen Relays (Firehose)",
+  "feedAllCurated": "Nur beliebte Beiträge: Bots und Beiträge ohne Reaktionen ausblenden",
+  "feedAllNeedsRelays": "Nenne die Relays, von denen alles gelesen werden soll."
 }

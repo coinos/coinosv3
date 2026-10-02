@@ -217,5 +217,9 @@
   "followHistRestored": "{n} ikutan dipulihkan.",
   "securityTitle": "Keamanan",
   "arkCoinsNone": "Belum ada koin di Belanja.",
-  "profKeyLink": "Kunci publik"
+  "profKeyLink": "Kunci publik",
+  "feedRelaysFormHelp": "Baca feed ini hanya dari relay ini. Kosongkan untuk relay biasa.",
+  "feedAllToggle": "Setiap postingan di relay ini (firehose)",
+  "feedAllCurated": "Hanya postingan populer: sembunyikan bot dan postingan tanpa reaksi",
+  "feedAllNeedsRelays": "Sebutkan relay untuk membaca semuanya."
 }

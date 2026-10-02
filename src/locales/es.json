@@ -881,5 +881,9 @@
   "followHistRestored": "Se restauraron {n} seguidos.",
   "securityTitle": "Seguridad",
   "arkCoinsNone": "Aún no hay monedas en Gastos.",
-  "profKeyLink": "Clave pública"
+  "profKeyLink": "Clave pública",
+  "feedRelaysFormHelp": "Lee este feed solo de estos relays. Déjalo vacío para usar los habituales.",
+  "feedAllToggle": "Todas las publicaciones de estos relays (firehose)",
+  "feedAllCurated": "Solo publicaciones populares: oculta bots y publicaciones sin reacciones",
+  "feedAllNeedsRelays": "Indica los relays de los que leerlo todo."
 }

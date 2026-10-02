@@ -217,5 +217,9 @@
   "followHistRestored": "Đã khôi phục {n} người theo dõi.",
   "securityTitle": "Bảo mật",
   "arkCoinsNone": "Chưa có coin nào trong Chi tiêu.",
-  "profKeyLink": "Khóa công khai"
+  "profKeyLink": "Khóa công khai",
+  "feedRelaysFormHelp": "Chỉ đọc bảng tin này từ các relay này. Để trống để dùng relay thường dùng.",
+  "feedAllToggle": "Mọi bài đăng trên các relay này (firehose)",
+  "feedAllCurated": "Chỉ bài phổ biến: ẩn bot và bài không ai tương tác",
+  "feedAllNeedsRelays": "Hãy nêu các relay để đọc mọi thứ."
 }

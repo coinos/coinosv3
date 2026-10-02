@@ -880,5 +880,9 @@
   "followHistRestored": "{n} takip geri yüklendi.",
   "securityTitle": "Güvenlik",
   "arkCoinsNone": "Harcama’da henüz coin yok.",
-  "profKeyLink": "Açık anahtar"
+  "profKeyLink": "Açık anahtar",
+  "feedRelaysFormHelp": "Bu akışı yalnızca bu rölelerden oku. Her zamankiler için boş bırak.",
+  "feedAllToggle": "Bu rölelerdeki her gönderi (firehose)",
+  "feedAllCurated": "Yalnızca popüler gönderiler: botları ve tepki almamış gönderileri gizle",
+  "feedAllNeedsRelays": "Her şeyin okunacağı röleleri yaz."
 }

@@ -91,6 +91,15 @@ try {
   assert.match(st.text, /Security/); assert.match(st.text, /Lock wallet/); assert.match(st.text, /Recovery phrase/);
   await page.screenshot({ path: '/tmp/gear-settings.png', fullPage: true });
   console.log('✓ The Spending gear opens its settings: coins, the exit cost (gone from home), lock and recovery phrase');
+  // its co-operative exit opens the move form on the wallet (it used to flip
+  // the Send tab behind the settings page and seem to do nothing)
+  await coopButton();
+  await page.waitForSelector('input.mono-input', { timeout: 3000 });
+  assert.equal(await page.evaluate(() => coopApp.ui.screen), 'wallet');
+  assert.equal(await page.$eval('input.mono-input', (e) => e.value), await page.evaluate(() => coopApp.wallet.freshReceive().address));
+  assert.deepEqual(await page.evaluate(() => coopCalls), [], 'opening the form never starts an exit');
+  console.log('✓ From the Spending settings, the co-operative exit opens its form, prefilled to Savings');
+  await page.evaluate(() => { coopApp.ui.arkOffboardSend = null; coopApp.ui.tab = 'receive'; coopApp.render(); });
   await page.evaluate(() => { window.forceArkReady = false; coopApp.wallet.saveFeatureState('arkDepth', null); coopApp.ui.screen = 'wallet'; coopApp.render(); });
 
   await manage();

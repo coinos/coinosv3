@@ -135,6 +135,9 @@ function showSend({ fresh = false } = {}) {
   ui.bump = null;
   ui.sendError = '';
   if (fresh) clearSend();
+  // the Send tab lives on the wallet screen: from a page like Spending's
+  // settings (its co-operative exit) the tab flipped out of sight
+  ui.screen = 'wallet';
   ui.tab = 'send';
 }
 

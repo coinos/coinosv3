@@ -666,7 +666,15 @@ export function messagesFeature(ctx) {
   // Pull the picture bytes into the HTTP cache the moment we learn the URL —
   // an avatar div then paints instantly instead of holding its quiet circle
   // while the image downloads.
-  const preloadPicture = (p) => { try { if (p?.picture) new Image().src = localPunk(p.picture) || (p.thumbFor === p.picture && p.thumb) || p.picture; } catch {} };
+  const preloadPicture = (p, big = false) => {
+    try {
+      if (!p?.picture) return;
+      const image = new Image();
+      image.src = big ? localPunk(p.picture, true) || p.picture
+        : localPunk(p.picture) || (p.thumbFor === p.picture && p.thumb) || p.picture;
+      if (big) image.decode().catch(() => {});
+    } catch {}
+  };
 
   // A profile picture is whatever its owner uploaded, and that is very often
   // the full-size original: among the faces this wallet had cached, one was a
@@ -2947,13 +2955,18 @@ export function messagesFeature(ctx) {
     // `loading` is different and still gets the quiet circle: a name lookup
     // is in flight for that specific person, so a picture is expected and
     // punk art must not flash in front of it.
-    // A face still being looked up gets a quiet circle for a second at
-    // most, then its punk — a picture found later replaces it.
-    const waiting = (p === null || (p && p.loading && !p.picture)) && faceWaiting(pk);
+    // Small faces wait at most a second. An unknown payment portrait stays
+    // hidden until its lookup settles; suggestions warm the real photo
+    // before selection. A name-only search placeholder can retain `loading`
+    // after a miss; the request state lets
+    // it fall back once we've finished looking.
+    const sendFace = cls.includes('send-avatar');
+    const waiting = (p === null || (p && p.loading && !p.picture))
+      && (sendFace ? p === null || profQueue.has(pk) || profInFlight.has(pk) : faceWaiting(pk));
     const node = feedPaint && !p.picture
       ? h('div', { class: cls + ' fallback' }, (p.name || npubOf(pk) || '??').slice(0, 2))
-      : waiting && (p || ui.noteThread || (ui.chatOpen && ui.msgView === 'room'))
-        ? h('div', { class: cls + ' fallback loading' })
+      : waiting && (sendFace || p || ui.noteThread || (ui.chatOpen && ui.msgView === 'room'))
+        ? h('div', { class: cls + ' fallback loading', style: sendFace ? 'visibility:hidden' : undefined })
       : p && p.loading && !p.picture
         ? fallbackAvatar(h, pk, p.name, cls)
       : p === null
@@ -9942,6 +9955,29 @@ export function messagesFeature(ctx) {
     // The light profile cache, read-only — lets the onboarding wizard skip
     // asks (like the avatar picker) that a loaded identity already answered.
     cachedProfile(pk) { return profileOf(pk); },
+    // Search results have their own profile cache. Hand the known name and
+    // photo to the portrait cache before drawing the suggestions, instead
+    // of throwing them away and waiting for another relay lookup on pick.
+    warmRecipient(cand) {
+      const pk = cand?.pk;
+      if (!/^[0-9a-f]{64}$/.test(pk || '')) return;
+      warmProfiles();
+      const cur = profiles.get(pk);
+      const entry = keepThumb(pk, {
+        ...(cur || {}), name: cur?.name || cand.name || null,
+        picture: cur?.picture || cand.picture || null,
+        t: cur?.t || 0,
+      });
+      if (entry.picture) delete entry.loading;
+      else if (!cur || cur.loading) entry.loading = true;
+      profiles.set(pk, entry);
+      persistProfile(pk, entry);
+      preloadPicture(entry, true);
+      // Search data is partial: fetch payment metadata in the background
+      // while the already-known picture is immediately available.
+      profileOf(pk);
+      return true;
+    },
     // Start fetching a profile (and its picture bytes) NOW — the login flow
     // calls this the moment it knows the identity, so the avatar is already
     // in cache by the time the home screen first paints.

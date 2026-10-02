@@ -8,6 +8,7 @@ import { generateSecretKey, getPublicKey } from 'nostr-tools/pure';
 import { npubEncode } from 'nostr-tools/nip19';
 import { cacheKeyFor } from '../src/wallet.js';
 const peer = getPublicKey(generateSecretKey()), nextPeer = getPublicKey(generateSecretKey());
+const searchPeer = getPublicKey(generateSecretKey());
 const bundle = await Bun.build({ entrypoints: ['src/app.js'], target: 'browser', minify: true,
   plugins: [{ name: 'profile-actions-test', setup(build) {
     build.onLoad({ filter: /src\/app\.js$/ }, async ({ path }) => ({ loader: 'js', contents: await Bun.file(path).text() + `
@@ -20,6 +21,7 @@ window.profileActions = { ui, wallet, render, showSend, enterWallet,
 assert(bundle.success, bundle.logs.join('\n'));
 const html = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>${await Bun.file('src/style.css').text()}</style><div id="app"></div><script type="module">${await bundle.outputs[0].text()}</script>`;
 const server = Bun.serve({ port: 0, fetch(req) {
+  if (new URL(req.url).pathname === '/recipient-portrait.svg') return new Response('<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96"><rect width="96" height="96" fill="#2685c8"/><circle cx="48" cy="40" r="22" fill="#ffcc77"/></svg>', { headers: { 'Content-Type': 'image/svg+xml', 'Cache-Control': 'public, max-age=3600' } });
   if (/^\/punks\/\d+\.webp$/.test(new URL(req.url).pathname)) return new Response(Bun.file('static' + new URL(req.url).pathname));
   return new URL(req.url).pathname === '/' || new URL(req.url).pathname.startsWith('/npub1')
     ? new Response(html, { headers: { 'Content-Type': 'text/html' } }) : new Response(null, { status: 404 });
@@ -36,6 +38,9 @@ try {
   await page.setRequestInterception(true);
   page.on('request', (r) => r.url().startsWith(server.url.origin) || r.url().startsWith('data:') ? r.continue() : r.abort());
   await page.evaluateOnNewDocument(() => { localStorage.setItem('btc-wallet-network', 'regtest'); localStorage.setItem('btc-wallet-ark-provider:regtest', 'off'); });
+  await page.evaluateOnNewDocument((pk) => localStorage.setItem('btc-wallet-search-queries-v2', JSON.stringify({
+    carol: { t: Date.now(), rows: [{ pk, name: 'Carol', picture: '/recipient-portrait.svg', pri: 1 }] },
+  })), searchPeer);
   await page.goto(server.url.href, { waitUntil: 'domcontentloaded' });
   await page.waitForFunction(() => window.profileActions?.ready);
   const mnemonic = generateMnemonic(wordlist);
@@ -50,6 +55,29 @@ try {
     profileActions.render();
   }, mnemonic);
   await page.waitForSelector('.app-bottom-nav');
+  // Search owns a separate profile cache. A cold portrait cache must inherit
+  // the suggestion's metadata and fetch the large image before selection.
+  await page.evaluate(() => { profileActions.showSend({ fresh: true }); profileActions.render(); });
+  const portraitResponse = page.waitForResponse(r => r.url().endsWith('/recipient-portrait.svg'));
+  await page.type('input.mono-input', 'carol');
+  await page.waitForSelector('.send-suggest .ava-img');
+  await portraitResponse;
+  await page.evaluate(() => {
+    window.recipientFrames = [];
+    const record = () => {
+      const a = document.querySelector('.send-avatar');
+      if (a) recipientFrames.push({ punk: !!a.querySelector('.punk'), hidden: getComputedStyle(a).visibility === 'hidden', picture: a.style.backgroundImage });
+    };
+    window.recipientObserver = new MutationObserver(record);
+    recipientObserver.observe(document.querySelector('#app'), { subtree: true, childList: true, attributes: true });
+  });
+  await page.click('.send-suggest .chat-thread-row');
+  await page.waitForSelector('.send-avatar');
+  assert.equal(await page.$eval('input.mono-input', e => e.value), npubEncode(searchPeer));
+  assert(await page.$eval('.send-avatar', e => e.classList.contains('ava-img') && e.style.backgroundImage.includes('/recipient-portrait.svg') && getComputedStyle(e).visibility !== 'hidden'), 'selection immediately uses the already-fetched suggestion portrait');
+  assert(await page.evaluate(() => recipientFrames.length > 0 && recipientFrames.every(f => !f.punk && !f.hidden && f.picture.includes('/recipient-portrait.svg'))), 'every selected-recipient frame has the real avatar, without fallback or placeholder');
+  await page.evaluate(() => recipientObserver.disconnect());
+  console.log('✓ Autosuggest warms the large recipient picture before selection and displays it immediately');
   const openProfile = async (pk) => {
     await page.evaluate((pk) => profileActions.openProfile(pk), pk);
     await page.waitForSelector('.prof-actions');

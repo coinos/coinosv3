@@ -5012,6 +5012,9 @@ function parkSendField() {
 // input for a fresh node, which resets Android's keyboard session and cancels
 // key auto-repeat — holding backspace deleted one character per press.
 const sendSearcher = makeSearcher((q, rows) => {
+  // Suggestions already know the person's picture. Share that profile and
+  // warm the large portrait before a selection can paint the Send form.
+  for (const cand of rows || []) featureHook('warmRecipient', cand);
   sendSearch.rows = rows;
   if (sendSearch.sync) sendSearch.sync(); else render();
   if (rows && rows.length) setTimeout(parkSendField, 50);
@@ -5091,6 +5094,7 @@ function recipientRow(s, r, i) {
     },
   });
   const pickRecipient = (cand) => {
+    featureHook('warmRecipient', cand);
     const v = cand.address || npubOf(cand.pk);
     // State first: clear() re-renders, and that render must already see the
     // picked address — the old order repainted the half-typed query and left

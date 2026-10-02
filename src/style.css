@@ -729,7 +729,8 @@ html:has(#app .chat-card), body:has(#app .chat-card) { overflow: hidden; }
 /* the field inside the panel: a quiet hairline, the panel is the frame */
 .thread-reply .thread-reply-input { border: 1px solid var(--line); background: var(--paper); color: var(--ink); border-radius: 10px; }
 .thread-reply .thread-reply-input:focus { border-color: var(--ink); outline: none; }
-/* Cancel and Reply: one size, the icon buttons' height */
+/* Preview, Cancel and Reply: one size, the icon buttons' height */
+.thread-reply .reply-tools .compose-preview-toggle,
 .thread-reply .reply-tools .thread-reply-cancel, .thread-reply .reply-tools .thread-reply-send {
   height: 40px; padding: 0 18px; border-radius: 10px; font-size: 15px; line-height: 38px; box-sizing: border-box;
 }

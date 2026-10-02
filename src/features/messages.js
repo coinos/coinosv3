@@ -8917,9 +8917,16 @@ export function messagesFeature(ctx) {
   // Enter sends; Shift+Enter (the textarea's native edit) and Ctrl+J insert
   // a newline. Height follows the text as it's typed — imperatively, since
   // typing doesn't re-render — with rows as the re-render fallback.
+  // The box is border-box, so its height carries the border too: sized to
+  // scrollHeight alone it came up two pixels short of its own text, and an
+  // empty field grew a scrollbar. It scrolls only once it hits the cap.
   const growComposer = (el) => {
     el.style.height = 'auto';
-    el.style.height = Math.min(el.scrollHeight, 120) + 'px';
+    const border = el.offsetHeight - el.clientHeight;
+    const want = el.scrollHeight + border;
+    const cap = parseFloat(getComputedStyle(el).maxHeight) || 120;
+    el.style.height = Math.min(want, cap) + 'px';
+    el.style.overflowY = want > cap ? 'auto' : 'hidden';
   };
   // ---- :shortcode: autocomplete in the composer -----------------------------
   // A colon and two letters at the caret open a strip of matches above the

@@ -103,7 +103,7 @@ try {
   check('a 3:4 clip, measured ahead, paints at 3:4 full width', ratio(b['tall.mp4']) === 0.75 && b['tall.mp4'].w > 300 && /aspect-ratio:360\/480/.test(b['tall.mp4'].style || ''), JSON.stringify(b['tall.mp4']));
   check('a 16:9 clip stays 16:9', Math.abs(ratio(b['wide.mp4']) - 1.78) < 0.02 && /aspect-ratio:640\/360/.test(b['wide.mp4'].style || ''), JSON.stringify(b['wide.mp4']));
   check('a clip whose post gives imeta dim paints at that shape, without waiting on the file', Math.abs(ratio(b['told.mp4']) - 0.56) < 0.02 && /aspect-ratio:1080\/1920/.test(b['told.mp4'].style || ''), JSON.stringify(b['told.mp4']));
-  check('...capped at three quarters of the screen height', b['told.mp4'] && b['told.mp4'].h <= Math.ceil(844 * 0.75) + 1, JSON.stringify(b['told.mp4']));
+  check('...full width, no taller than the screen', b['told.mp4'] && b['told.mp4'].w > 300 && b['told.mp4'].h <= 845, JSON.stringify(b['told.mp4']));
   check('a clip that will not load keeps the 16:9 box', /aspect-ratio:16\/9/.test(b['broken.mp4']?.style || ''), JSON.stringify(b['broken.mp4']));
   await sleep(1500);
   check('shapes are remembered on the device', await page.evaluate(() => (JSON.parse(localStorage.getItem('coinos-video-dims') || '[]')).length >= 3));

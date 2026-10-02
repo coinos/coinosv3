@@ -12,7 +12,7 @@ ${domHelper}
 const state = {};
 const ui = { screen: 'wallet' };
 let watch = null, cancelled = [], invoices = 0;
-const wallet = { loadFeatureState: (k, d) => (k in state ? state[k] : d), saveFeatureState: (k, v) => { state[k] = JSON.parse(JSON.stringify(v)); } };
+const wallet = { loadFeatureState: (k, d) => (k in state ? state[k] : d), saveFeatureState: (k, v) => { state[k] = JSON.parse(JSON.stringify(v)); }, _cacheKey: () => window.__walletKey || 'w1' };
 const ctx = {
   h, ui, wallet, render, toast: (m) => (window.toasts = (window.toasts || [])).push(m), copy: (x) => (window.copied = x),
   fmtAmount: (n) => Number(n).toLocaleString('en-US'), unitLabel: () => 'sats', unitTag: () => h('span', { class: 'unit-tag' }, 'sats'),
@@ -30,7 +30,8 @@ const ctx = {
 };
 const feature = posFeature(ctx); window.__feature = feature;
 function render() { document.querySelector('#app').replaceChildren(feature.screenView() || h('div', { id: 'closed' }, 'closed')); }
-window.test = { open: () => { feature.openPos(); }, init: () => { feature.init(); render(); }, settle: (ok) => { const w = watch; watch = null; w.cb({ step: ok ? 'done' : 'failed' }); }, get watch() { return watch && watch.id; }, get cancelled() { return cancelled; }, get sales() { return (state.pos || {}).sales || []; }, ui };
+window.test = { open: () => { feature.openPos(); }, init: () => { feature.init(); render(); },
+  cards: () => { document.querySelector('#app').replaceChildren(...feature.posSettingsCards()); }, settle: (ok) => { const w = watch; watch = null; w.cb({ step: ok ? 'done' : 'failed' }); }, get watch() { return watch && watch.id; }, get cancelled() { return cancelled; }, get sales() { return (state.pos || {}).sales || []; }, ui };
 render();
 `;
 const bundle = await Bun.build({
@@ -119,6 +120,14 @@ try {
   await page.evaluate(() => { window.__unit = 'sats'; });
   await page.evaluate(() => { test.ui.pos = null; test.ui.posAtBoot = true; test.init(); }); await pause(50);
   check('the /pos link opens the till once a wallet is up', !!(await page.$('.pos-amount')));
+
+  console.log('\n[start in point of sale belongs to one wallet]');
+  const boot = async (key) => { await page.evaluate((k) => { window.__walletKey = k; test.ui.pos = null; test.init(); }, key); await pause(50); return !!(await page.$('.pos-amount')); };
+  await page.evaluate(() => { localStorage.setItem('btc-wallet-pos-mode', '1'); window.__walletKey = 'owner'; test.cards(); }); await pause(50);
+  await page.evaluate(() => { const c = [...document.querySelectorAll('label')].find((l) => /Start in point of sale/.test(l.textContent)).querySelector('input'); if (!c.checked) c.click(); }); await pause(50);
+  check("the old device-wide flag is dropped on start (it can't say whose it was)", await page.evaluate(() => (test.ui.pos = null, true)) && (await boot('owner')) && await page.evaluate(() => localStorage.getItem('btc-wallet-pos-mode') === null));
+  check('another wallet on the same device does not start in point of sale', !(await boot('someone-else')));
+  check('the owner still does, after anyone else has been in', await boot('owner'));
   check('no browser errors', errors.length === 0);
 } finally { await browser.close(); server.stop(true); }
 console.log('\n✅ point of sale');

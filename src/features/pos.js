@@ -29,10 +29,14 @@ export function posFeature(ctx) {
   const save = (s) => { try { wallet.saveFeatureState('pos', s); } catch {} };
   const SALES_MAX = 500;
   // Point-of-sale mode is per device (the till, not every phone the owner
-  // carries): with it on, the app opens straight onto the point of sale.
-  const POS_MODE = 'btc-wallet-pos-mode';
-  const posMode = () => { try { return localStorage.getItem(POS_MODE) === '1'; } catch { return false; } };
-  const setPosMode = (on) => { try { if (on) localStorage.setItem(POS_MODE, '1'); else localStorage.removeItem(POS_MODE); } catch {} };
+  // carries) AND per wallet: with it on, THIS wallet opens straight onto the
+  // point of sale here. It used to be one device-wide flag, so whoever signed
+  // in next on a till landed in the last owner's point of sale. Per wallet,
+  // it simply comes back with its owner.
+  const LEGACY_POS_MODE = 'btc-wallet-pos-mode';
+  const posKey = () => LEGACY_POS_MODE + ':' + (wallet._cacheKey ? wallet._cacheKey() : '');
+  const posMode = () => { try { return localStorage.getItem(posKey()) === '1'; } catch { return false; } };
+  const setPosMode = (on) => { try { if (on) localStorage.setItem(posKey(), '1'); else localStorage.removeItem(posKey()); } catch {} };
 
   const fiatLine = (sats, rate = rateNow(), code = getCurrency()) => (rate ? fmtFiat(sats, rate, code) : '');
   const pct = (sats, p) => Math.round(sats * p / 100);
@@ -321,6 +325,8 @@ export function posFeature(ctx) {
     id: 'pos',
     // A wallet just opened: the /pos link or point-of-sale mode lands here.
     init() {
+      // the old device-wide flag can't say whose it was: let it go
+      try { localStorage.removeItem(LEGACY_POS_MODE); } catch {}
       if (ui.posAtBoot || posMode()) { ui.posAtBoot = false; open(); }
     },
     screenView() {

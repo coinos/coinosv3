@@ -206,5 +206,13 @@
   "profFollowersNone": "Hakuna wafuasi waliopatikana.",
   "profFollowersPartial": "Inaonyesha wafuasi {n} kati ya {total}.",
   "showMore": "Onyesha zaidi",
-  "arkZapNoPostZap": "Huwezi kutuma zap kwa chapisho hili: mwandishi wake hana anwani ya Lightning wala anwani ya Ark."
+  "arkZapNoPostZap": "Huwezi kutuma zap kwa chapisho hili: mwandishi wake hana anwani ya Lightning wala anwani ya Ark.",
+  "followHistTitle": "Orodha ya unaowafuata",
+  "followHistDesc": "Unawafuata watu {n}. Ikiwa programu nyingine ilibadilisha orodha yako, nakala ya zamani huenda bado iko kwenye relay inayohifadhi historia. Kurejesha huwaongeza wote tena; hakuna anayeondolewa.",
+  "followHistLook": "Tafuta nakala za zamani",
+  "followHistPeople": "watu {n}",
+  "followHistRestore": "Rejesha {n}",
+  "followHistNone": "Hakuna nakala ya zamani yenye mtu anayekosekana kwenye orodha yako.",
+  "followHistNothing": "Wote kwenye nakala hiyo tayari wamo kwenye orodha yako.",
+  "followHistRestored": "Umerejesha unaowafuata {n}."
 }

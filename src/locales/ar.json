@@ -870,5 +870,13 @@
   "profFollowersNone": "لم يُعثر على متابعين.",
   "profFollowersPartial": "عرض {n} من {total} متابع.",
   "showMore": "عرض المزيد",
-  "arkZapNoPostZap": "لا يمكن إرسال zap لهذا المنشور: ليس لدى كاتبه عنوان Lightning ولا عنوان Ark."
+  "arkZapNoPostZap": "لا يمكن إرسال zap لهذا المنشور: ليس لدى كاتبه عنوان Lightning ولا عنوان Ark.",
+  "followHistTitle": "قائمة المتابعة",
+  "followHistDesc": "أنت تتابع {n} شخصًا. إذا استبدل تطبيق آخر قائمة متابعتك، فقد تبقى نسخة أقدم على مرحّل يحتفظ بالسجل. الاستعادة تعيد كل من فيها؛ لا يُحذف أحد.",
+  "followHistLook": "ابحث عن نسخ أقدم",
+  "followHistPeople": "{n} شخصًا",
+  "followHistRestore": "استعادة {n}",
+  "followHistNone": "لا توجد نسخة أقدم فيها أحد تفتقده قائمتك.",
+  "followHistNothing": "كل من في تلك النسخة موجود في قائمتك بالفعل.",
+  "followHistRestored": "تمت استعادة {n} متابَعًا."
 }

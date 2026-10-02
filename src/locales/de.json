@@ -870,5 +870,13 @@
   "profFollowersNone": "Keine Follower gefunden.",
   "profFollowersPartial": "{n} von {total} Followern angezeigt.",
   "showMore": "Mehr anzeigen",
-  "arkZapNoPostZap": "Dieser Beitrag kann nicht gezappt werden: Der Autor hat weder eine Lightning- noch eine Ark-Adresse."
+  "arkZapNoPostZap": "Dieser Beitrag kann nicht gezappt werden: Der Autor hat weder eine Lightning- noch eine Ark-Adresse.",
+  "followHistTitle": "Folgeliste",
+  "followHistDesc": "Du folgst {n} Personen. Hat eine andere App deine Folgeliste ersetzt, liegt vielleicht noch eine ältere Kopie auf einem Relay, das den Verlauf aufbewahrt. Wiederherstellen fügt alle daraus wieder hinzu; niemand wird entfernt.",
+  "followHistLook": "Nach älteren Kopien suchen",
+  "followHistPeople": "{n} Personen",
+  "followHistRestore": "{n} wiederherstellen",
+  "followHistNone": "Keine ältere Kopie enthält jemanden, der in deiner Liste fehlt.",
+  "followHistNothing": "Alle aus dieser Kopie sind schon in deiner Liste.",
+  "followHistRestored": "{n} Follows wiederhergestellt."
 }

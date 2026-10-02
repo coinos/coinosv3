@@ -870,5 +870,13 @@
   "profFollowersNone": "कोई फ़ॉलोअर नहीं मिला।",
   "profFollowersPartial": "{total} में से {n} फ़ॉलोअर्स दिखाए जा रहे हैं।",
   "showMore": "और दिखाएँ",
-  "arkZapNoPostZap": "इस पोस्ट पर zap नहीं कर सकते: लेखक के पास न Lightning पता है, न Ark पता।"
+  "arkZapNoPostZap": "इस पोस्ट पर zap नहीं कर सकते: लेखक के पास न Lightning पता है, न Ark पता।",
+  "followHistTitle": "फ़ॉलो सूची",
+  "followHistDesc": "आप {n} लोगों को फ़ॉलो करते हैं। अगर किसी दूसरे ऐप ने आपकी फ़ॉलो सूची बदल दी, तो इतिहास रखने वाले किसी रिले पर पुरानी कॉपी हो सकती है। बहाल करने पर सब वापस जुड़ जाते हैं; कोई हटाया नहीं जाता।",
+  "followHistLook": "पुरानी कॉपियाँ खोजें",
+  "followHistPeople": "{n} लोग",
+  "followHistRestore": "{n} बहाल करें",
+  "followHistNone": "किसी पुरानी कॉपी में ऐसा कोई नहीं जो आपकी सूची में न हो।",
+  "followHistNothing": "उस कॉपी के सभी लोग पहले से आपकी सूची में हैं।",
+  "followHistRestored": "{n} फ़ॉलो बहाल किए गए।"
 }

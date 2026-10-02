@@ -206,5 +206,13 @@
   "profFollowersNone": "کوئی فالوور نہیں ملا۔",
   "profFollowersPartial": "{total} میں سے {n} فالوورز دکھائے جا رہے ہیں۔",
   "showMore": "مزید دکھائیں",
-  "arkZapNoPostZap": "اس پوسٹ پر zap نہیں ہو سکتا: مصنف کے پاس نہ Lightning پتہ ہے نہ Ark پتہ۔"
+  "arkZapNoPostZap": "اس پوسٹ پر zap نہیں ہو سکتا: مصنف کے پاس نہ Lightning پتہ ہے نہ Ark پتہ۔",
+  "followHistTitle": "فالو فہرست",
+  "followHistDesc": "آپ {n} لوگوں کو فالو کرتے ہیں۔ اگر کسی اور ایپ نے آپ کی فالو فہرست بدل دی، تو تاریخ رکھنے والے کسی ریلے پر پرانی کاپی ہو سکتی ہے۔ بحال کرنے سے سب واپس شامل ہو جاتے ہیں؛ کسی کو ہٹایا نہیں جاتا۔",
+  "followHistLook": "پرانی کاپیاں تلاش کریں",
+  "followHistPeople": "{n} لوگ",
+  "followHistRestore": "{n} بحال کریں",
+  "followHistNone": "کسی پرانی کاپی میں ایسا کوئی نہیں جو آپ کی فہرست میں نہ ہو۔",
+  "followHistNothing": "اس کاپی کے سب لوگ پہلے سے آپ کی فہرست میں ہیں۔",
+  "followHistRestored": "{n} فالو بحال ہو گئے۔"
 }

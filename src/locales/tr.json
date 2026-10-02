@@ -869,5 +869,13 @@
   "profFollowersNone": "Takipçi bulunamadı.",
   "profFollowersPartial": "{total} takipçiden {n} tanesi gösteriliyor.",
   "showMore": "Daha fazla göster",
-  "arkZapNoPostZap": "Bu gönderiye zap yapılamaz: yazarının ne Lightning adresi ne de Ark adresi var."
+  "arkZapNoPostZap": "Bu gönderiye zap yapılamaz: yazarının ne Lightning adresi ne de Ark adresi var.",
+  "followHistTitle": "Takip listesi",
+  "followHistDesc": "{n} kişiyi takip ediyorsun. Başka bir uygulama takip listeni değiştirdiyse, geçmişi saklayan bir röle üzerinde eski bir kopya kalmış olabilir. Geri yüklemek o kopyadaki herkesi geri ekler; kimse çıkarılmaz.",
+  "followHistLook": "Eski kopyaları ara",
+  "followHistPeople": "{n} kişi",
+  "followHistRestore": "{n} kişiyi geri yükle",
+  "followHistNone": "Hiçbir eski kopyada listende eksik olan biri yok.",
+  "followHistNothing": "O kopyadaki herkes zaten listende.",
+  "followHistRestored": "{n} takip geri yüklendi."
 }

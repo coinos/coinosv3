@@ -870,5 +870,13 @@
   "profFollowersNone": "No se encontraron seguidores.",
   "profFollowersPartial": "Mostrando {n} de {total} seguidores.",
   "showMore": "Mostrar más",
-  "arkZapNoPostZap": "No se puede hacer zap a esta publicación: su autor no tiene dirección Lightning ni dirección Ark."
+  "arkZapNoPostZap": "No se puede hacer zap a esta publicación: su autor no tiene dirección Lightning ni dirección Ark.",
+  "followHistTitle": "Lista de seguidos",
+  "followHistDesc": "Sigues a {n} personas. Si otra app reemplazó tu lista, puede que quede una copia anterior en un relay que guarda historial. Restaurar vuelve a añadir a todos los de esa copia; no se quita a nadie.",
+  "followHistLook": "Buscar copias anteriores",
+  "followHistPeople": "{n} personas",
+  "followHistRestore": "Restaurar {n}",
+  "followHistNone": "Ninguna copia anterior tiene a alguien que falte en tu lista.",
+  "followHistNothing": "Todos los de esa copia ya están en tu lista.",
+  "followHistRestored": "Se restauraron {n} seguidos."
 }

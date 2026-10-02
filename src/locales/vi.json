@@ -206,5 +206,13 @@
   "profFollowersNone": "Không tìm thấy người theo dõi.",
   "profFollowersPartial": "Đang hiển thị {n} trên {total} người theo dõi.",
   "showMore": "Xem thêm",
-  "arkZapNoPostZap": "Không thể zap bài này: tác giả không có địa chỉ Lightning hay địa chỉ Ark."
+  "arkZapNoPostZap": "Không thể zap bài này: tác giả không có địa chỉ Lightning hay địa chỉ Ark.",
+  "followHistTitle": "Danh sách theo dõi",
+  "followHistDesc": "Bạn đang theo dõi {n} người. Nếu một ứng dụng khác đã thay danh sách theo dõi của bạn, bản cũ có thể vẫn còn trên relay lưu lịch sử. Khôi phục sẽ thêm lại tất cả; không ai bị xóa.",
+  "followHistLook": "Tìm bản cũ",
+  "followHistPeople": "{n} người",
+  "followHistRestore": "Khôi phục {n}",
+  "followHistNone": "Không bản cũ nào có người mà danh sách của bạn đang thiếu.",
+  "followHistNothing": "Mọi người trong bản đó đã có trong danh sách của bạn.",
+  "followHistRestored": "Đã khôi phục {n} người theo dõi."
 }

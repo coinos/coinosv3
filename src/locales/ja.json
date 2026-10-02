@@ -870,5 +870,13 @@
   "profFollowersNone": "フォロワーが見つかりません。",
   "profFollowersPartial": "{total}人中{n}人のフォロワーを表示しています。",
   "showMore": "もっと見る",
-  "arkZapNoPostZap": "この投稿にはZapできません：投稿者にLightningアドレスもArkアドレスもありません。"
+  "arkZapNoPostZap": "この投稿にはZapできません：投稿者にLightningアドレスもArkアドレスもありません。",
+  "followHistTitle": "フォローリスト",
+  "followHistDesc": "{n}人をフォロー中です。別のアプリがフォローリストを置き換えた場合、履歴を保存するリレーに古いコピーが残っているかもしれません。復元するとその全員が戻り、誰も外されません。",
+  "followHistLook": "古いコピーを探す",
+  "followHistPeople": "{n}人",
+  "followHistRestore": "{n}人を復元",
+  "followHistNone": "あなたのリストに欠けている人を含む古いコピーはありません。",
+  "followHistNothing": "そのコピーの全員がすでにリストにいます。",
+  "followHistRestored": "{n}人のフォローを復元しました。"
 }

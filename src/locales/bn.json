@@ -870,5 +870,13 @@
   "profFollowersNone": "কোনো অনুসারী পাওয়া যায়নি।",
   "profFollowersPartial": "{total} জন অনুসারীর মধ্যে {n} জন দেখানো হচ্ছে।",
   "showMore": "আরও দেখুন",
-  "arkZapNoPostZap": "এই পোস্টে zap করা যাবে না: লেখকের কোনো Lightning ঠিকানা বা Ark ঠিকানা নেই।"
+  "arkZapNoPostZap": "এই পোস্টে zap করা যাবে না: লেখকের কোনো Lightning ঠিকানা বা Ark ঠিকানা নেই।",
+  "followHistTitle": "ফলো তালিকা",
+  "followHistDesc": "আপনি {n} জনকে ফলো করেন। অন্য কোনো অ্যাপ আপনার ফলো তালিকা বদলে দিলে, পুরোনো একটি কপি ইতিহাস রাখা কোনো রিলেতে থাকতে পারে। পুনরুদ্ধার করলে সবাই ফিরে আসে; কাউকে সরানো হয় না।",
+  "followHistLook": "পুরোনো কপি খুঁজুন",
+  "followHistPeople": "{n} জন",
+  "followHistRestore": "{n} জন ফিরিয়ে আনুন",
+  "followHistNone": "কোনো পুরোনো কপিতে এমন কেউ নেই যিনি আপনার তালিকায় নেই।",
+  "followHistNothing": "ওই কপির সবাই ইতিমধ্যে আপনার তালিকায় আছেন।",
+  "followHistRestored": "{n} জনকে আবার ফলো করা হয়েছে।"
 }

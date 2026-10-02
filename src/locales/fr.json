@@ -870,5 +870,13 @@
   "profFollowersNone": "Aucun abonné trouvé.",
   "profFollowersPartial": "{n} abonnés affichés sur {total}.",
   "showMore": "Afficher plus",
-  "arkZapNoPostZap": "Impossible de zapper cette publication : son auteur n’a ni adresse Lightning ni adresse Ark."
+  "arkZapNoPostZap": "Impossible de zapper cette publication : son auteur n’a ni adresse Lightning ni adresse Ark.",
+  "followHistTitle": "Liste d’abonnements",
+  "followHistDesc": "Vous suivez {n} personnes. Si une autre app a remplacé votre liste, une copie plus ancienne peut subsister sur un relais qui garde l’historique. La restauration rajoute tout le monde ; personne n’est retiré.",
+  "followHistLook": "Chercher des copies plus anciennes",
+  "followHistPeople": "{n} personnes",
+  "followHistRestore": "Restaurer {n}",
+  "followHistNone": "Aucune copie plus ancienne ne contient quelqu’un qui manque à votre liste.",
+  "followHistNothing": "Tout le monde dans cette copie est déjà dans votre liste.",
+  "followHistRestored": "{n} abonnements restaurés."
 }

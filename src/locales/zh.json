@@ -870,5 +870,13 @@
   "profFollowersNone": "未找到粉丝。",
   "profFollowersPartial": "显示 {total} 位粉丝中的 {n} 位。",
   "showMore": "显示更多",
-  "arkZapNoPostZap": "无法打赏此帖子：作者既没有 Lightning 地址也没有 Ark 地址。"
+  "arkZapNoPostZap": "无法打赏此帖子：作者既没有 Lightning 地址也没有 Ark 地址。",
+  "followHistTitle": "关注列表",
+  "followHistDesc": "你关注了 {n} 人。如果其他应用替换了你的关注列表，保存历史的中继上可能还有旧副本。恢复会把其中所有人加回来，不会移除任何人。",
+  "followHistLook": "查找旧副本",
+  "followHistPeople": "{n} 人",
+  "followHistRestore": "恢复 {n} 人",
+  "followHistNone": "没有旧副本包含你列表中缺少的人。",
+  "followHistNothing": "该副本中的所有人都已在你的列表中。",
+  "followHistRestored": "已恢复 {n} 个关注。"
 }

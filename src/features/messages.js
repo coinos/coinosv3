@@ -3709,15 +3709,40 @@ export function messagesFeature(ctx) {
   }
   const isFollowing = (pk) => followsNow().set.has(pk);
 
+  // Everywhere someone's follow list might be: our relays, the profile
+  // indexes, the archives, their own outbox relays, and Primal's cache (its
+  // copy is the signed event, checked here like any other). A kind 3 is
+  // REPLACEABLE: publishing one built on a list we failed to find wipes the
+  // real one everywhere it lands. 2026-10-02: an Amethyst user's 398 follows,
+  // kept only on her own relays, became our two starter follows the first
+  // time she signed in here. Returns the newest list (or null) and whether
+  // this key has any nostr life at all (a list or a profile).
+  async function deepContactList(pk) {
+    const relays = [...new Set([...zapRelays(), ...PROFILE_INDEX_RELAYS, ...PROFILE_ARCHIVE_RELAYS,
+      ...(await relaysOf(pk).catch(() => []))])];
+    const [relayEvs, primalEvs] = await Promise.all([
+      queryOn(relays, { kinds: [0, 3], authors: [pk] }, 7000).catch(() => []),
+      primalCache('contact_list', { pubkey: pk }, 7000)
+        .then((evs) => verifiedPrimal((evs || []).filter((e) => e.pubkey === pk), [0, 3])).catch(() => []),
+    ]);
+    const all = [...(relayEvs || []), ...primalEvs].filter((e) => e.pubkey === pk);
+    const list = all.filter((e) => e.kind === 3).sort((a, b) => b.created_at - a.created_at)[0] || null;
+    return { list, existing: all.length > 0 };
+  }
+
   // Fetch the newest list from the relays. Older than what we hold is
   // ignored: a relay that missed our last publish must not un-follow people.
-  async function syncFollows({ force = false } = {}) {
+  // `deep` widens the search to everywhere above — required before
+  // publishing on top of a list we have never seen.
+  async function syncFollows({ force = false, deep = false } = {}) {
     const me = mePk();
     if (!me) return followsNow();
     if (!force && Date.now() - followsAt < 10 * 60_000) return followsNow();
     followsAt = Date.now();
     try {
-      const evs = await queryOn(zapRelays(), { kinds: [3], authors: [me] }, 5000);
+      const evs = deep
+        ? [(await deepContactList(me)).list].filter(Boolean)
+        : await queryOn(zapRelays(), { kinds: [3], authors: [me] }, 5000);
       const newest = (evs || []).sort((a, b) => b.created_at - a.created_at)[0];
       const cur = followsNow();
       if (newest && newest.created_at > cur.at) {
@@ -3758,8 +3783,14 @@ export function messagesFeature(ctx) {
     for (const f of feeds) if (!s.feeds.some((x) => x.id === f.id)) s.feeds.push(f);
     save(s);
     if (onlyIfNoFollows) {
-      await syncFollows({ force: true }).catch(() => {});
-      if (followsNow().set.size) return;
+      // "New" here means new to coinos, not new to nostr: anyone with a
+      // profile or a follow list anywhere already has a following, and a
+      // starter list would replace it. Only a key with no trace gets one.
+      const me = mePk();
+      if (!me) return;
+      let found;
+      try { found = await deepContactList(me); } catch { return; }
+      if (found.existing || followsNow().set.size) { syncFollows({ force: true, deep: true }).catch(() => {}); return; }
     }
     followMany(STARTER_FOLLOWS).catch(() => {});
   }
@@ -3773,7 +3804,8 @@ export function messagesFeature(ctx) {
     followsPub = true;
     const before = followsNow();
     try {
-      await syncFollows({ force: true }).catch(() => {});
+      // never seen this person's list: look everywhere before writing one
+      await syncFollows({ force: true, deep: !before.at }).catch(() => {});
       const fetched = followsNow();
       const base = fetched.at > before.at ? fetched : before;
       const add = want.filter((pk) => !base.set.has(pk));
@@ -3801,7 +3833,8 @@ export function messagesFeature(ctx) {
     saveFollows({ ...before, set: new Set(before.set.has(pk) ? [...before.set].filter((x) => x !== pk) : [...before.set, pk]) });
     render();
     try {
-      await syncFollows({ force: true });
+      // never seen this person's list: look everywhere before writing one
+      await syncFollows({ force: true, deep: !before.at });
       // The list to publish is the relays' copy if it's genuinely newer than
       // what we held, and otherwise what we held BEFORE the optimistic paint
       // — reading our own paint back as fact made a follow publish a list
@@ -6647,13 +6680,18 @@ export function messagesFeature(ctx) {
       return Array.isArray(tags) ? tags.filter((x) => Array.isArray(x) && x[0] && x[1]) : [];
     } catch { return []; } // nip04 from an older client, or not ours to read
   }
-  async function syncMutes({ force = false } = {}) {
+  async function syncMutes({ force = false, deep = false } = {}) {
     const me = mePk();
     if (!me) return mutesNow();
     if (!force && Date.now() - mutesAt < 10 * 60_000) return mutesNow();
     mutesAt = Date.now();
     try {
-      const evs = await queryOn(zapRelays(), { kinds: [10000], authors: [me] }, 5000);
+      // replaceable like the follow list: never written over one we haven't
+      // looked for everywhere (see deepContactList)
+      const relays = deep
+        ? [...new Set([...zapRelays(), ...PROFILE_INDEX_RELAYS, ...PROFILE_ARCHIVE_RELAYS, ...(await relaysOf(me).catch(() => []))])]
+        : zapRelays();
+      const evs = await queryOn(relays, { kinds: [10000], authors: [me] }, deep ? 7000 : 5000);
       const newest = (evs || []).sort((a, b) => b.created_at - a.created_at)[0];
       const cur = mutesNow();
       if (newest && newest.created_at > cur.at) {
@@ -6675,7 +6713,7 @@ export function messagesFeature(ctx) {
     saveMutes({ ...before, ...paint });
     render();
     try {
-      await syncMutes({ force: true });
+      await syncMutes({ force: true, deep: !before.at });
       const fetched = mutesNow();
       const base = fetched.at > before.at ? fetched : before;
       const next = change(base) || {};
@@ -6973,6 +7011,85 @@ export function messagesFeature(ctx) {
         h('button', { class: 'btn-ghost btn-block', onClick: close }, t('back'))));
   }
   // Settings → Nostr: the mute list laid out, and the two spam rules.
+  // ---- follow list history: undo a client that replaced the list ---------
+  // A kind 3 is replaceable, so relays that hold the newest copy have dropped
+  // the old one; the archives often haven't. Restoring is a union: everyone
+  // in the old copy goes back into the current list, nobody is taken out.
+  const FOLLOW_HISTORY_RELAYS = ['wss://nostr21.com', 'wss://relay.ditto.pub', 'wss://offchain.pub', 'wss://nostr.mom',
+    'wss://nostr.oxtr.dev', 'wss://relay.nostrplebs.com', 'wss://relay.damus.io', 'wss://nos.lol', 'wss://relay.primal.net',
+    'wss://relay.snort.social', 'wss://nostr.wine', 'wss://nostr.bitcoiner.social'];
+  async function findFollowHistory() {
+    const me = mePk();
+    if (!me) return [];
+    const relays = [...new Set([...zapRelays(), ...PROFILE_INDEX_RELAYS, ...PROFILE_ARCHIVE_RELAYS, ...FOLLOW_HISTORY_RELAYS,
+      ...(await relaysOf(me).catch(() => []))])];
+    const evs = await queryOn(relays, { kinds: [3], authors: [me], limit: 50 }, 8000).catch(() => []);
+    const byId = new Map();
+    for (const e of evs || []) if (e.pubkey === me) byId.set(e.id, e);
+    return [...byId.values()].sort((a, b) => b.created_at - a.created_at);
+  }
+  async function restoreFollows(old) {
+    if (followsPub) return;
+    const id = await requireIdentity();
+    followsPub = true;
+    try {
+      const before = followsNow();
+      await syncFollows({ force: true, deep: true });
+      const fetched = followsNow();
+      const base = fetched.at > before.at ? fetched : before;
+      const have = new Set(pTags(base.tags).map((x) => x[1]));
+      const add = pTags(old.tags || []).filter((x) => !have.has(x[1]) && x[1] !== id.pubkey && (have.add(x[1]), true));
+      if (!add.length) { toast(t('followHistNothing')); return; }
+      const tags = [...base.tags, ...add];
+      const created_at = Math.max(Math.floor(Date.now() / 1000), base.at + 1);
+      const partial = { kind: 3, content: base.content || '', created_at, tags };
+      const evt = id.signer instanceof Uint8Array ? finalizeEvent(partial, id.signer) : await id.signer.signEvent(partial);
+      const ok = await publishOn([...new Set([...zapRelays(), ...(await relaysOf(id.pubkey).catch(() => []))])], evt);
+      if (!ok) throw new Error(t('msgSendFailed'));
+      saveFollows({ set: new Set(pTags(tags).map((x) => x[1])), tags, content: base.content || '', at: created_at });
+      feedAuthorsChanged();
+      syncInbox({ force: true }).catch(() => {});
+      toast(t('followHistRestored', { n: add.length }));
+      if (ui.followHist) ui.followHist.done = true;
+    } catch (e) {
+      if (!(e instanceof NoIdentity)) toast(e.message || String(e));
+    } finally {
+      followsPub = false;
+      render();
+    }
+  }
+  function followHistoryCard() {
+    if (!mePk()) return null;
+    const cur = followsNow();
+    const fh = ui.followHist;
+    const look = () => {
+      ui.followHist = { loading: true };
+      render();
+      findFollowHistory().then((vs) => { ui.followHist = { versions: vs }; render(); })
+        .catch(() => { ui.followHist = { versions: [] }; render(); });
+    };
+    const versions = (fh && fh.versions) || [];
+    // worth offering: a copy holding people the current list doesn't
+    const offers = versions.map((e) => ({ e, extra: pTags(e.tags).filter((x) => !cur.set.has(x[1])).length }))
+      .filter((v) => v.extra > 0);
+    const clientOf = (e) => (e.tags.find((x) => x[0] === 'client') || [])[1];
+    return h('div', { class: 'card col follow-hist-card', style: 'gap:10px' },
+      h('h3', {}, t('followHistTitle')),
+      h('p', { class: 'small muted', style: 'margin:0' }, t('followHistDesc', { n: cur.set.size })),
+      !fh || fh.done
+        ? h('button', { class: 'btn-block', onClick: look }, t('followHistLook'))
+        : fh.loading
+          ? h('div', { class: 'row', style: 'justify-content:center;padding:6px' }, h('span', { class: 'spinner sm' }))
+          : offers.length
+            ? h('div', { class: 'col', style: 'gap:8px' }, ...offers.slice(0, 6).map(({ e, extra }) => h('div', { class: 'row between gap6', style: 'align-items:center' },
+                h('div', { class: 'col', style: 'gap:1px;min-width:0' },
+                  h('div', {}, t('followHistPeople', { n: pTags(e.tags).length })),
+                  h('div', { class: 'small faint' }, new Date(e.created_at * 1000).toLocaleDateString()
+                    + (clientOf(e) ? ' · ' + clientOf(e) : ''))),
+                h('button', { class: 'btn-sm', disabled: followsPub, onClick: () => restoreFollows(e) }, t('followHistRestore', { n: extra })))))
+            : h('div', { class: 'small faint' }, t('followHistNone')));
+  }
+
   function moderationCard() {
     const m = mutesNow();
     const e = ui.modEdit || (ui.modEdit = { word: '' });
@@ -10061,7 +10178,7 @@ export function messagesFeature(ctx) {
 
   return {
     id: 'messages',
-    nostrSettingsCards() { return [moderationCard()]; },
+    nostrSettingsCards() { return [followHistoryCard(), moderationCard()]; },
     // The app came back after being backgrounded. A phone freezes a hidden
     // tab: the relay sockets are cut and every post made in the meantime is
     // simply missing, which is why the feed used to sit there looking stale

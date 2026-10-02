@@ -869,5 +869,13 @@
   "profFollowersNone": "팔로워를 찾을 수 없습니다.",
   "profFollowersPartial": "팔로워 {total}명 중 {n}명을 표시합니다.",
   "showMore": "더 보기",
-  "arkZapNoPostZap": "이 게시물에 zap할 수 없습니다: 작성자에게 Lightning 주소도 Ark 주소도 없습니다."
+  "arkZapNoPostZap": "이 게시물에 zap할 수 없습니다: 작성자에게 Lightning 주소도 Ark 주소도 없습니다.",
+  "followHistTitle": "팔로우 목록",
+  "followHistDesc": "{n}명을 팔로우하고 있습니다. 다른 앱이 팔로우 목록을 덮어썼다면, 기록을 보관하는 릴레이에 예전 사본이 남아 있을 수 있습니다. 복원하면 그 사람들이 모두 다시 추가되며, 아무도 빠지지 않습니다.",
+  "followHistLook": "예전 사본 찾기",
+  "followHistPeople": "{n}명",
+  "followHistRestore": "{n}명 복원",
+  "followHistNone": "목록에 빠진 사람이 들어 있는 예전 사본이 없습니다.",
+  "followHistNothing": "그 사본의 모든 사람이 이미 목록에 있습니다.",
+  "followHistRestored": "팔로우 {n}명을 복원했습니다."
 }

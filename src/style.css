@@ -959,10 +959,10 @@ html.no-scroll { overflow: hidden; scrollbar-gutter: auto; }
   border-left: none; border-right: none; border-radius: 0;
   box-shadow: none;
 }
-/* A post that arrived while you were reading wears a tint until it has been
-   on screen a couple of seconds; then it fades to the plain page. The side
-   shadows carry the tint through the list's padding to its edges. */
-.notes-feed > .row { transition: background-color .9s ease, box-shadow .9s ease; }
+/* A post that arrived while you were reading wears a tint until any of it
+   comes on screen; then it fades to the plain page over three seconds. The
+   side shadows carry the tint through the list's padding to its edges. */
+.notes-feed > .row { transition: background-color 3s ease-out, box-shadow 3s ease-out; }
 .notes-feed > .row.note-fresh {
   --fresh-bg: color-mix(in srgb, var(--green) 9%, var(--paper));
   background-color: var(--fresh-bg);

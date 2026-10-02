@@ -5305,31 +5305,24 @@ export function messagesFeature(ctx) {
     finally { feedPaint = prev; }
   }
 
-  // New posts stay tinted until they've been in view for FRESH_SEEN_MS: a
-  // row at least half on screen (or filling most of it) starts its clock,
-  // leaving view stops it. Seen, it loses the tint in place — no repaint.
-  const FRESH_SEEN_MS = 2000;
+  // A new post wears its tint until any of it reaches the screen; from that
+  // moment it fades out (the row's 3s background transition, in the CSS)
+  // whether you stay or scroll on. It used to wait for half the row to sit
+  // in view for two seconds, with the clock reset by every scroll and lost
+  // when the row's node was replaced, so a tall post read in passing, or one
+  // the window remounted, could stay green for good.
   let freshObserver = null;
-  const freshTimers = new Map();
   function watchFresh(c) {
     if (typeof IntersectionObserver === 'undefined') return;
     freshObserver ||= new IntersectionObserver((entries) => {
       for (const en of entries) {
+        if (!en.isIntersecting) continue;
         const el = en.target, id = el.getAttribute('data-key');
-        const inView = en.isIntersecting && (en.intersectionRatio >= 0.5 || en.intersectionRect.height >= window.innerHeight * 0.5);
-        if (inView && !freshTimers.has(id)) {
-          freshTimers.set(id, setTimeout(() => {
-            freshTimers.delete(id);
-            if (!el.isConnected) return;
-            feed?.fresh?.delete(id);
-            el.classList.remove('note-fresh');
-            freshObserver.unobserve(el);
-          }, FRESH_SEEN_MS));
-        } else if (!inView && freshTimers.has(id)) {
-          clearTimeout(freshTimers.get(id)); freshTimers.delete(id);
-        }
+        feed?.fresh?.delete(id); // by id: the row may be re-rendered mid-fade
+        el.classList.remove('note-fresh');
+        freshObserver.unobserve(el);
       }
-    }, { threshold: [0, 0.5, 1] });
+    }, { threshold: 0 });
     // after the paint, when the row nodes are the mounted ones
     requestAnimationFrame(() => {
       for (const el of document.querySelectorAll('.notes-feed > .row.note-fresh')) freshObserver.observe(el);

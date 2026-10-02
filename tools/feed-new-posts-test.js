@@ -88,10 +88,16 @@ try {
   assert(await page.evaluate(()=>scrollY)>0,'not scrolled all the way to the top');
   assert(!(await page.$('.feed-new-pill')),'pill is gone after the tap');
   await page.screenshot({path:'/tmp/feed-new-posts.png'});
-  await sleep(2600);
-  assert(!(await page.$('.notes-feed > .row.note-fresh[data-key="'+F(2)+'"]')),'the post you looked at loses its tint');
+  await sleep(300);
+  assert(!(await page.$('.notes-feed > .row.note-fresh[data-key="'+F(2)+'"]')),'the post on screen starts losing its tint at once');
   assert(await page.$('.notes-feed > .row.note-fresh[data-key="'+F(0)+'"]'),'the newest, still offscreen above, keeps its tint');
-  await page.evaluate(()=>window.scrollTo(0,0)); await sleep(2600);
+  // (this page asks for reduced motion, which rightly turns the fade off; the rule itself says three seconds)
+  assert(await page.evaluate(()=>[...document.styleSheets].flatMap(s=>[...s.cssRules]).some(r=>r.selectorText==='.notes-feed > .row'&&/background-color 3s/.test(r.style.transition))),'...and fades over three seconds');
+  // a sliver on screen is enough: the newest's last few pixels at the top edge
+  await page.evaluate((id)=>{const r=document.querySelector('.notes-feed > [data-key="'+id+'"]').getBoundingClientRect();window.scrollTo(0,scrollY+r.bottom-4);},F(0));
+  await sleep(300);
+  assert(!(await page.$('.notes-feed > .row.note-fresh[data-key="'+F(0)+'"]')),'a post barely on screen starts fading too');
+  await page.evaluate(()=>window.scrollTo(0,0)); await sleep(300);
   assert.deepEqual(await fresh(),[],'back at the top, the rest fade once seen');
   // swipe the pill away: it goes, the page doesn't move, and it's back once more arrive
   await page.evaluate((id)=>{const r=document.querySelector('.notes-feed > [data-key="'+id+'"]');window.scrollTo(0,scrollY+r.getBoundingClientRect().top-100);},reading);
@@ -118,5 +124,5 @@ try {
   assert.equal(await page.evaluate(()=>scrollY),y1,'and is not a tap');
   assert.equal(await page.$eval('.feed-new-pill',e=>e.style.transform),'','sprung back into place');
   assert.deepEqual(errors,[]);
-  console.log('✓ New posts: pill lands on the oldest new post; tints stay until each post has been in view ~2s; the reading row stays put; swiping the pill dismisses it until more arrive');
+  console.log('✓ New posts: pill lands on the oldest new post; a tint starts its 3s fade the moment any of the post is on screen; the reading row stays put; swiping the pill dismisses it until more arrive');
 } finally { await page.close(); await browser.close(); server.stop(true); }

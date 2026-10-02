@@ -863,5 +863,12 @@
   "copy": "कॉपी",
   "switchUnit": "BTC / sats बदलें",
   "footerMadeBy": "द्वारा बनाया",
-  "footerSourceOn": "सोर्स यहाँ"
+  "footerSourceOn": "सोर्स यहाँ",
+  "profFollowing": "फ़ॉलो कर रहे हैं",
+  "profFollowers": "फ़ॉलोअर्स",
+  "profFollowsNone": "अभी तक किसी को फ़ॉलो नहीं कर रहे।",
+  "profFollowersNone": "कोई फ़ॉलोअर नहीं मिला।",
+  "profFollowersPartial": "{total} में से {n} फ़ॉलोअर्स दिखाए जा रहे हैं।",
+  "showMore": "और दिखाएँ",
+  "arkZapNoPostZap": "इस पोस्ट पर zap नहीं कर सकते: लेखक के पास न Lightning पता है, न Ark पता।"
 }

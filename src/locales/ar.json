@@ -863,5 +863,12 @@
   "copy": "نسخ",
   "switchUnit": "تبديل BTC / sats",
   "footerMadeBy": "صُنع بواسطة",
-  "footerSourceOn": "الكود المصدري على"
+  "footerSourceOn": "الكود المصدري على",
+  "profFollowing": "يتابع",
+  "profFollowers": "المتابعون",
+  "profFollowsNone": "لا يتابع أحدًا بعد.",
+  "profFollowersNone": "لم يُعثر على متابعين.",
+  "profFollowersPartial": "عرض {n} من {total} متابع.",
+  "showMore": "عرض المزيد",
+  "arkZapNoPostZap": "لا يمكن إرسال zap لهذا المنشور: ليس لدى كاتبه عنوان Lightning ولا عنوان Ark."
 }

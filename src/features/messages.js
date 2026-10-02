@@ -33,7 +33,7 @@ import { mergeFeedWindow } from '../feed-window.js';
 import { createThreadStore } from '../thread-cache.js';
 import { createFeedCache, FEED_CACHE_POSTS, FEED_SEED_POSTS } from '../feed-cache.js';
 import { PUBLIC_FEED_RELAYS, popularCandidates } from '../popular-feed.js';
-import { makeSearcher, resultRows, fallbackAvatar, warmSearch, punkImageUrl, punkSmallUrl } from '../recipient-search.js';
+import { makeSearcher, resultRows, fallbackAvatar, warmSearch, punkImageUrl, punkSmallUrl, primalCache } from '../recipient-search.js';
 import { getNetwork } from '../api.js';
 import { decodeBolt11 } from '../ark/lightning.js';
 import { hexToBytes, bytesToHex } from '@noble/hashes/utils';
@@ -3145,6 +3145,7 @@ export function messagesFeature(ctx) {
     // for the other direction (a note row tapped on a profile page).
     ui.profOverThread = !!ui.noteThread;
     ui.profEdit = null; ui.profEditFilled = false; ui.logoutConfirm = null; ui.profCompose = null;
+    ui.profPeople = null;
     render();
     try { window.scrollTo(0, 0); } catch {}
     fetchFullProfile(pk);
@@ -4453,10 +4454,17 @@ export function messagesFeature(ctx) {
     if (f.loading || (f.at && Date.now() - f.at < 600_000)) return;
     f.loading = true;
     liveProfileOf(pk); // their name and face for the title
-    queryOn([...new Set([...(def.relays || []), ...PROFILE_RELAYS, ...NOTE_RELAYS])], { kinds: [3], authors: [pk] }, 6000)
-      .catch(() => [])
-      .then((evs) => {
-        const newest = (evs || []).sort((a, b) => b.created_at - a.created_at)[0];
+    // Their relays and Primal's cache at once: a list kept only on their own
+    // outbox relays reads as nobody followed. Primal's copy is the signed
+    // event itself, with the follows' profiles beside it; both are checked
+    // before anything is believed.
+    Promise.all([
+      queryOn([...new Set([...(def.relays || []), ...PROFILE_RELAYS, ...NOTE_RELAYS])], { kinds: [3], authors: [pk] }, 6000).catch(() => []),
+      primalCache('contact_list', { pubkey: pk }, 6000).then((evs) => verifiedPrimal(evs, [0, 3])).catch(() => []),
+    ])
+      .then(([relayEvs, primalEvs]) => {
+        const evs = [...(relayEvs || []), ...primalEvs.filter((e) => e.kind === 3 && e.pubkey === pk)];
+        const newest = evs.sort((a, b) => b.created_at - a.created_at)[0];
         const had = f.at;
         if (newest || !had) f.authors = newest ? hexList(newest.tags.filter((x) => x[0] === 'p').map((x) => x[1])) : [];
         f.at = Date.now(); f.loading = false;
@@ -4468,6 +4476,107 @@ export function messagesFeature(ctx) {
         if (feedDef(curFeedId)?.of === pk) { dropFeedState(curFeedId); selectFeed(curFeedId); }
         scheduleRepaint();
       });
+  }
+
+  // ---- follows & followers -------------------------------------------------
+  // Whom someone follows is their own kind 3 (ofFollows, above). Who follows
+  // THEM is everyone else's kind 3 — no relay will count that — so the
+  // number and the list come from Primal's cache, which indexes the network
+  // for exactly this. Only pubkeys are taken from it: names and faces still
+  // come from the relays, as everywhere else.
+  const socialCounts = new Map(); // pk -> { follows, followers, at, loading }
+  function loadSocial(pk) {
+    const cur = socialCounts.get(pk);
+    if (cur && (cur.loading || Date.now() - (cur.at || 0) < 600_000)) return cur;
+    socialCounts.set(pk, { ...(cur || {}), loading: true });
+    primalCache('user_profile', { pubkey: pk }, 6000).then((evs) => {
+      let c = {};
+      try { c = JSON.parse(evs.find((e) => e.kind === 10000105)?.content || '{}'); } catch {}
+      const num = (n) => (Number.isFinite(n) && n >= 0 ? n : null);
+      socialCounts.set(pk, { follows: num(c.follows_count), followers: num(c.followers_count), at: Date.now() });
+    }).catch(() => socialCounts.set(pk, { ...(cur || {}), at: Date.now() })).finally(scheduleRepaint);
+    return socialCounts.get(pk);
+  }
+  // Primal's events, signature-checked off the main thread; the profiles
+  // among them fill names and faces the relays didn't have.
+  async function verifiedPrimal(evs, kinds) {
+    const want = (evs || []).filter((e) => kinds.includes(e.kind) && e.sig && /^[0-9a-f]{64}$/.test(e.pubkey || ''));
+    const ok = await verifyEventsAsync(want);
+    const good = want.filter((e, i) => ok[i]);
+    let applied = 0;
+    for (const e of good) if (e.kind === 0 && applyProfile(e.pubkey, e)) applied++;
+    if (applied) scheduleRepaint();
+    return good;
+  }
+  const followersOf = new Map(); // pk -> { pks, at, loading }
+  function loadFollowers(pk) {
+    const cur = followersOf.get(pk);
+    if (cur && (cur.loading || Date.now() - (cur.at || 0) < 600_000)) return cur;
+    followersOf.set(pk, { pks: cur?.pks || [], loading: true });
+    const ask = (limit) => primalCache('user_followers', { pubkey: pk, limit }, 8000)
+      .then((evs) => verifiedPrimal(evs, [0])).then((evs) => [...new Set(evs.map((e) => e.pubkey))]);
+    // a first screenful fast, then the long list behind it
+    ask(60).then((pks) => {
+      const now = followersOf.get(pk);
+      if (now?.loading && pks.length > (now.pks || []).length) { followersOf.set(pk, { pks, loading: true }); scheduleRepaint(); }
+    }).catch(() => {});
+    ask(500).then((pks) => {
+      const now = followersOf.get(pk);
+      // the people already on screen keep their places; the rest go after
+      const shown = now?.pks || [];
+      const seen = new Set(shown);
+      followersOf.set(pk, { pks: [...shown, ...pks.filter((x) => !seen.has(x))], at: Date.now() });
+    }).catch(() => followersOf.set(pk, { pks: followersOf.get(pk)?.pks || [], at: Date.now() })).finally(scheduleRepaint);
+    return followersOf.get(pk);
+  }
+  const compactNum = (n) => { try { return new Intl.NumberFormat(getLang(), { notation: 'compact', maximumFractionDigits: 1 }).format(n); } catch { return String(n); } };
+  // "116 Following · 572 Followers" under the bio; each opens its list
+  // right below, on the same page.
+  function socialLine(pk) {
+    const c = loadSocial(pk);
+    const f = ofFollows.get(pk);
+    const follows = f?.at ? f.authors.length : c?.follows;
+    const pick = (which) => {
+      ui.profPeople = ui.profPeople === which ? null : which;
+      ui.profPeopleN = 50;
+      if (which === 'following') loadOfFollows({ of: pk });
+      else loadFollowers(pk);
+      render();
+    };
+    const btn = (which, n, label) => h('button', {
+      type: 'button', class: 'social-count' + (ui.profPeople === which ? ' on' : ''), 'aria-expanded': String(ui.profPeople === which),
+      onClick: () => pick(which),
+    }, h('b', {}, n == null ? '–' : compactNum(n)), ' ', label);
+    return h('div', { class: 'row social-line' },
+      btn('following', follows, t('profFollowing')),
+      btn('followers', c?.followers, t('profFollowers')));
+  }
+  function socialList(pk) {
+    const which = ui.profPeople;
+    if (!which) return null;
+    const src = which === 'following' ? ofFollows.get(pk) : followersOf.get(pk);
+    const all = which === 'following' ? (src?.authors || []) : (src?.pks || []);
+    const pks = all.filter((x) => !hiddenPk(x));
+    const n = ui.profPeopleN || 50;
+    const loading = !src || src.loading || (which === 'following' && !src.at);
+    const total = which === 'followers' ? socialCounts.get(pk)?.followers : null;
+    return h('div', { class: 'col social-list', style: 'gap:6px' },
+      loading && !pks.length ? h('div', { class: 'row', style: 'justify-content:center;padding:10px' }, h('span', { class: 'spinner sm' })) : null,
+      !loading && !pks.length ? h('div', { class: 'small faint', style: 'text-align:center;padding:8px' }, t(which === 'following' ? 'profFollowsNone' : 'profFollowersNone')) : null,
+      pks.length ? h('div', { class: 'list' }, ...pks.slice(0, n).map((x) => {
+        const p = profileOf(x) || {};
+        const sub = p.nip05 ? String(p.nip05).replace(/^_@/, '') : (npubOf(x) || '').slice(0, 20) + '…';
+        return h('div', { class: 'item chat-thread-row', 'data-key': 'sp:' + x, onClick: () => openProfile(x) },
+          avatar(x, 'chat-avatar', false),
+          h('div', { class: 'col grow', style: 'min-width:0;gap:1px' },
+            h('div', { class: 'chat-name' }, displayName(x)),
+            h('div', { class: 'muted small chat-preview' }, sub)));
+      })) : null,
+      pks.length > n ? h('button', { class: 'btn-ghost btn-block', onClick: () => { ui.profPeopleN = n + 50; render(); } }, t('showMore')) : null,
+      // Primal hands back the followers it knows best, not always all of them
+      which === 'followers' && !loading && total && pks.length < total && pks.length <= n
+        ? h('div', { class: 'small faint', style: 'text-align:center' }, t('profFollowersPartial', { n: compactNum(pks.length), total: compactNum(total) }))
+        : null);
   }
 
   function feedNow() {
@@ -7913,6 +8022,8 @@ export function messagesFeature(ctx) {
           ? h('p', { class: 'small', style: 'margin:0;white-space:pre-wrap;overflow-wrap:anywhere' },
               ...noteBody(about.slice(0, 1000)))
           : null,
+        ui.profEdit ? null : socialLine(pk),
+        ui.profEdit ? null : socialList(pk),
         // A readable public-ID preview; copying always uses the full npub.
         // It only steps aside while the (long) edit form is open.
         ui.profEdit ? null : h('button', {

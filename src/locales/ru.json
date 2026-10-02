@@ -863,5 +863,12 @@
   "copy": "Копировать",
   "switchUnit": "Переключить BTC / sats",
   "footerMadeBy": "сделано,",
-  "footerSourceOn": "исходный код на"
+  "footerSourceOn": "исходный код на",
+  "profFollowing": "Подписки",
+  "profFollowers": "Подписчики",
+  "profFollowsNone": "Пока ни на кого не подписан.",
+  "profFollowersNone": "Подписчики не найдены.",
+  "profFollowersPartial": "Показано {n} из {total} подписчиков.",
+  "showMore": "Показать ещё",
+  "arkZapNoPostZap": "Нельзя отправить zap на этот пост: у автора нет ни Lightning-адреса, ни Ark-адреса."
 }

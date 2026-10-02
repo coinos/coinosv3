@@ -863,5 +863,12 @@
   "copy": "কপি",
   "switchUnit": "BTC / sats পাল্টান",
   "footerMadeBy": "তৈরি করেছেন",
-  "footerSourceOn": "সোর্স কোড"
+  "footerSourceOn": "সোর্স কোড",
+  "profFollowing": "অনুসরণ করছেন",
+  "profFollowers": "অনুসারী",
+  "profFollowsNone": "এখনও কাউকে অনুসরণ করছেন না।",
+  "profFollowersNone": "কোনো অনুসারী পাওয়া যায়নি।",
+  "profFollowersPartial": "{total} জন অনুসারীর মধ্যে {n} জন দেখানো হচ্ছে।",
+  "showMore": "আরও দেখুন",
+  "arkZapNoPostZap": "এই পোস্টে zap করা যাবে না: লেখকের কোনো Lightning ঠিকানা বা Ark ঠিকানা নেই।"
 }

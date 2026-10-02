@@ -862,5 +862,12 @@
   "copy": "Kopyala",
   "switchUnit": "BTC / sats değiştir",
   "footerMadeBy": "yapan:",
-  "footerSourceOn": "kaynak kodu"
+  "footerSourceOn": "kaynak kodu",
+  "profFollowing": "Takip edilen",
+  "profFollowers": "Takipçiler",
+  "profFollowsNone": "Henüz kimseyi takip etmiyor.",
+  "profFollowersNone": "Takipçi bulunamadı.",
+  "profFollowersPartial": "{total} takipçiden {n} tanesi gösteriliyor.",
+  "showMore": "Daha fazla göster",
+  "arkZapNoPostZap": "Bu gönderiye zap yapılamaz: yazarının ne Lightning adresi ne de Ark adresi var."
 }

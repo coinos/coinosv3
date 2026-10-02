@@ -199,5 +199,12 @@
   "clearAllWarn": "⚠ یہ اس ڈیوائس سے تمام والیٹ ہٹا دیتا ہے۔ جس بھی والیٹ کا ریکوری فقرہ یا کلید آپ نے بیک اپ نہیں کیا، وہ ہمیشہ کے لیے کھو جائے گا۔",
   "rename": "نام تبدیل کریں",
   "darkMode": "ڈارک موڈ",
-  "lightMode": "لائٹ موڈ"
+  "lightMode": "لائٹ موڈ",
+  "profFollowing": "فالو کر رہے ہیں",
+  "profFollowers": "فالوورز",
+  "profFollowsNone": "ابھی کسی کو فالو نہیں کر رہے۔",
+  "profFollowersNone": "کوئی فالوور نہیں ملا۔",
+  "profFollowersPartial": "{total} میں سے {n} فالوورز دکھائے جا رہے ہیں۔",
+  "showMore": "مزید دکھائیں",
+  "arkZapNoPostZap": "اس پوسٹ پر zap نہیں ہو سکتا: مصنف کے پاس نہ Lightning پتہ ہے نہ Ark پتہ۔"
 }

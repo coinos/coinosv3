@@ -863,5 +863,12 @@
   "copy": "Copier",
   "switchUnit": "Basculer BTC / sats",
   "footerMadeBy": "fait par",
-  "footerSourceOn": "code source sur"
+  "footerSourceOn": "code source sur",
+  "profFollowing": "Abonnements",
+  "profFollowers": "Abonnés",
+  "profFollowsNone": "Ne suit encore personne.",
+  "profFollowersNone": "Aucun abonné trouvé.",
+  "profFollowersPartial": "{n} abonnés affichés sur {total}.",
+  "showMore": "Afficher plus",
+  "arkZapNoPostZap": "Impossible de zapper cette publication : son auteur n’a ni adresse Lightning ni adresse Ark."
 }

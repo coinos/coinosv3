@@ -863,5 +863,12 @@
   "copy": "コピー",
   "switchUnit": "BTC / sats を切替",
   "footerMadeBy": "作成者:",
-  "footerSourceOn": "ソースは"
+  "footerSourceOn": "ソースは",
+  "profFollowing": "フォロー中",
+  "profFollowers": "フォロワー",
+  "profFollowsNone": "まだ誰もフォローしていません。",
+  "profFollowersNone": "フォロワーが見つかりません。",
+  "profFollowersPartial": "{total}人中{n}人のフォロワーを表示しています。",
+  "showMore": "もっと見る",
+  "arkZapNoPostZap": "この投稿にはZapできません：投稿者にLightningアドレスもArkアドレスもありません。"
 }

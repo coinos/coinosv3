@@ -862,5 +862,12 @@
   "copy": "복사",
   "switchUnit": "BTC / sats 전환",
   "footerMadeBy": "만든 사람:",
-  "footerSourceOn": "소스 공개:"
+  "footerSourceOn": "소스 공개:",
+  "profFollowing": "팔로잉",
+  "profFollowers": "팔로워",
+  "profFollowsNone": "아직 아무도 팔로우하지 않습니다.",
+  "profFollowersNone": "팔로워를 찾을 수 없습니다.",
+  "profFollowersPartial": "팔로워 {total}명 중 {n}명을 표시합니다.",
+  "showMore": "더 보기",
+  "arkZapNoPostZap": "이 게시물에 zap할 수 없습니다: 작성자에게 Lightning 주소도 Ark 주소도 없습니다."
 }

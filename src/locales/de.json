@@ -863,5 +863,12 @@
   "copy": "Kopieren",
   "switchUnit": "BTC / sats wechseln",
   "footerMadeBy": "gemacht von",
-  "footerSourceOn": "Quellcode auf"
+  "footerSourceOn": "Quellcode auf",
+  "profFollowing": "Folgt",
+  "profFollowers": "Follower",
+  "profFollowsNone": "Folgt noch niemandem.",
+  "profFollowersNone": "Keine Follower gefunden.",
+  "profFollowersPartial": "{n} von {total} Followern angezeigt.",
+  "showMore": "Mehr anzeigen",
+  "arkZapNoPostZap": "Dieser Beitrag kann nicht gezappt werden: Der Autor hat weder eine Lightning- noch eine Ark-Adresse."
 }

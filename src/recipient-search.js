@@ -51,21 +51,25 @@ const MAX_RESULTS = 8;
 // to cost more than the query itself. Idle for a minute, it closes itself.
 let pws = null, pwsN = 0, pwsIdle = null;
 const pwsSubs = new Map(); // sub id -> { rows, finish }
-function primalSearch(q, limit = MAX_RESULTS) {
+// Any of Primal's cache calls over the shared socket; resolves with every
+// event it answered (its own stats kinds included) at EOSE or the timeout.
+export function primalCache(cmd, args, timeoutMs = 3500) {
   return new Promise((resolve) => {
     const sid = 'rs' + ++pwsN;
     const rows = [];
     const finish = () => { clearTimeout(to); pwsSubs.delete(sid); resolve(rows); };
-    const to = setTimeout(finish, 3500);
+    const to = setTimeout(finish, timeoutMs);
     pwsSubs.set(sid, { rows, finish });
     clearTimeout(pwsIdle);
     pwsIdle = setTimeout(() => { try { pws?.close(); } catch {} pws = null; }, 60_000);
-    const send = () => { try { pws.send(JSON.stringify(['REQ', sid, { cache: ['user_search', { query: q, limit }] }])); } catch { finish(); } };
+    const send = () => { try { pws.send(JSON.stringify(['REQ', sid, { cache: [cmd, args] }])); } catch { finish(); } };
     if (pws && pws.readyState === 1) return send();
     if (!ensurePws()) return finish();
     pws.addEventListener('open', send, { once: true });
   });
 }
+const primalSearch = (q, limit = MAX_RESULTS) =>
+  primalCache('user_search', { query: q, limit }).then((evs) => evs.filter((e) => e.kind === 0));
 
 function ensurePws() {
   if (pws && pws.readyState <= 1) return true;
@@ -75,7 +79,7 @@ function ensurePws() {
       const m = JSON.parse(ev.data);
       const sub = pwsSubs.get(m[1]);
       if (!sub) return;
-      if (m[0] === 'EVENT' && m[2] && m[2].kind === 0) sub.rows.push(m[2]);
+      if (m[0] === 'EVENT' && m[2]) sub.rows.push(m[2]);
       if (m[0] === 'EOSE') sub.finish();
     } catch {}
   };

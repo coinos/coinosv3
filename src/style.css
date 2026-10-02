@@ -1338,3 +1338,13 @@ body::after {
 .emoji-grid .cemoji { font-size: 8px; }
 /* quoted replies and the composer's reply bar run small; their emoji follow */
 .chat-quote-text .cemoji { height: 1.25em; vertical-align: -0.3em; }
+
+/* "116 Following · 572 Followers" on a profile; each opens its list below */
+.social-line { gap: 16px; align-items: center; }
+.social-count {
+  width: auto; margin: 0; padding: 2px 0; border: 0; background: none; color: var(--muted);
+  font-size: 14px; cursor: pointer; border-bottom: 2px solid transparent; border-radius: 0;
+}
+.social-count b { color: var(--ink); font-weight: 650; }
+.social-count:hover { background: none; color: var(--ink); }
+.social-count.on { color: var(--ink); border-bottom-color: var(--accent); }

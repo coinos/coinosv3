@@ -863,5 +863,12 @@
   "copy": "复制",
   "switchUnit": "切换 BTC / sats",
   "footerMadeBy": "制作者",
-  "footerSourceOn": "源代码见"
+  "footerSourceOn": "源代码见",
+  "profFollowing": "关注",
+  "profFollowers": "粉丝",
+  "profFollowsNone": "还没有关注任何人。",
+  "profFollowersNone": "未找到粉丝。",
+  "profFollowersPartial": "显示 {total} 位粉丝中的 {n} 位。",
+  "showMore": "显示更多",
+  "arkZapNoPostZap": "无法打赏此帖子：作者既没有 Lightning 地址也没有 Ark 地址。"
 }

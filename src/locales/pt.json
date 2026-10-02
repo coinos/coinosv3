@@ -863,5 +863,12 @@
   "copy": "Copiar",
   "switchUnit": "Alternar BTC / sats",
   "footerMadeBy": "feito por",
-  "footerSourceOn": "código disponível no"
+  "footerSourceOn": "código disponível no",
+  "profFollowing": "Seguindo",
+  "profFollowers": "Seguidores",
+  "profFollowsNone": "Ainda não segue ninguém.",
+  "profFollowersNone": "Nenhum seguidor encontrado.",
+  "profFollowersPartial": "Mostrando {n} de {total} seguidores.",
+  "showMore": "Mostrar mais",
+  "arkZapNoPostZap": "Não é possível dar zap neste post: o autor não tem endereço Lightning nem endereço Ark."
 }

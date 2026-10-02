@@ -199,5 +199,12 @@
   "clearAllWarn": "⚠ Hii inaondoa pochi zote kwenye kifaa hiki. Pochi yoyote ambayo kifungu chake cha kurejesha au ufunguo haukuhifadhi nakala itapotea milele.",
   "rename": "Badilisha jina",
   "darkMode": "Hali ya giza",
-  "lightMode": "Hali ya mwanga"
+  "lightMode": "Hali ya mwanga",
+  "profFollowing": "Anaowafuata",
+  "profFollowers": "Wafuasi",
+  "profFollowsNone": "Bado hamfuati mtu yeyote.",
+  "profFollowersNone": "Hakuna wafuasi waliopatikana.",
+  "profFollowersPartial": "Inaonyesha wafuasi {n} kati ya {total}.",
+  "showMore": "Onyesha zaidi",
+  "arkZapNoPostZap": "Huwezi kutuma zap kwa chapisho hili: mwandishi wake hana anwani ya Lightning wala anwani ya Ark."
 }

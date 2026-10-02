@@ -199,5 +199,12 @@
   "clearAllWarn": "⚠ Thao tác này xóa mọi ví khỏi thiết bị này. Bất kỳ ví nào mà bạn chưa sao lưu cụm từ khôi phục hoặc khóa sẽ mất vĩnh viễn.",
   "rename": "Đổi tên",
   "darkMode": "Chế độ tối",
-  "lightMode": "Chế độ sáng"
+  "lightMode": "Chế độ sáng",
+  "profFollowing": "Đang theo dõi",
+  "profFollowers": "Người theo dõi",
+  "profFollowsNone": "Chưa theo dõi ai.",
+  "profFollowersNone": "Không tìm thấy người theo dõi.",
+  "profFollowersPartial": "Đang hiển thị {n} trên {total} người theo dõi.",
+  "showMore": "Xem thêm",
+  "arkZapNoPostZap": "Không thể zap bài này: tác giả không có địa chỉ Lightning hay địa chỉ Ark."
 }

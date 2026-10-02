@@ -199,5 +199,12 @@
   "clearAllWarn": "⚠ Ini menghapus semua dompet dari perangkat ini. Dompet mana pun yang frasa pemulihan atau kuncinya belum Anda cadangkan akan hilang selamanya.",
   "rename": "Ganti nama",
   "darkMode": "Mode gelap",
-  "lightMode": "Mode terang"
+  "lightMode": "Mode terang",
+  "profFollowing": "Mengikuti",
+  "profFollowers": "Pengikut",
+  "profFollowsNone": "Belum mengikuti siapa pun.",
+  "profFollowersNone": "Tidak ada pengikut yang ditemukan.",
+  "profFollowersPartial": "Menampilkan {n} dari {total} pengikut.",
+  "showMore": "Tampilkan lebih banyak",
+  "arkZapNoPostZap": "Tidak bisa zap postingan ini: penulisnya tidak punya alamat Lightning maupun alamat Ark."
 }

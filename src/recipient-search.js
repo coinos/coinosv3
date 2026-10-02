@@ -144,7 +144,8 @@ export function searchable(qRaw) {
   if (q.length < 2 || q.length > 30) return false;
   if (/^(bc1|tb1|bcrt1|lnbc|lntb|lnurl|bitcoin:|lightning:|sp1q|ark1|xpub|zpub|xprv|zprv|nsec1|bunker:)/.test(q)) return false;
   if (/^[0-9a-f]{40,}$/.test(q)) return false; // raw hex key/txid
-  return /^[a-z0-9._-]+$/.test(q);
+  // a display name is words: "jordan miller", "José", not just a handle
+  return /^[\p{L}\p{N}._-]+(?:\s+[\p{L}\p{N}._-]+)*$/u.test(q);
 }
 
 async function fillProfiles(rows) {
@@ -171,7 +172,7 @@ async function fillProfiles(rows) {
 // waiting for the slow ones. The returned promise still resolves with the
 // final, profile-filled rows.
 export async function searchRecipients(qRaw, onPartial = null) {
-  const q = qRaw.trim().toLowerCase();
+  const q = qRaw.trim().toLowerCase().replace(/\s+/g, ' ');
   if (queryCache.has(q)) return queryCache.get(q);
   const out = new Map(); // pk -> { pk, name, address, picture, pri }
   const add = (pk, row, pri) => {
@@ -183,7 +184,7 @@ export async function searchRecipients(qRaw, onPartial = null) {
 
   // Within a source, a name that actually contains the query outranks the
   // search relay's looser relevance matches.
-  const score = (r) => ((r.name || '').toLowerCase().includes(q) || (r.address || r.nip05 || '').toLowerCase().includes(q)) ? 0 : 1;
+  const score = (r) => ((r.name || '').toLowerCase().replace(/\s+/g, ' ').includes(q) || (r.address || r.nip05 || '').toLowerCase().includes(q)) ? 0 : 1;
   const snapshot = () => {
     const rows = [...out.values()].sort((a, b) => a.pri - b.pri || score(a) - score(b)).slice(0, MAX_RESULTS);
     for (const r of rows) {
@@ -210,7 +211,9 @@ export async function searchRecipients(qRaw, onPartial = null) {
           add(e.pubkey, { name: m.display_name || m.name, picture: m.picture, nip05: typeof m.nip05 === 'string' ? m.nip05.replace(/^_@/, '') : undefined }, pri);
         } catch {}
       };
-      const primal = await primalSearch(q);
+      // Primal matches "jordanmiller" but not "jordan miller": ask both ways
+      const joined = q.replace(/ /g, '');
+      const primal = (await Promise.all(joined === q ? [primalSearch(q)] : [primalSearch(q), primalSearch(joined)])).flat();
       for (const e of primal) noteKind0(e, 2);
       if (!primal.length) {
         const evs = await queryOn(SEARCH_RELAYS, { kinds: [0], search: q, limit: MAX_RESULTS }, 3500);
@@ -240,7 +243,7 @@ export function makeSearcher(onUpdate) {
       clearTimeout(timer);
       const my = ++seq;
       if (!searchable(q)) { onUpdate(q, null); return; }
-      const s = q.trim().toLowerCase();
+      const s = q.trim().toLowerCase().replace(/\s+/g, ' ');
       // Get something on screen fast, then relax: the first short query fires
       // almost immediately (that's the wait the user actually feels), while
       // longer ones — mid-word keystrokes — wait long enough to skip the

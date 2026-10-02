@@ -1046,7 +1046,18 @@ html.no-scroll { overflow: hidden; scrollbar-gutter: auto; }
   box-shadow: 0 0 0 2px var(--bg);
 }
 .chat-avatar.header-ava { width: 30px; height: 30px; font-size: 11px; }
-.npub-box { display: flex; align-items: center; gap: 8px; }
+.profile-key {
+  display: flex; align-items: center; gap: 16px; width: 100%; padding: 14px 16px;
+  border: 0; border-radius: 12px; background: var(--surface2);
+  font-family: var(--sans); text-align: start;
+}
+.profile-key:hover { background: var(--accent-soft); }
+.profile-key-content { display: flex; flex-direction: column; gap: 4px; min-width: 0; flex: 1; }
+.profile-key-label { color: var(--muted); font-size: 12px; font-weight: 500; }
+.profile-key-value { font-size: 14px; font-weight: 400; overflow-wrap: anywhere; }
+.profile-key-copy { display: flex; flex-shrink: 0; color: var(--muted); }
+.composer-options { margin-inline-start: auto; flex-shrink: 0; }
+.compose-preview-toggle[aria-pressed="true"] { background: var(--accent-soft); color: var(--ink); }
 .copy-ico { flex-shrink: 0; background: none; border: none; padding: 2px; color: var(--muted); cursor: pointer; display: flex; }
 .copy-ico:hover { color: var(--ink); }
 .settings-nav { text-align: left; font-weight: 600; padding: 14px 16px; position: relative; }

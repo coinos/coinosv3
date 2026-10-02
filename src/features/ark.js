@@ -733,6 +733,12 @@ export function arkFeature(ctx) {
     return { spendableSat: sum('spendable'), pendingSat: sum('pending'), boardingSat };
   }
 
+  function renewingSat() {
+    const s = arkStateNow();
+    const ids = new Set((s?.actions || []).filter((a) => a.type === 'refresh' && !['done', 'failed'].includes(a.step)).flatMap((a) => a.inputIds || []));
+    return (s?.vtxos || []).filter((v) => v.state === 'pending' && ids.has(v.id)).reduce((n, v) => n + v.amountSat, 0);
+  }
+
   // An ark address in the send form signals a send is coming: verify our
   // spendable vtxos against the server now, so a stale one (same seed active
   // elsewhere, restored state) is dropped before coin selection instead of
@@ -1954,7 +1960,7 @@ export function arkFeature(ctx) {
         ? h('button', { class: 'btn-block', disabled: !!ui.busy, onClick: () => { ctx.hook('lnZapNpub', z.pk, z.npub, z.eventId); } }, '⚡ ' + t('lnZapFallback'))
         : null,
       payable && spendable < 330
-        ? h('div', { class: 'notice info' }, t('zapNoBalance'))
+        ? h('div', { class: 'notice info' }, t(spendable + renewingSat() >= 330 ? 'spendingRenewingPayment' : 'zapNoBalance'))
         : payable
         ? amountInputs(t('arkZapHint'))
         : null,
@@ -2203,6 +2209,7 @@ export function arkFeature(ctx) {
     if (!mgr) connectArk().then(() => render()).catch(() => {});
     const totalSat = spend.reduce((n, v) => n + v.amountSat, 0);
     const heldSat = totalSat + pendingCoins.reduce((n, v) => n + v.amountSat, 0);
+    const spendableSat = arkBalance()?.spendableSat || 0;
     let exitFee = 0; try { exitFee = estimateExitFeeSat(mgr); } catch {}
     const feeRate = Math.max(1, (wallet.feeRates && wallet.feeRates.halfHourFee) || 2);
     const afterFee = Math.ceil(530 * feeRate);
@@ -2389,6 +2396,17 @@ export function arkFeature(ctx) {
             : selCoins.length < spend.length
               ? t('arkCoinsRenewSome', { n: selCoins.length, fee: selFee > 0 ? fmtSats(selFee) + ' sats' : t('arkDepthFree') })
               : selFee > 0 ? t('arkCoinsRenewNowFee', { fee: fmtSats(selFee) + ' sats' }) : t('arkDepthRenewBtn'))),
+      h('div', { class: 'card col', style: 'gap:8px' },
+        h('h4', { style: 'margin:0' }, t('arkCoinsCoopTitle')),
+        h('p', { class: 'small muted', style: 'margin:0' }, t('arkCoopDesc')),
+        h('button', { class: 'btn-primary btn-block', disabled: !!ui.arkBusy || !spendableSat || wallet.watchOnly, onClick: () => {
+          const address = wallet.freshReceive().address;
+          ui.arkCoinsPage = null; ui.arkCoinsSel = null; ui.arkExitPage = null; ui.arkExitConfirm = null;
+          ui.arkOffboarded = null; ui.arkError = '';
+          ctx.showSend({ fresh: true });
+          ui.arkOffboardSend = { address, amount: String(spendableSat), fromCoins: true };
+          render();
+        } }, t('arkOffboardBtn', { n: fmtAmount(spendableSat) + ' ' + unitLabel() }))),
       h('div', { class: 'card col', style: 'gap:8px' },
         h('h4', { style: 'margin:0' }, t('arkCoinsExitTitle')),
         h('p', { class: 'small muted', style: 'margin:0' },
@@ -2889,8 +2907,11 @@ export function arkFeature(ctx) {
     const o = ui.arkOffboardSend;
     const spendable = arkBalance()?.spendableSat || 0;
     return h('div', { class: 'card col', style: 'gap:12px' },
-      h('h3', {}, t('arkExitSendTitle')),
-      h('div', { class: 'small muted break' }, o.address),
+      h('h3', {}, t(o.fromCoins ? 'arkCoinsCoopTitle' : 'arkExitSendTitle')),
+      h('label', { class: 'field' },
+        h('span', { class: 'lab' }, t('recipient')),
+        h('input', { type: 'text', class: 'mono-input', value: o.address, spellcheck: 'false', autocomplete: 'off', autocapitalize: 'none',
+          onInput: (e) => { o.address = e.target.value.trim(); } })),
       h('div', { class: 'small faint' }, t('arkExitSendNote')),
       h('div', { class: 'input-group' },
         h('input', { type: 'number', min: '1', placeholder: String(spendable), value: o.amount,
@@ -2898,14 +2919,19 @@ export function arkFeature(ctx) {
         h('button', { type: 'button', onClick: () => { o.amount = String(spendable); render(); } }, t('max'))),
       ui.arkError ? h('div', { class: 'notice err' }, ui.arkError) : null,
       h('div', { class: 'row gap6' },
-        h('button', { class: 'btn-ghost grow', onClick: () => { ui.arkOffboardSend = null; ui.arkError = ''; ui.send = blankSend(); render(); } }, t('back')),
+        h('button', { class: 'btn-ghost grow', onClick: () => {
+          ui.arkOffboardSend = null; ui.arkError = ''; ui.send = blankSend();
+          if (o.fromCoins) ctx.goBack(() => { ui.arkCoinsPage = true; }); else render();
+        } }, t('back')),
         ui.arkBusy === 'offboard'
           ? h('button', { class: 'btn-primary grow', disabled: true }, h('span', { class: 'spinner sm' }))
           : h('button', { class: 'btn-primary grow', onClick: () => {
-              const sats = parseInt(o.amount, 10) || spendable;
-              if (!sats || sats <= 0 || sats > spendable) { ui.arkError = t('enterValidAmtForN', { n: 1 }); render(); return; }
+              const amount = String(o.amount ?? '').trim();
+              const sats = amount ? Number(amount) : spendable;
+              if (!Number.isSafeInteger(sats) || sats <= 0 || sats > spendable) { ui.arkError = t('enterValidAmtForN', { n: 1 }); render(); return; }
+              try { addrScript(o.address); } catch { ui.arkError = t('arkOffboardBadAddress'); render(); return; }
               doArkOffboard(sats >= spendable ? 0 : sats, o.address);
-            } }, t('send'))),
+            } }, t('arkSendBtn'))),
       // This send IS the cooperative exit. The trustless fallback only
       // appears when cooperation actually failed — and it states, before
       // anything is confirmed, exactly what it does and what the mining
@@ -2942,6 +2968,8 @@ export function arkFeature(ctx) {
   async function doArkOffboard(amountSat, destAddress = null) {
     ui.arkBusy = 'offboard'; ui.arkError = ''; render();
     try {
+      const address = destAddress || wallet.freshReceive().address;
+      const spk = addrScript(address);
       const mgr = await connectArk();
       const spendables = () => mgr.state.vtxos.filter((v) => v.state === 'spendable');
       const total = spendables().reduce((n, v) => n + v.amountSat, 0);
@@ -2960,11 +2988,10 @@ export function arkFeature(ctx) {
         }
         ids = [target.id];
       }
-      const address = destAddress || wallet.freshReceive().address;
-      const spk = btc.OutScript.encode(btc.Address(wallet.netCfg.net).decode(address));
       const action = await mgr.startOffboard(spk, address, ids);
       ui.arkOffboardAmt = '';
       ui.arkMoveOpen = false;
+      if (ui.arkOffboardSend?.fromCoins) ui.tab = 'receive';
       ui.arkOffboardSend = null;
       ui.send = blankSend();
       ui.arkOffboarded = { txid: action.txid, netSat: action.netSat, feeSat: action.feeSat };
@@ -3515,6 +3542,7 @@ export function arkFeature(ctx) {
       return mgr.fetchBolt12(offerStr, amountSat);
     },
     lnSpendableSat() { const b = arkBalance(); return b ? b.spendableSat : 0; },
+    spendingRenewingSat() { return renewingSat(); },
     // Max for any Lightning amount form: spendable minus estimated fees.
     lnMaxSendSat() { return lnMaxSat(); },
     settingsCards() { return [autoWithdrawCard()]; },

@@ -7395,7 +7395,7 @@ export function messagesFeature(ctx) {
           }
         },
       }),
-      h('div', { class: 'row reply-tools', style: 'gap:8px;align-items:center' },
+      h('div', { class: 'row reply-tools wrap', style: 'gap:8px;align-items:center' },
       // A reply can carry a picture too — same upload, same imeta tag, same
       // paperclip. The URL lands in the draft, which is what every client
       // reads as the media.
@@ -7416,12 +7416,13 @@ export function messagesFeature(ctx) {
           });
         },
       }),
-      previewBtn(!!s.preview, () => { s.preview = !s.preview; render(); }),
       h('span', { class: 'grow' }),
-      h('button', {
-        class: 'btn-ghost btn-sm thread-reply-cancel', type: 'button',
-        onClick: () => { s.replying = false; s.preview = false; render(); },
-      }, t('cancel')),
+      h('div', { class: 'row gap6 composer-options' },
+        previewBtn(!!s.preview, () => { s.preview = !s.preview; render(); }),
+        h('button', {
+          class: 'btn-ghost btn-sm thread-reply-cancel', type: 'button',
+          onClick: () => { s.replying = false; s.preview = false; render(); },
+        }, t('cancel'))),
       h('button', {
         class: 'btn-primary btn-sm thread-reply-send', disabled: !!s.sending || !!ui.postUploading,
         onClick: async () => {
@@ -7797,13 +7798,18 @@ export function messagesFeature(ctx) {
           ? h('p', { class: 'small', style: 'margin:0;white-space:pre-wrap;overflow-wrap:anywhere' },
               ...noteBody(about.slice(0, 1000)))
           : null,
-        // the npub, tap to copy — on every profile including your own; it
-        // only steps aside while the (long) edit form is open
+        // A readable public-ID preview; copying always uses the full npub.
+        // It only steps aside while the (long) edit form is open.
         ui.profEdit ? null : h('button', {
-          class: 'addr-box break npub-box', title: t('copy'),
-          style: 'font-size:11px;cursor:pointer;text-align:left;width:100%',
+          type: 'button', class: 'profile-key', title: npub,
+          'aria-label': t('copy') + ': ' + t('profPublicKey'),
           onClick: async () => { try { await navigator.clipboard.writeText(npub); toast(t('copied')); } catch {} },
-        }, npub),
+        },
+          h('span', { class: 'profile-key-content' },
+            h('span', { class: 'profile-key-label' }, t('profPublicKey')),
+            h('bdi', { class: 'profile-key-value', dir: 'ltr' }, npub.slice(0, 12) + '…' + npub.slice(-8))),
+          h('span', { class: 'profile-key-copy', 'aria-hidden': 'true', html:
+            '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="8" width="12" height="12" rx="3"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>' })),
         ui.profEdit
           ? h('div', { class: 'col', style: 'gap:8px' },
               // the username IS the payment address and NIP-05 — the frozen
@@ -8059,7 +8065,6 @@ export function messagesFeature(ctx) {
           h('button', { class: 'btn-danger grow', onClick: cancelPost }, t('postDiscard')))));
   }
   const CLIP = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:block"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>';
-  const EYE = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:block"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
 
   // ---- draft preview --------------------------------------------------------
   // A post is written as plain text, but it doesn't ARRIVE as plain text: a
@@ -8087,11 +8092,12 @@ export function messagesFeature(ctx) {
       h('div', { class: 'media-progress-track' }, h('div', { class: 'media-progress-fill', style: 'width:' + m.pct + '%' })));
   }
   const previewBtn = (on, toggle) => h('button', {
-    class: 'attach-btn' + (on ? ' on' : ''),
+    type: 'button', class: 'btn-ghost btn-sm compose-preview-toggle',
     title: on ? t('composePreviewHide') : t('composePreview'),
-    'aria-label': on ? t('composePreviewHide') : t('composePreview'),
+    'aria-label': t('composePreview'),
+    'aria-pressed': String(on),
     onClick: toggle,
-  }, h('span', { style: 'display:flex', html: EYE }));
+  }, t('composePreview'));
   function postComposer() {
     if (ui.profCompose == null && !draftFor(POST_DRAFT)) return null;
     const text = composeText();
@@ -8113,7 +8119,7 @@ export function messagesFeature(ctx) {
       }),
       ui.postPreview ? draftPreview(text) : null,
       mediaBar(),
-      h('div', { class: 'row gap6' },
+      h('div', { class: 'row gap6 wrap' },
         h('button', { class: 'btn-primary grow', disabled: !!ui.postUploading, onClick: async () => {
           const body = composeText().trim();
           if (!body) return;
@@ -8136,12 +8142,13 @@ export function messagesFeature(ctx) {
           class: 'attach-btn', title: t('feedAttach'), 'aria-label': t('feedAttach'), disabled: !!ui.postUploading,
           onClick: () => document.getElementById('post-file')?.click(),
         }, ui.postUploading ? h('span', { class: 'spinner sm' }) : h('span', { style: 'display:flex', html: CLIP })) : null,
-        previewBtn(!!ui.postPreview, () => { ui.postPreview = !ui.postPreview; render(); }),
         h('input', {
           type: 'file', id: 'post-file', accept: 'image/*,video/*', style: 'display:none',
           onChange: async (e) => { const f = e.target.files && e.target.files[0]; e.target.value = ''; await attachMedia(f); },
         }),
-        h('button', { class: 'btn-ghost', onClick: requestCancelPost }, t('cancel'))),
+        h('div', { class: 'row gap6 composer-options' },
+          previewBtn(!!ui.postPreview, () => { ui.postPreview = !ui.postPreview; render(); }),
+          h('button', { class: 'btn-ghost btn-sm', onClick: requestCancelPost }, t('cancel')))),
       postCancelWarning());
   }
 

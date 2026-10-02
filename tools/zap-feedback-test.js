@@ -77,7 +77,7 @@ const bundle = await Bun.build({
 assert(bundle.success, bundle.logs.join('\n'));
 const css = await Bun.file('src/style.css').text();
 const js = await bundle.outputs[0].text();
-const html = `<!doctype html><meta name="viewport" content="width=device-width, initial-scale=1"><style>${css}
+const html = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><style>${css}
 body { padding: 110px 16px; } article { max-width: 480px; margin: auto; padding: 20px; background: var(--surface); border: 1px solid var(--line); border-radius: 20px; } #actions { margin-top: 30px; }
 </style><article data-zap-post="${'3'.repeat(64)}"><strong>@coinos</strong><p>A little lightning goes a long way.</p><div id="actions"></div></article><div id="setup"></div><script type="module">${js}</script>`;
 const server = Bun.serve({ port: 0, fetch: () => new Response(html, { headers: { 'content-type': 'text/html' } }) });

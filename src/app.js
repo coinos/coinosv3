@@ -5723,8 +5723,8 @@ const ctx = {
   // as money landing: without this the balance counts up from 0 in green,
   // which is the celebration a received payment gets.
   forgetAmountAnim: () => _amtLast.clear(),
-  // the one-tap zap amount, synced across devices with the rest of the state
-  zapDefaultSat: () => (wallet.loadFeatureState ? (wallet.loadFeatureState('prefs', {}).zapSat || 0) : 0),
+  // Start at 21 sats; an explicitly saved preference wins across devices.
+  zapDefaultSat: () => (wallet.loadFeatureState ? (wallet.loadFeatureState('prefs', {}).zapSat ?? 21) : 21),
   setZapDefaultSat: (n) => {
     const p = wallet.loadFeatureState('prefs', {});
     p.zapSat = Math.max(1, Math.floor(n) || 0);

@@ -338,7 +338,7 @@ export function zapsFeature(ctx) {
     // Spending can't even cover their minimum, say so instead of rendering
     // an impossible range.
     const p = z.params;
-    const ours = hook('lnSpendableSat');
+    const ours = hook('lnSpendableSat') ?? (hook('arkReady') ? 0 : null);
     const min = Math.ceil(p.minSendable / 1000);
     const max = Math.min(Math.floor(p.maxSendable / 1000), ours != null ? ours : Infinity);
     const broke = ours != null && (ours <= 0 || max < min);
@@ -349,7 +349,9 @@ export function zapsFeature(ctx) {
     const typedSats = parseAmount(z.amount, getUnit()) || 0;
     const theirMaxSat = Math.floor(p.maxSendable / 1000);
     const boardable = !!hook('arkReady') && ours != null;
-    const needsBoard = boardable && (broke || (typedSats > 0 && typedSats > ours && typedSats <= theirMaxSat));
+    const renewing = hook('spendingRenewingSat') || 0;
+    const waitingOnRenewal = renewing > 0 && broke && ours + renewing >= Math.max(min, p.fixedSat || typedSats);
+    const needsBoard = !waitingOnRenewal && boardable && (broke || (typedSats > 0 && typedSats > ours && typedSats <= theirMaxSat));
     return h('div', { class: 'card col', style: 'gap:12px' },
       h('h3', {}, heading),
       (z.target && z.target.pk && hook('profileChip', z.target.pk, 'lg')) || h('div', { class: 'small muted', style: 'word-break:break-all' }, z.name || z.address || ''),
@@ -367,7 +369,7 @@ export function zapsFeature(ctx) {
             : null,
           h('div', { style: 'display:flex;align-items:center' }, unitTag())),
         broke
-          ? h('div', { class: 'notice info' }, t('zapNoBalance'))
+          ? h('div', { class: 'notice info' }, t(waitingOnRenewal ? 'spendingRenewingPayment' : 'zapNoBalance'))
           : p.fixedSat
             ? h('div', { class: 'small faint' }, t('clinkFixedAmount'))
             : h('div', { class: 'small faint' }, `Min ${min.toLocaleString()} · max ${max.toLocaleString()} sats`),

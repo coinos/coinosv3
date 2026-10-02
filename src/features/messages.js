@@ -4054,12 +4054,18 @@ export function messagesFeature(ctx) {
   // clock and disk cache. A topic opened from search or a #tag in a post is
   // a feed too, until saved just a session one.
   const FOLLOWING = 'following';
-  const FEED_LS = 'btc-wallet-feed'; // the feed last on screen, remembered per device
+  // The feed last on screen, remembered per wallet on this device. It used to
+  // be one device-wide key, so a brand-new account opened on whatever the
+  // last one was reading (its #gardenstr starter feed has the same id in
+  // every account). Nothing remembered: Popular.
+  const FEED_LS = 'btc-wallet-feed';
+  const feedLsKey = () => FEED_LS + ':' + (wallet._cacheKey ? wallet._cacheKey() : '');
+  const storedFeedId = () => { try { return localStorage.getItem(feedLsKey()) || null; } catch { return null; } };
   const feedStates = new Map(); // id -> state
   const adhocFeeds = new Map(); // id -> definition, this session only
   // the feed of your own you last had on (never a session one)
-  const homeFeedId = () => { let id = FOLLOWING; try { id = localStorage.getItem(FEED_LS) || FOLLOWING; } catch {} return feedDef(id) && !adhocFeeds.has(id) ? id : FOLLOWING; };
-  let curFeedId = (() => { try { return localStorage.getItem(FEED_LS) || FOLLOWING; } catch { return FOLLOWING; } })();
+  const homeFeedId = () => { const id = storedFeedId() || EVERYTHING; return feedDef(id) && !adhocFeeds.has(id) ? id : EVERYTHING; };
+  let curFeedId = storedFeedId() || 'all'; // EVERYTHING, declared just below (re-read per wallet in init)
   // Two feeds everyone has: the people you follow, and everything the coinos
   // relay carries. Each remembers its own relay choice in the state.
   const EVERYTHING = 'all';
@@ -4645,7 +4651,7 @@ export function messagesFeature(ctx) {
   }
 
   function feedNow() {
-    if (!feedDef(curFeedId)) curFeedId = FOLLOWING; // a feed deleted on another device
+    if (!feedDef(curFeedId)) curFeedId = EVERYTHING; // a feed deleted on another device
     let c = feedStates.get(curFeedId);
     if (!c) {
       let stored = [];
@@ -4743,7 +4749,7 @@ export function messagesFeature(ctx) {
     if (feedDef(id).of) loadOfFollows(feedDef(id));
     if (id !== curFeedId) {
       curFeedId = id;
-      if (!adhocFeeds.has(id)) { try { localStorage.setItem(FEED_LS, id); } catch {} }
+      if (!adhocFeeds.has(id)) { try { localStorage.setItem(feedLsKey(), id); } catch {} }
     }
     ui.feedId = id;
     stopFeedWatch();
@@ -10558,6 +10564,10 @@ export function messagesFeature(ctx) {
     avatarNode(pk, cls) { return avatar(pk, cls || 'chat-avatar mini', false); },
     init() {
       const session = ++feedWarmSession;
+      // this wallet's own feed (the feature outlives a sign-out): a feed
+      // opened from a link stays put
+      if (!adhocFeeds.has(curFeedId)) { curFeedId = homeFeedId(); if (ui.feedId && !adhocFeeds.has(ui.feedId)) ui.feedId = curFeedId; }
+      try { localStorage.removeItem(FEED_LS); } catch {} // the old device-wide choice: nobody's in particular
       returnAfterSignin(); // a visitor who signed in from a feed or profile lands back on it
       // /feed opened before the wallet restored made a visitor's session copy
       // of Popular; with the wallet here, the built-in one takes over (two

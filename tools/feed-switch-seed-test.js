@@ -84,7 +84,7 @@ try {
     s.feeds = [{ id: 'bob', name: 'Bobfeed', follows: false, authors: [b], topics: [], packs: [] },
       { id: 'btc', name: 'Btcfeed', follows: false, authors: [], topics: ['bitcoin'], packs: [] }];
     localStorage.setItem(k + ':messages', JSON.stringify(s));
-    localStorage.setItem('btc-wallet-feed', 'following');
+    localStorage.setItem('btc-wallet-feed:' + k, 'following'); // this wallet's last feed
   }, [base, PK_A, PK_B, alice]);
   await page.reload({ waitUntil: 'domcontentloaded' });
   await waitText('receive', 20000);

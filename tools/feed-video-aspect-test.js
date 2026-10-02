@@ -101,7 +101,7 @@ try {
     localStorage.setItem(k + ':follows', JSON.stringify({ tags: [['p', pk]], c: '', at: Math.floor(Date.now() / 1000) }));
     localStorage.setItem(k + ':feedNotes', JSON.stringify(ns));
     localStorage.setItem(k + ':profiles', JSON.stringify({ [pk]: { name: 'Clipper', t: Date.now() } }));
-    localStorage.setItem('btc-wallet-feed', 'following');
+    localStorage.setItem('btc-wallet-feed:' + k, 'following'); // this wallet's last feed
   }, [key, PK, notes]);
   await page.reload({ waitUntil: 'domcontentloaded' });
   await waitText('receive', 20000);

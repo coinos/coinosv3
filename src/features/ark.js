@@ -1711,10 +1711,8 @@ export function arkFeature(ctx) {
         if (!live()) return;
         if (ctx.hook('canLnZap')) { if (ui.arkZap === z) ui.arkZap = null; ctx.hook('lnZapNpub', pk, npub, z.eventId, z.autoSat); return; }
       }
-      // 3. on-chain fallback (a one-tap zap can't take the send form: it
-      // goes as a locked gift below instead)
-      if (onchain && !(z.autoSat && z.eventId && zapGiftOk())) {
-        if (z.autoSat && z.eventId) { bail(); render(); return; }
+      // 3. on-chain fallback (a one-tap zap can't take the send form)
+      if (onchain && !(z.autoSat && z.eventId)) {
         ui.arkZap = null;
         ui.send.recipients[0].address = onchain;
         bail();
@@ -1723,6 +1721,10 @@ export function arkFeature(ctx) {
       }
       if (!live()) return;
       z.status = z.net ? 'wrongnet' : 'noark';
+      // A post's author with no Lightning or Ark address can't be zapped:
+      // a gift DM is for paying a person on purpose (Pay, the send form),
+      // not something a tap on a post should send.
+      if (z.eventId) { bail(t('arkZapNoPostZap')); render(); return; }
       // 4. last resort: an ark gift locked to their nostr key, DMed to them.
       // To the payer it's just a zap.
       if (z.autoSat && zapGiftOk(z.autoSat)) {
@@ -1937,7 +1939,7 @@ export function arkFeature(ctx) {
     // No ark address or Lightning found — the zap still leaves, as an ark
     // gift locked to their nostr key. The payer sees an ordinary zap.
     const noAddr = z.status === 'noark' || z.status === 'wrongnet';
-    const giftOk = noAddr && !wallet.watchOnly && !!ctx.hook('canLockGift');
+    const giftOk = noAddr && !z.eventId && !wallet.watchOnly && !!ctx.hook('canLockGift');
     const payable = z.status === 'ready' || giftOk;
     const amountInputs = (hint) => h('div', { class: 'col gap6' },
       h('div', { class: 'input-group' },
@@ -1952,7 +1954,7 @@ export function arkFeature(ctx) {
       h('h3', {}, '⚡ ' + t('zapTitle')),
       ctx.hook('profileChip', z.pk, 'lg') || h('div', { class: 'small muted', style: 'word-break:break-all' }, z.npub),
       z.status === 'lookup' ? h('div', { class: 'row gap6', style: 'align-items:center' }, h('span', { class: 'spinner sm' }), h('span', { class: 'small muted' }, t('arkZapLookup'))) : null,
-      z.status === 'noark' && !giftOk ? h('div', { class: 'notice err' }, t('arkZapNoArk')) : null,
+      z.status === 'noark' && !giftOk ? h('div', { class: 'notice err' }, t(z.eventId ? 'arkZapNoPostZap' : 'arkZapNoArk')) : null,
       z.status === 'wrongnet' && !giftOk ? h('div', { class: 'notice err' }, t('arkGiftWrongNet', { net: z.net })) : null,
       // Only someone with a Lightning address gets the Lightning door (the
       // lookup normally hands such a person straight to the zaps feature).

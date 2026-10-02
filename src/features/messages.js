@@ -911,36 +911,25 @@ export function messagesFeature(ctx) {
     for (const pk of pks) profInFlight.add(pk);
     try {
       const found = new Set();
+      // Our relays and the profile indexes at once, each answer applied as
+      // it lands. Asking them one after the other, each waiting out its
+      // slowest relay, put a five-second floor under anyone whose kind 0
+      // only an index held: a visitor opening a shared post saw a punk and
+      // an npub for seven and a half seconds.
+      let painted = 0;
+      const asked = new Set(pks);
+      const take = (ev) => {
+        if (ev && ev.kind === 0 && asked.has(ev.pubkey) && applyProfile(ev.pubkey, ev)) {
+          found.add(ev.pubkey);
+          if (!painted) painted = setTimeout(() => { painted = 0; scheduleRepaint(); }, 30);
+        }
+      };
+      const relays = [...new Set([...zapRelays(), ...PROFILE_INDEX_RELAYS])];
+      const asks = [];
       for (let i = 0; i < pks.length; i += PROF_BATCH) {
-        const slice = pks.slice(i, i + PROF_BATCH);
-        const evs = await queryOn(zapRelays(), { kinds: [0], authors: slice }, 5000).catch(() => []);
-        const newest = new Map();
-        for (const ev of evs || []) {
-          const c = newest.get(ev.pubkey);
-          if (!c || ev.created_at > c.created_at) newest.set(ev.pubkey, ev);
-        }
-        for (const [pk, ev] of newest) { if (applyProfile(pk, ev)) found.add(pk); }
-        // paint what this batch found before going after the stragglers —
-        // the outbox fallback below can take seconds, and there's no reason
-        // for a face we already have to wait behind one we don't
-        if (newest.size) scheduleRepaint();
+        asks.push(queryStreamOn(relays, { kinds: [0], authors: pks.slice(i, i + PROF_BATCH) }, take, 5000).catch(() => {}));
       }
-      // Whoever our relays have never heard of: ask the relays they publish
-      // to. Same outbox plan the feed uses, so it costs the lists we already
-      // have rather than a round trip each — plus the relays whose whole job
-      // is holding kind 0s, which we deliberately don't read notes from and
-      // so never ask in the batch above.
-      const left = pks.filter((pk) => !found.has(pk));
-      if (left.length) {
-        const idx = await queryOn(PROFILE_INDEX_RELAYS, { kinds: [0], authors: left }, 5000).catch(() => []);
-        const idxNewest = new Map();
-        for (const ev of idx || []) {
-          const c = idxNewest.get(ev.pubkey);
-          if (!c || ev.created_at > c.created_at) idxNewest.set(ev.pubkey, ev);
-        }
-        for (const [pk, ev] of idxNewest) { if (applyProfile(pk, ev)) found.add(pk); }
-        if (idxNewest.size) scheduleRepaint();
-      }
+      await Promise.all(asks);
       const stillLeft = pks.filter((pk) => !found.has(pk));
       if (stillLeft.length) {
         const left = stillLeft;
@@ -1929,11 +1918,42 @@ export function messagesFeature(ctx) {
   const restoringUrlThread = (() => {
     try { return !!urlNote && history.state?.nav?.noteThread?.focusId === urlNote.id; } catch { return false; }
   })();
+  // The server renders /nevent1… and /note1… with the thread already in the
+  // page (feed/note-page.js): the post, its root and replies, and their
+  // authors' kind 0s, in a JSON script tag. Into the thread cache it goes,
+  // in the shape a reload leaves there, so the thread opens from it with
+  // names and faces on the first paint instead of after the relays answer.
+  // No signature check: this data arrives in the same document as the code
+  // that reads it (the server verified it off the relays).
+  if (urlNote && !restoringUrlThread && typeof document !== 'undefined') {
+    try {
+      const el = document.getElementById('boot-thread');
+      const d = el && JSON.parse(el.textContent);
+      if (d && d.v === 1 && d.root && Array.isArray(d.replies)
+        && [d.root, ...d.replies].some((e) => e && e.id === urlNote.id)) {
+        const faces = {};
+        for (const ev of d.profiles || []) {
+          let m = null;
+          try { m = JSON.parse(ev.content); } catch {}
+          if (m && typeof m === 'object' && !Array.isArray(m) && ev.pubkey) {
+            faces[ev.pubkey] = { name: m.display_name || m.name || null, picture: m.picture || null, eventAt: ev.created_at, t: Date.now() };
+          }
+        }
+        createThreadStore().save({ root: d.root, replies: d.replies }, urlNote.id, faces, {}, d.quotes || []);
+      }
+    } catch {}
+  }
   if (urlNote && !restoringUrlThread) {
     try { history.replaceState(null, '', '/'); } catch {}
     ui.pubProf = true;
+    // holds the frame (screenView) until the thread opens, so the front door
+    // never flashes up while the note is being found
+    ui.pubNotePending = urlNote.id;
     // a reload of a thread the history restores by itself needs no fetch
-    setTimeout(() => { if (ui.noteThread && ui.noteThread.focusId === urlNote.id) return; openNoteRef(urlNote).catch(() => {}); }, 0);
+    setTimeout(() => {
+      if (ui.noteThread && ui.noteThread.focusId === urlNote.id) { ui.pubNotePending = null; return; }
+      openNoteRef(urlNote).catch(() => {}).finally(() => { ui.pubNotePending = null; render(); });
+    }, 0);
   }
 
   // Resolve and open right away — not in init(), which only runs once a
@@ -7275,7 +7295,7 @@ export function messagesFeature(ctx) {
     const saved = threadStore.find(ref.id);
     const cached = saved && (saved.root.id === ref.id ? saved.root : saved.replies.find((e) => e.id === ref.id));
     if (cached) { openNoteThread(cached); return; }
-    toast(t('noteRefLoading'));
+    if (!ui.pubNotePending) toast(t('noteRefLoading')); // the pending frame says so itself
     const ev = quoted.get(ref.id)?.ev || await findNote(ref).catch(() => null);
     if (ev) openNoteThread(ev);
     else toast(t('noteRefNotFound'));
@@ -7557,9 +7577,11 @@ export function messagesFeature(ctx) {
       ctx.brandHeader(!ui.pubProf && wallet.loaded),
       h('div', { class: 'card col thread-card', style: 'gap:0;padding:2px 14px' }, ...kids),
       // a real Back: the history entry under the thread restores the feed
-      // (or profile) and its scroll place; ui-only only when the thread was
-      // opened straight from a link and there is nothing under it
-      h('button', { class: 'btn-ghost btn-block', onClick: () => ctx.goBack(() => { ui.noteThread = null; }) }, t('back')),
+      // (or profile) and its scroll place. A thread opened straight from a
+      // link has nothing of ours under it, so no button that invents one.
+      !ctx.canGoBack || ctx.canGoBack()
+        ? h('button', { class: 'btn-ghost btn-block', onClick: () => ctx.goBack(() => { ui.noteThread = null; }) }, t('back'))
+        : null,
       ...noteOverlays());
   }
 
@@ -9938,6 +9960,11 @@ export function messagesFeature(ctx) {
       // — an auto-restored wallet would otherwise flash its home page for the
       // beat the registrar lookup takes. The shell shows the name straight
       // off the URL; no spinner, the empty beat reads calmer.
+      // Same for a note deep link while its thread is being found.
+      if (ui.pubNotePending && !ui.noteThread) return h('div', { class: 'col', style: 'gap:16px' },
+        ctx.brandHeader(false),
+        h('div', { class: 'card row gap6', style: 'justify-content:center;align-items:center;padding:16px' },
+          h('span', { class: 'spinner sm' }), h('span', { class: 'small faint' }, t('noteRefLoading'))));
       if (ui.pubProfPending) return h('div', { class: 'col', style: 'gap:16px' },
         ctx.brandHeader(false),
         h('div', { class: 'card col', style: 'gap:12px' },

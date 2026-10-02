@@ -88,9 +88,13 @@ self.addEventListener('fetch', (e) => {
   if (u.pathname === '/api/feed') return;
 
   if (req.mode === 'navigate') {
+    // A note page comes back with its thread rendered into it (the server's
+    // note-page); that copy must not become the offline shell for every path.
+    const notePage = /^\\/(note|nevent)1/i.test(u.pathname);
     e.respondWith(
       fetch(req)
         .then((res) => {
+          if (notePage) return res;
           const copy = res.clone();
           caches.open(CACHE).then((c) => c.put('./', copy));
           return res;
@@ -369,7 +373,7 @@ function bootShell(logo, staging) {
     : '<span class="beta-badge">v3 beta</span>';
   return `<div class="col" style="gap:16px"><div class="row between"><div class="brand ${staging ? 'staging' : 'beta'}">${badge}<div class="logo-full" aria-label="coinos" role="img">${logo}</div></div></div><div class="card col" id="boot-shell" style="gap:12px;display:none"><div class="row gap6" style="align-items:center"><div class="chat-avatar profile-avatar fallback loading"></div><div class="chat-title" id="boot-shell-name"></div></div></div></div>`;
 }
-const BOOT_SHELL_SCRIPT = `<script>try{var m=location.pathname.match(/^\\/([A-Za-z0-9._-]{1,64})\\/?$/);if(m){document.getElementById('boot-shell').style.display='';document.getElementById('boot-shell-name').textContent=decodeURIComponent(m[1]);}}catch(e){}</script>`;
+const BOOT_SHELL_SCRIPT = `<script>try{var m=location.pathname.match(/^\\/([A-Za-z0-9._-]{1,64})\\/?$/);if(m&&!/^(note|nevent|naddr)1/i.test(m[1])){document.getElementById('boot-shell').style.display='';document.getElementById('boot-shell-name').textContent=decodeURIComponent(m[1]);}}catch(e){}</script>`;
 
 // HAL_NO_SW=1: the page registers no service worker. The Android bundled
 // build serves this page from its own assets, where a worker would only

@@ -1014,6 +1014,9 @@ function goBack(toParent) {
   if (navIndex > 0) history.back();
   else { toParent(); render(); }
 }
+// Whether an in-app Back has anywhere of ours to go. A page opened straight
+// from a link has nothing under it; its Back would invent a parent.
+const canGoBack = () => navIndex > 0;
 
 // ---------------------------------------------------------------- utilities
 let toastTimer;
@@ -5710,7 +5713,7 @@ async function importSnapshotFile(e) {
 // sits just before boot so every helper it captures is defined; the hooks are
 // only invoked at runtime (first render happens after loadLocale below).
 const ctx = {
-  h, ui, render, wallet, toast, copy, copyBtn, pasteBtn, blankSend, goBack, goHome, openExternal, showSend,
+  h, ui, render, wallet, toast, copy, copyBtn, pasteBtn, blankSend, goBack, canGoBack, goHome, openExternal, showSend,
   fmtAmount, unitLabel, unitTag, getUnit: () => unit, toggleUnit, download,
   // in fiat the typed figure is money, so it needs today's price to become sats
   parseAmount: (v, u) => parseAmount(v, u, rateNow()),

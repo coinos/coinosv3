@@ -10156,7 +10156,14 @@ export function messagesFeature(ctx) {
     return h('div', { class: 'card col chat-page', style: 'gap:10px' },
       h('div', { class: 'row gap6', style: 'align-items:center' },
         backBtn(() => { ui.msgView = 'home'; stopNotifWatch(); render(); }),
-        h('h3', { style: 'margin:0' }, t('alertsTitle'))),
+        h('h3', { style: 'margin:0' }, t('alertsTitle')),
+        // which of these also buzz the phone: Settings → Notifications
+        ctx.openSettingsPage ? h('button', {
+          class: 'btn-sm notif-settings', style: 'margin-left:auto;display:inline-flex;align-items:center;gap:6px',
+          title: t('settingsNotifications'), 'aria-label': t('settingsNotifications'),
+          onClick: () => { stopNotifWatch(); ctx.openSettingsPage('notifications'); },
+        }, h('span', { style: 'display:flex', html: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.09a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.09a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>' }),
+          t('tabSettings')) : null),
       c.status === 'loading' && !items.length
         ? h('div', { class: 'row gap6', style: 'justify-content:center;padding:12px 0' }, h('span', { class: 'spinner sm' }))
         : !items.length

@@ -5751,6 +5751,8 @@ async function importSnapshotFile(e) {
 const ctx = {
   h, ui, render, wallet, toast, copy, copyBtn, pasteBtn, blankSend, goBack, canGoBack, goHome, openExternal, showSend,
   openWalletSettings: (view) => openWalletSettings(view),
+  // one page of the Settings hub, from anywhere (Notifications' gear)
+  openSettingsPage: (page) => { clearFeatureNav(); ui.screen = 'wallet'; ui.tab = 'settings'; ui.settingsPage = page; render(); try { window.scrollTo(0, 0); } catch {} },
   fmtAmount, unitLabel, unitTag, getUnit: () => unit, toggleUnit, download,
   // in fiat the typed figure is money, so it needs today's price to become sats
   parseAmount: (v, u) => parseAmount(v, u, rateNow()),

@@ -301,12 +301,16 @@ coinos-text[data-empty]:focus::before { content: none; }
    the way a printed sheet is read. Two columns (a phone) run DOWN instead,
    the way a hand copies a list: the first column is 1–6, not 1,3,5,…; that
    row count comes from the word count (--rows-2, set inline). */
-.words { display: grid; grid-auto-flow: row; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+/* minmax(0, 1fr), not 1fr: a 1fr column won't shrink below its word, so an
+   eight-letter word ("resemble") pushed the third column out past the
+   card's padding. The cells are a touch tighter so every BIP-39 word (eight
+   letters at most) still fits whole in a third of a narrow card. */
+.words { display: grid; grid-auto-flow: row; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
 .words .w {
-  display: flex; align-items: baseline; gap: 7px; background: var(--surface2);
-  border: 1px solid var(--line); border-radius: 10px; padding: 9px 11px; font-family: var(--mono);
+  display: flex; align-items: baseline; gap: 5px; background: var(--surface2); min-width: 0;
+  border: 1px solid var(--line); border-radius: 10px; padding: 9px 8px; font-family: var(--mono);
 }
-.words .w .n { color: var(--faint); font-size: 12px; width: 18px; text-align: right; }
+.words .w .n { color: var(--faint); font-size: 12px; width: 16px; flex-shrink: 0; text-align: right; }
 .words .w .t { font-weight: 600; }
 .warn-box {
   background: var(--accent-soft); border: 1px solid var(--accent); color: var(--accent-ink);
@@ -412,8 +416,13 @@ hr.divider { margin: 16px 0; }
 
 /* ---- how it works ---- */
 
+/* two columns up to 480px: three thirds of a card that narrow leave an
+   eight-letter word no room either side */
+@media (max-width: 480px) {
+  .words { grid-auto-flow: column; grid-template-columns: none; grid-auto-columns: minmax(0, 1fr); grid-template-rows: repeat(var(--rows-2, 6), auto); }
+}
 @media (max-width: 420px) {
-  .words { grid-auto-flow: column; grid-template-columns: none; grid-auto-columns: 1fr; grid-template-rows: repeat(var(--rows-2, 6), auto); }
+  .words { grid-auto-flow: column; grid-template-columns: none; grid-auto-columns: minmax(0, 1fr); grid-template-rows: repeat(var(--rows-2, 6), auto); }
   .balance .amt { font-size: 28px; }
 }
 

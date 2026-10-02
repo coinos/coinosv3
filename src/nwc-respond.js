@@ -204,9 +204,61 @@ export async function respondFromBg(data, {
         alias: 'Coinos', color: '#15171a',
         network: rec.ark.network === 'mainnet' ? 'mainnet' : rec.ark.network,
         block_height: 0, block_hash: '',
-        methods: ['get_info', 'get_balance', 'pay_invoice', 'list_transactions'],
+        methods: ['get_info', 'get_balance', 'pay_invoice', 'make_invoice', 'lookup_invoice', 'list_transactions'],
       },
     });
+    return true;
+  }
+  // A merchant (BTCPay) mints an invoice per checkout and polls it until
+  // paid. Minting works like a CLINK offer; a lookup that finds the payer's
+  // HTLCs waiting claims them here, so the sale settles with the app closed.
+  if (method === 'make_invoice') {
+    const sat = Math.floor((params.amount || 0) / 1000);
+    if (!sat) { await publish(errRes('make_invoice', 'OTHER', 'amount required (msat)')); return true; }
+    if (!rec.keys5 || !rec.key4 || !rec.mgr) return false; // old mirror: wake the user
+    if (!rec.keys5[String(rec.mgr.nextLnRecvIndex || 0)]) return false; // preimage window exhausted
+    if (!rec.keys[String(rec.mgr.nextKeyIndex || 1)]) return false; // claim key window exhausted
+    let a;
+    try {
+      const mgr = await bgManager(rec, walletKey, saveFn);
+      a = await mgr.createLnInvoice(sat, String(params.description || '').slice(0, 100));
+      await saveFn(walletKey, rec);
+    } catch (e) {
+      await publish(errRes('make_invoice', 'INTERNAL', e.message || 'failed')).catch(() => {});
+      return true;
+    }
+    await publish({
+      result_type: 'make_invoice',
+      result: {
+        type: 'incoming', state: 'pending', invoice: a.invoice, payment_hash: a.paymentHash,
+        amount: sat * 1000, created_at: nowSec(), description: params.description || '',
+        expires_at: a.expiresAt ? Math.floor(a.expiresAt / 1000) : undefined,
+      },
+    });
+    log(`minted ${sat} sat invoice while closed`);
+    return true;
+  }
+  if (method === 'lookup_invoice') {
+    if (!params.payment_hash && !params.invoice) {
+      await publish(errRes('lookup_invoice', 'OTHER', 'payment_hash or invoice required'));
+      return true;
+    }
+    if (!rec.mgr) return false;
+    const q = { paymentHash: params.payment_hash, invoice: params.invoice };
+    // read straight off the mirror; the ASP is only needed to claim
+    const view = Object.assign(Object.create(ArkManager.prototype), { state: rec.mgr, account: shimAccount(rec) });
+    let tx = view.lnLookup(q);
+    const a = tx && tx.state === 'pending' && tx.type === 'incoming'
+      && (rec.mgr.actions || []).find((x) => x.type === 'ln-recv' && x.paymentHash === tx.payment_hash);
+    if (a) {
+      try {
+        const mgr = await bgManager(rec, walletKey, saveFn);
+        await Promise.race([mgr.driveLn(a.id).catch((e) => log('claim: ' + e.message)), new Promise((r) => setTimeout(r, PAY_WAIT_MS))]);
+        tx = mgr.lnLookup(q);
+        if (tx.state === 'settled') log(`received ${tx.amount / 1000} sat while closed`);
+      } catch (e) { log('ark init failed: ' + e.message); }
+    }
+    await publish(tx ? { result_type: 'lookup_invoice', result: tx } : errRes('lookup_invoice', 'NOT_FOUND', 'invoice not found'));
     return true;
   }
   if (method === 'get_balance') {
@@ -214,13 +266,18 @@ export async function respondFromBg(data, {
     return true;
   }
   if (method === 'list_transactions') {
-    const txs = (rec.spends || []).slice(-(params.limit || 20)).map((s) => ({
-      type: 'outgoing', invoice: s.invoice || '', preimage: s.preimage || '',
-      amount: (s.amountSat || 0) * 1000, fees_paid: (s.feeSat || 0) * 1000,
-      created_at: Math.floor((s.ts || Date.now()) / 1000),
-      settled_at: Math.floor((s.ts || Date.now()) / 1000),
-      description: '',
-    }));
+    // the mirrored wallet's Lightning history, both ways, as the open app reports it
+    const txs = ((rec.mgr && rec.mgr.movements) || [])
+      .filter((m) => (m.type === 'ln-send' || m.type === 'ln-receive') && m.status === 'complete')
+      .slice(-(params.limit || 20))
+      .map((m) => ({
+        type: m.type === 'ln-receive' ? 'incoming' : 'outgoing',
+        state: 'settled', invoice: m.invoice || '', preimage: m.preimage || '',
+        amount: (m.amountSat || 0) * 1000, fees_paid: 0,
+        created_at: Math.floor((m.ts || Date.now()) / 1000),
+        settled_at: Math.floor((m.ts || Date.now()) / 1000),
+        description: '',
+      }));
     await publish({ result_type: 'list_transactions', result: { transactions: txs } });
     return true;
   }

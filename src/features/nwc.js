@@ -40,7 +40,7 @@ const RES_KIND = 23195;
 const INFO_KIND = 13194;
 
 // What we can actually honour. No pay_keysend (Ark can't), no multi_pay.
-const METHODS = ['get_info', 'get_balance', 'pay_invoice', 'make_invoice', 'list_transactions'];
+const METHODS = ['get_info', 'get_balance', 'pay_invoice', 'make_invoice', 'lookup_invoice', 'list_transactions'];
 
 // Requests older than this are ignored — a relay replaying history must not
 // re-trigger payments.
@@ -461,10 +461,17 @@ export function nwcFeature(ctx) {
       const inv = await hook('arkMakeInvoice', sat, params.description || '');
       return {
         result: {
-          type: 'incoming', invoice: inv.invoice, payment_hash: inv.paymentHash,
+          type: 'incoming', state: 'pending', invoice: inv.invoice, payment_hash: inv.paymentHash,
           amount: sat * 1000, created_at: nowSec(), description: params.description || '',
+          expires_at: inv.expiresAt ? Math.floor(inv.expiresAt / 1000) : undefined,
         },
       };
+    }
+
+    if (method === 'lookup_invoice') {
+      if (!params.payment_hash && !params.invoice) return errRes('OTHER', 'payment_hash or invoice required');
+      const tx = await hook('arkLnLookup', { paymentHash: params.payment_hash, invoice: params.invoice });
+      return tx ? { result: tx } : errRes('NOT_FOUND', 'invoice not found');
     }
 
     if (method === 'list_transactions') {
@@ -474,7 +481,7 @@ export function nwcFeature(ctx) {
         .slice(-(params.limit || 20))
         .map((m) => ({
           type: m.type === 'ln-receive' ? 'incoming' : 'outgoing',
-          invoice: m.invoice || '', preimage: m.preimage || '',
+          state: 'settled', invoice: m.invoice || '', preimage: m.preimage || '',
           amount: (m.amountSat || 0) * 1000, fees_paid: 0,
           created_at: Math.floor((m.ts || Date.now()) / 1000),
           settled_at: Math.floor((m.ts || Date.now()) / 1000),

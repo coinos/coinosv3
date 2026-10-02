@@ -1068,6 +1068,50 @@ export class ArkManager {
     return this.driveLn(id);
   }
 
+  // A Lightning payment of this wallet's, either way, as NIP-47
+  // lookup_invoice reports it — found by payment hash or bolt11. null when
+  // the wallet never made or paid that invoice.
+  lnLookup({ paymentHash, invoice } = {}) {
+    const hashOf = (inv) => { try { return decodeBolt11(inv).paymentHash; } catch { return null; } };
+    const hash = String(paymentHash || (invoice && hashOf(invoice)) || '').toLowerCase();
+    if (!/^[0-9a-f]{64}$/.test(hash)) return null;
+    // a retry leaves several actions on one hash: the furthest along speaks
+    const rank = (x) => (x.step === 'done' ? 0 : x.step === 'failed' ? 2 : 1);
+    const a = (this.state.actions || []).filter((x) => (x.type === 'ln-recv' || x.type === 'ln-pay')
+      && (x.paymentHash === hash || (x.invoice && hashOf(x.invoice) === hash)))
+      .sort((x, y) => rank(x) - rank(y))[0];
+    const incoming = a ? a.type === 'ln-recv' : null;
+    const mv = (this.state.movements || []).filter((m) => (incoming == null
+      ? (m.type === 'ln-receive' || m.type === 'ln-send')
+      : m.type === (incoming ? 'ln-receive' : 'ln-send')) && (m.paymentHash === hash || (m.invoice && hashOf(m.invoice) === hash)));
+    const done = mv.find((m) => m.status === 'complete');
+    if (!a && !mv.length) return null;
+    const type = (a ? incoming : mv[0].type === 'ln-receive') ? 'incoming' : 'outgoing';
+    const inv = (a && a.invoice) || mv[0]?.invoice || '';
+    let dec = null; try { dec = inv ? decodeBolt11(inv) : null; } catch {}
+    const settled = (a && a.step === 'done') || !!done;
+    const sec = (ms) => (ms ? Math.floor(ms / 1000) : undefined);
+    let state = 'pending';
+    if (settled) state = 'settled';
+    else if ((a && a.step === 'failed') || (!a && mv.some((m) => m.status === 'failed'))) {
+      state = type === 'incoming' && dec?.expiresAt && Date.now() > dec.expiresAt ? 'expired' : 'failed';
+    } else if (type === 'incoming' && a && a.step === 'awaiting' && dec?.expiresAt && Date.now() > dec.expiresAt) state = 'expired';
+    let preimage = '';
+    if (settled) {
+      if (type === 'outgoing') preimage = (a && a.preimage) || done?.preimage || '';
+      else if (a && Number.isInteger(a.preimageIndex)) { try { preimage = hex.encode(this._lnPreimage(a.preimageIndex)); } catch {} }
+    }
+    const amountSat = (a && a.amountSat) || dec?.amountSat || done?.amountSat || 0;
+    return {
+      type, state, invoice: inv, payment_hash: hash, preimage,
+      description: '', amount: amountSat * 1000,
+      fees_paid: type === 'outgoing' ? ((a && a.feeSat) || 0) * 1000 : 0,
+      created_at: sec(dec?.createdAt || actionTs(a || {}) || mv[0]?.ts) || Math.floor(Date.now() / 1000),
+      expires_at: sec(dec?.expiresAt),
+      settled_at: settled ? sec(done?.ts || actionTs(a || {})) : undefined,
+    };
+  }
+
   lnAction(id) {
     return this.state.actions.find((a) => a.id === id && a.type.startsWith('ln-'));
   }

@@ -40,6 +40,7 @@ const hooks = {
   arkSpendableSat: () => 42000,
   arkPayInvoice: async (inv, opts) => { paid.push({ inv, opts }); return { preimage: 'ab'.repeat(32), feeSat: 1, amountSat: 25 }; },
   arkMakeInvoice: async (sat) => ({ invoice: 'lnbc'+sat, paymentHash: 'cd'.repeat(32), amountSat: sat }),
+  arkLnLookup: async (q) => (q.paymentHash === 'cd'.repeat(32) ? { type: 'incoming', state: 'settled', payment_hash: q.paymentHash, preimage: '12'.repeat(32), amount: 21000 } : null),
   arkMovements: () => ([{ type:'ln-send', status:'complete', amountSat: 25, ts: Date.now(), invoice:'lnbc250n1', preimage:'ef'.repeat(32) }]),
 };
 const ctx = { h:()=>null, ui:{}, render:()=>{}, wallet, hook:(n,...a)=>hooks[n]?hooks[n](...a):null,
@@ -162,6 +163,16 @@ check('nip04 request answered', r?.result?.balance === 42000*1000);
 console.log('\n[other methods]');
 r = await request('make_invoice', { amount: 21000 });
 check('make_invoice returns a bolt11', !!r?.result?.invoice, r?.result?.invoice);
+r = await request('lookup_invoice', { payment_hash: 'cd'.repeat(32) });
+check('lookup_invoice reports a paid invoice settled', r?.result?.state === 'settled' && r?.result?.preimage === '12'.repeat(32), JSON.stringify(r?.result));
+r = await request('lookup_invoice', { payment_hash: 'ee'.repeat(32) });
+check('lookup_invoice of an unknown invoice is NOT_FOUND', r?.error?.code === 'NOT_FOUND');
+r = await request('get_info', {});
+// BTCPay Server's NWC connector refuses a wallet missing any of these
+const btcpay = ['get_info', 'make_invoice', 'lookup_invoice', 'list_transactions'];
+check('get_info has every method BTCPay requires', btcpay.every((m) => r?.result?.methods?.includes(m)), JSON.stringify(r?.result?.methods));
+const info = published.find((e) => e.kind === 13194);
+check('the 13194 info event lists them too', info && btcpay.every((m) => info.content.split(' ').includes(m)), info?.content);
 r = await request('list_transactions', {});
 check('list_transactions returns history', Array.isArray(r?.result?.transactions) && r.result.transactions.length === 1);
 r = await request('pay_keysend', {});

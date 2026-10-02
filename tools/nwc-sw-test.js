@@ -92,6 +92,36 @@ console.log('[balance + info]');
   check('nip04 get_info answered in nip04', r.result?.alias === 'Coinos' && published[0].tags.find((t) => t[0] === 'encryption')[1] === 'nip04');
 }
 
+console.log('\n[merchant methods (BTCPay)]');
+{
+  const { deps, published, decryptReply } = harness();
+  await respondFromBg({ type: 'nwc', event: ev(makeReq('get_info')) }, deps);
+  const m = decryptReply(published[0]).result?.methods || [];
+  check('get_info has every method BTCPay requires', ['get_info', 'make_invoice', 'lookup_invoice', 'list_transactions'].every((x) => m.includes(x)), JSON.stringify(m));
+}
+{
+  const INV = 'lnbc210n1p4xuk2wpp506wkjr0xk3677nu7je9c55vq4lzlkyd0ztcq2mlvumap0zpe3alqhp5ppg7g8qwpdv34hgpymhw446y37duzwcn388yp3pw05n7tlulyn2scqzysxqrrssrzjqv3dpepm8kfdxrk3sl6wzqdf49s9c0h9ljtjrek6c08r6aejlwcnur0dwyqqvusqqqqqqqlgqqqq86qqjqsp5dc0jrq94ke2f4dzx8c2dwqsc6a65eu56dt2j599l7kxp7q2hs6zq9qxpqysgqdjeft8gkl0uga24e502pvcp5vgsfap3dxuutcpgfaj33fffuqs9psmnrklshp3fg3py7vlnzsea90vj9ahqq5t9xuy67u3pk0sfnheqpn95f2g';
+  const H = '7e9d690de6b475ef4f9e964b8a5180afc5fb11af12f0056fece6fa1788398f7e';
+  const rec = baseRec();
+  const k5 = generateSecretKey();
+  rec.keys5 = { 0: hex.encode(k5) };
+  rec.mgr.actions.push({ id: 'lnrecv-1700000000000', type: 'ln-recv', step: 'done', paymentHash: H, preimageIndex: 0, amountSat: 21, invoice: INV });
+  rec.mgr.movements.push({ type: 'ln-receive', status: 'complete', amountSat: 21, invoice: INV, ts: 1700000000000 });
+  const { deps, published, decryptReply } = harness({ rec });
+  const handled = await respondFromBg({ type: 'nwc', event: ev(makeReq('lookup_invoice', { payment_hash: H })) }, deps);
+  const r = decryptReply(published[0]);
+  check('lookup_invoice of a claimed receive → settled, with the preimage, no ASP needed', handled === true && r.result?.state === 'settled' && r.result?.preimage?.length === 64, JSON.stringify(r.result || r.error));
+  await respondFromBg({ type: 'nwc', event: ev(makeReq('lookup_invoice', { payment_hash: 'ab'.repeat(32) })) }, deps);
+  check('lookup_invoice of an unknown hash → NOT_FOUND', decryptReply(published[1]).error?.code === 'NOT_FOUND');
+  await respondFromBg({ type: 'nwc', event: ev(makeReq('list_transactions')) }, deps);
+  const txs = decryptReply(published[2]).result?.transactions || [];
+  check('list_transactions includes receives', txs.some((t) => t.type === 'incoming' && t.amount === 21000), JSON.stringify(txs));
+}
+{
+  const { deps } = harness(); // a mirror without receive keys
+  check('make_invoice on an old mirror → wake the user', (await respondFromBg({ type: 'nwc', event: ev(makeReq('make_invoice', { amount: 21000 })) }, deps)) === false);
+}
+
 console.log('\n[guards]');
 {
   const { deps } = harness();

@@ -3629,7 +3629,18 @@ export function arkFeature(ctx) {
     async arkMakeInvoice(amountSat, description) {
       const mgr = await connectArk();
       const a = await mgr.createLnInvoice(amountSat, description);
-      return { invoice: a.invoice, paymentHash: a.paymentHash, amountSat };
+      return { invoice: a.invoice, paymentHash: a.paymentHash, amountSat, expiresAt: a.expiresAt };
+    },
+    // NIP-47 lookup_invoice: a payment of ours by hash or bolt11. One that
+    // is still pending gets a push first (a receive whose HTLCs have
+    // arrived is claimed right here), so a merchant polling sees it settle.
+    async arkLnLookup(q) {
+      const mgr = await connectArk();
+      const found = mgr.lnLookup(q);
+      if (!found || found.state !== 'pending') return found;
+      const a = (mgr.state.actions || []).find((x) => x.paymentHash === found.payment_hash && x.type.startsWith('ln-'));
+      if (a) await Promise.race([mgr.driveLn(a.id).catch(() => {}), new Promise((r) => setTimeout(r, 8000))]);
+      return mgr.lnLookup(q);
     },
     arkMovements() { const s = arkStateNow(); return s ? (s.movements || []) : []; },
     // The wallet's reusable ark receive address (BIP-353 names publish it).

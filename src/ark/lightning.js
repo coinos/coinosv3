@@ -61,6 +61,7 @@ export function decodeBolt11(invoice) {
     amountMsat,
     amountSat: amountMsat != null ? Number(amountMsat / 1000n) : null,
     expiresAt: (ts + expiry) * 1000,
+    createdAt: ts * 1000,
   };
 }
 

@@ -3616,6 +3616,7 @@ export function messagesFeature(ctx) {
   // Registered at CONSTRUCTION, not init(): the public no-wallet profile
   // (a /username deep link over the unlock screen) scrolls too, and init
   // only runs once a wallet opens.
+  let lastFeedY = 0;
   if (typeof window !== 'undefined') {
     window.addEventListener('scroll', () => {
       if (!ui.profilePk && (!(ui.chatOpen && ui.msgView === 'feed') || ui.noteThread)) return;
@@ -3623,7 +3624,11 @@ export function messagesFeature(ctx) {
       // back at the top by yourself: the new posts are under your eyes, so
       // the notice has done its job (only the pill repaints — the rows are
       // keyed and stay put, so nothing moves under a finger)
-      if (!ui.profilePk && feed && feed.unseen && atFeedTop()
+      // Upward only: holding the page still as posts go in above scrolls it
+      // DOWN, and that must not count as having gone up to look at them.
+      const y = window.scrollY || 0, up = y < lastFeedY;
+      lastFeedY = y;
+      if (!ui.profilePk && feed && feed.unseen && up && atFeedTop()
         && !feed.deferred?.some((e) => feed.fresh?.has(e.id))) { feed.unseen = 0; render(); }
       if (!ui.profilePk && feed?.deferred?.length) admitFeed(feed.deferred, feed);
       if (window.innerHeight + window.scrollY < (document.documentElement.scrollHeight || 0) - (ui.profilePk ? 600 : Math.max(2400, window.innerHeight * 3))) return;
@@ -4760,10 +4765,28 @@ export function messagesFeature(ctx) {
     ui.chatOpen = true; ui.msgView = 'feed';
     switchFeed(id);
   }
-  // Reaching the top manually clears the new-post notice.
-  const FEED_TOP_PX = 120;
+  // Reaching the newest post manually clears the new-post notice. Not a
+  // scroll offset: new posts go in above the reader with the page held, so
+  // the page is pushed off the top by however tall they are, and a short
+  // one would leave scrollY under any fixed threshold unseen.
   const atFeedTop = () => {
-    try { return (window.scrollY || 0) < FEED_TOP_PX; } catch { return true; }
+    try {
+      const top = document.querySelector('.notes-feed > .row[data-key]');
+      return !!top && !document.querySelector('.notes-feed > .feed-spacer[data-key="win-top"]')
+        && top.getBoundingClientRect().top > -40;
+    } catch { return true; }
+  };
+  // Something above the posts is in use — a post being written, the relay
+  // panel, a focused field — so new posts wait behind the pill rather than
+  // push it off the screen.
+  const headBusy = () => {
+    if (ui.profCompose != null || ui.feedRelayEdit) return true;
+    try {
+      const a = document.activeElement;
+      // a field, not a button: a tapped chip keeps the focus afterwards
+      return !!a && !!a.closest('input, textarea, select, [contenteditable], coinos-text')
+        && !!a.closest('.feed-page') && !a.closest('.notes-feed');
+    } catch { return false; }
   };
 
   // Resolve the whole first presentation before admitting a row. The
@@ -5102,6 +5125,7 @@ export function messagesFeature(ctx) {
     const result = mergeFeedWindow(c.notes, c.shown, add, {
       rows: rows.map((r) => ({ id: r.getAttribute('data-key'), top: r.getBoundingClientRect().top, bottom: r.getBoundingClientRect().bottom })),
       height: typeof window === 'undefined' ? 0 : window.innerHeight, keep: FEED_KEEP, page: FEED_PAGE,
+      holdHead: headBusy(),
     });
     c.deferred = result.deferred;
     if (!result.added.length) { if (noticed) scheduleRepaint(); return; }

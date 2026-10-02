@@ -136,13 +136,15 @@ try {
   await page.close();
 
   page = await visit();
-  const headerTop = await page.$eval('.chat-page > .row', (r) => r.getBoundingClientRect().top);
+  const firstKey = await page.$eval('.notes-feed > .row[data-key]', (r) => r.getAttribute('data-key'));
+  const firstTop = await page.$eval(row(firstKey), (r) => r.getBoundingClientRect().top);
   await page.evaluate((evs) => window.deliver(evs), [fast, later]);
   await page.waitForFunction(() => document.querySelector('.feed-new-pill .n')?.textContent === '2', { timeout: 2000 });
-  assert(!(await page.$(row(fast.id))), 'header-visible prepends wait for an explicit tap');
-  assert.equal(await page.$eval('.chat-page > .row', (r) => r.getBoundingClientRect().top), headerTop);
-  await page.evaluate(() => { scrollTo(0, 1); scrollTo(0, 0); });
-  assert.equal(await count(page), 2, 'scrolling at the top does not clear deferred new posts');
+  await page.waitForSelector(row(fast.id), { timeout: 2000 });
+  // header showing: they go in above the first post, which doesn't move
+  assert(Math.abs(await page.$eval(row(firstKey), (r) => r.getBoundingClientRect().top) - firstTop) <= 1, 'header-visible prepends hold the first post still');
+  assert(await page.evaluate(() => scrollY > 0), 'the page is scrolled by what went in above');
+  assert.equal(await count(page), 2, 'the pill still says how many are up there');
   await page.click('.feed-new-pill');
   await page.waitForSelector(row(later.id));
   assert(await page.$eval(row(later.id), (r) => Math.abs(r.getBoundingClientRect().top - 8) <= 2), 'tap reveals the oldest ready new post');

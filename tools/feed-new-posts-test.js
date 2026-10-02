@@ -21,13 +21,13 @@ window.test = { ui, wallet, render, get feature() { return feature; }, async fee
   await feature.testSeed(Array.from({length:20}, (_, i) => ({ id: i.toString(16).padStart(64,'0'), pubkey:author, kind:1, tags:[], created_at:Math.floor(Date.now()/1000)-i,
     content: 'A post in the feed. Scroll to keep Home, messages and notifications within reach. '.repeat(3) })));
   render(); window.scrollTo(0,0);
-}, unseen() { feature.testUnseen(); render(); }, arrive(n) { const now = Math.floor(Date.now()/1000); feature.testArrive(Array.from({length:n}, (_, i) => ({ id: 'f' + i.toString(16).padStart(63,'0'), pubkey:author, kind:1, tags:[], created_at: now + 100 - i, content: 'Brand new post number ' + i + '. '.repeat(1) + 'Fresh words. '.repeat(20) }))); } };
+}, arriveIds(ks) { const now = Math.floor(Date.now()/1000); feature.testArrive(ks.map((k, i) => ({ id: k.padEnd(63,'0') + String(i+1), pubkey:author, kind:1, tags:[], created_at: now + 200 - i, content: 'Waiting post ' + k }))); }, unseen() { feature.testUnseen(); render(); }, arrive(n) { const now = Math.floor(Date.now()/1000); feature.testArrive(Array.from({length:n}, (_, i) => ({ id: 'f' + i.toString(16).padStart(63,'0'), pubkey:author, kind:1, tags:[], created_at: now + 100 - i, content: 'Brand new post number ' + i + '. '.repeat(1) + 'Fresh words. '.repeat(20) }))); } };
 await test.feed();
 `;
 const bundle = await Bun.build({ entrypoints: ['nav-test-entry'], target: 'browser', plugins: [{ name: 'nav-test', setup(build) {
   build.onResolve({filter:/^nav-test-entry$/},()=>({path:'entry',namespace:'nav-test'}));
   build.onLoad({filter:/.*/,namespace:'nav-test'},()=>({contents:entry,loader:'js',resolveDir:process.cwd()}));
-  build.onLoad({filter:/src\/features\/messages\.js$/},async({path})=>({loader:'js',contents:(await Bun.file(path).text()).replace("id: 'messages',", "id: 'messages', testSeed: async (notes) => { const c = feedNow(); await c.boot; Object.assign(c, { notes, status: 'ready', booting: false, end: true, shown: 20 }); }, testUnseen: () => { feed.unseen = 2; }, testArrive: (notes) => admitFeed(notes, feed), testChats: (n, m) => { stCache = null; if (m != null) st().communities = Array.from({ length: m }, (_, i) => ({ ...COMMUNITY, community_id: (i + 1).toString(16).padStart(64, 'd'), name: 'Room ' + i })); threads.clear(); for (let i = 0; i < n; i++) { const peer = (i + 1).toString(16).padStart(64, 'c'); threads.set(peer, new Map([['r' + i, { rumor: { id: 'r' + i, kind: 14, pubkey: peer, tags: [], content: 'hi ' + i, created_at: 1700000000 - i }, mine: false }]])); } },")}));
+  build.onLoad({filter:/src\/features\/messages\.js$/},async({path})=>({loader:'js',contents:(await Bun.file(path).text()).replace("id: 'messages',", "id: 'messages', testSeed: async (notes) => { const c = feedNow(); await c.boot; Object.assign(c, { notes, status: 'ready', booting: false, end: true, shown: 20, unseen: 0, fresh: null, deferred: [] }); }, testUnseen: () => { feed.unseen = 2; }, testArrive: (notes) => admitFeed(notes, feed), testChats: (n, m) => { stCache = null; if (m != null) st().communities = Array.from({ length: m }, (_, i) => ({ ...COMMUNITY, community_id: (i + 1).toString(16).padStart(64, 'd'), name: 'Room ' + i })); threads.clear(); for (let i = 0; i < n; i++) { const peer = (i + 1).toString(16).padStart(64, 'c'); threads.set(peer, new Map([['r' + i, { rumor: { id: 'r' + i, kind: 14, pubkey: peer, tags: [], content: 'hi ' + i, created_at: 1700000000 - i }, mine: false }]])); } },")}));
   build.onLoad({filter:/src\/nostr\.js$/},async({path})=>({loader:'js',contents:(await Bun.file(path).text())
     .replace('export async function queryOn(relays, filter, maxWait = 1500) {','export async function queryOn(relays, filter, maxWait = 1500) { return [];')
     .replace(/export function subscribeOn\(([^)]*)\) \{/,'export function subscribeOn($1) { return () => {};')}));
@@ -44,12 +44,36 @@ page.on('request',r=>r.url().startsWith(server.url.origin)?r.continue():r.abort(
 const sleep=(ms)=>new Promise(r=>setTimeout(r,ms));
 const top=(id)=>page.evaluate((id)=>{const r=document.querySelector('.notes-feed > [data-key="'+id+'"]');return r?Math.round(r.getBoundingClientRect().top):null;},id);
 const fresh=()=>page.$$eval('.notes-feed > .row.note-fresh',els=>els.map(e=>e.getAttribute('data-key').slice(0,2)+e.getAttribute('data-key').slice(-1)));
+const test_reset=async()=>{await page.evaluate(()=>test.feed());await sleep(300);};
 const F=(i)=>'f'+i.toString(16).padStart(63,'0');
 try {
   await page.setViewport({width:390,height:844,isMobile:true,hasTouch:true});
   await page.emulateMediaFeatures([{name:'prefers-reduced-motion',value:'reduce'}]);
   await page.goto(server.url.href);
   await page.waitForSelector('.note-post',{timeout:5000});
+  // At the very top, header showing: new posts go in ABOVE the first post,
+  // which stays exactly where it was — the page grows upward (the scrollbar
+  // shows it) and the pill says how many, but nothing on screen moves.
+  const first='0'.padStart(64,'0');
+  await page.evaluate(()=>window.scrollTo(0,0)); await sleep(200);
+  const at=await top(first), h0=await page.evaluate(()=>document.documentElement.scrollHeight);
+  await page.evaluate(()=>test.arrive(2)); await sleep(400);
+  assert(await page.$('.notes-feed > [data-key="'+F(0)+'"]'),'new posts are in the page before any tap');
+  assert(Math.abs((await top(first))-at)<=2,'the first post stays put: '+at+' → '+(await top(first)));
+  assert(await page.evaluate(()=>scrollY)>0,'the page is scrolled down by what went in above');
+  assert(await page.evaluate(()=>document.documentElement.scrollHeight)>h0,'the page grew (the scrollbar shrinks)');
+  assert.equal(await page.$eval('.feed-new-pill .n',e=>e.textContent),'2');
+  await page.evaluate(()=>window.scrollTo(0,0)); await sleep(300);
+  assert(!(await page.$('.feed-new-pill')),'scrolling up to them clears the pill');
+  // writing a post up top: arrivals wait behind the pill instead
+  await page.evaluate(()=>{test.ui.profCompose='draft';test.render();window.scrollTo(0,0);}); await sleep(200);
+  const at2=await top(F(0));
+  await page.evaluate(()=>test.feature&&window.test.arriveIds(['e1','e2'])); await sleep(300);
+  assert(!(await page.$('.notes-feed > [data-key^="e1"]')),'composer open: the post waits');
+  assert.equal(await page.evaluate(()=>scrollY),0,'composer open: nothing moves');
+  assert(Math.abs((await top(F(0)))-at2)<=2,'composer open: rows stay');
+  await page.evaluate(()=>{test.ui.profCompose=null;test.render();}); await sleep(200);
+  await test_reset();
   const reading='6'.padStart(64,'0');
   await page.evaluate((id)=>{const r=document.querySelector('.notes-feed > [data-key="'+id+'"]');window.scrollTo(0,scrollY+r.getBoundingClientRect().top-100);},reading);
   await sleep(300);

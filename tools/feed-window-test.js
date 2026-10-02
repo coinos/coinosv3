@@ -7,8 +7,14 @@ const notes = [note('a', 100), note('b', 90), note('c', 80), note('d', 70)];
 const rows = (top) => notes.map((e, i) => ({ id: e.id, top: top + i * 200, bottom: top + (i + 1) * 200 }));
 const above = note('above', 110), gap = note('gap', 95), below = note('below', 60);
 const check = (name, fn) => { fn(); console.log('✓ ' + name); };
-check('header-visible arrivals wait without changing the displayed window', () => {
+check('header-visible prepends go in above the first post; visible gaps wait', () => {
   const r = mergeFeedWindow(notes, 4, [above, gap], { rows: rows(180), height: 844 });
+  assert.deepEqual(r.added, [above]);
+  assert.deepEqual(r.deferred, [gap]);
+  assert.deepEqual(r.notes.slice(0, r.shown).map((e) => e.id), ['above', 'a', 'b', 'c', 'd']);
+});
+check('a busy header (composer open) holds even the prepend', () => {
+  const r = mergeFeedWindow(notes, 4, [above, gap], { rows: rows(180), height: 844, holdHead: true });
   assert.equal(r.notes, notes);
   assert.equal(r.shown, 4);
   assert.deepEqual(r.deferred, [above, gap]);

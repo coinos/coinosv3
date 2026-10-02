@@ -625,7 +625,7 @@
   "onbUploadFailed": "Le téléversement a échoué. Essayez une autre image",
   "onbProfileSkipped": "Impossible de publier votre profil, définissez-le plus tard à partir du profil Édition",
   "onbContinue": "Continuer",
-  "onbSkipAvatar": "Continuer avec mon défaut",
+  "onbSkipAvatar": "Continuer",
   "onbDoneTitle": "Vous êtes prêts !",
   "onbDoneBody": "Votre compte de dépenses est établi, votre adresse est en direct et le chat communautaire de coinos vous attend.",
   "onbEnter": "Entrez des pièces",

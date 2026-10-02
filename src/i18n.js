@@ -1047,7 +1047,7 @@ const STR = {
     onbUploadFailed: 'Upload failed. Try another picture',
     onbProfileSkipped: 'Couldn’t publish your profile. Set it later from Edit profile',
     onbContinue: 'Continue',
-    onbSkipAvatar: 'Continue with my default',
+    onbSkipAvatar: 'Continue',
     onbDoneTitle: "You're all set!",
     onbDoneBody: 'Your spending account is set up. Your address is live and the coinos community chat is waiting for you.',
     onbEnter: 'Enter coinos',

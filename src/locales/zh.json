@@ -625,7 +625,7 @@
   "onbUploadFailed": "上传失败。请尝试其他图片",
   "onbProfileSkipped": "无法发布您的配置文件, 稍后从编辑配置文件中设置 。",
   "onbContinue": "继续",
-  "onbSkipAvatar": "继续我的默认",
+  "onbSkipAvatar": "继续",
   "onbDoneTitle": "你们都准备好了!",
   "onbDoneBody": "你的开销账户已经建立，你的地址是现场直播,硬币社区聊天在等你.",
   "onbEnter": "输入硬币",

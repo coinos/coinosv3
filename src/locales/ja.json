@@ -625,7 +625,7 @@
   "onbUploadFailed": "アップロードに失敗しました。別の画像をお試しください",
   "onbProfileSkipped": "プロフィールを公開できません。編集プロファイルから後で設定できます。",
   "onbContinue": "お問い合わせ",
-  "onbSkipAvatar": "デフォルトで続ける",
+  "onbSkipAvatar": "続ける",
   "onbDoneTitle": "お問い合わせ",
   "onbDoneBody": "あなたの支出アカウントはセットアップされます。あなたのアドレスはライブであり、coinosコミュニティチャットはあなたを待っています。",
   "onbEnter": "コインを入力",

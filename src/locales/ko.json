@@ -624,7 +624,7 @@
   "onbUploadFailed": "업로드하지 못했습니다. 다른 이미지를 사용해 보세요",
   "onbProfileSkipped": "프로필을 게시 할 수 없습니다 - 나중에 편집 프로필에서 설정",
   "onbContinue": "계속하기",
-  "onbSkipAvatar": "기본 설정",
+  "onbSkipAvatar": "계속",
   "onbDoneTitle": "모든 설정입니다!",
   "onbDoneBody": "귀하의 지출 계정 설정, 귀하의 주소는 라이브와 coinos 커뮤니티 채팅은 당신을 기다리고 있습니다.",
   "onbEnter": "동전을 입력",

@@ -1364,7 +1364,7 @@ export function arkFeature(ctx) {
   // A renewal in flight, beside the in-progress exits: the tap opens the
   // coins page, where the round's progress is spelled out.
   function arkRefreshActionItem(a) {
-    return h('div', { class: 'item', style: 'cursor:pointer', onClick: () => { ui.arkCoinsPage = true; render(); } },
+    return h('div', { class: 'item', style: 'cursor:pointer', onClick: () => ctx.openWalletSettings('spending') },
       h('div', { class: 'ico' }, '\u21bb'),
       h('div', { class: 'grow' },
         h('div', { class: 'row gap6', style: 'align-items:center' },
@@ -2190,7 +2190,7 @@ export function arkFeature(ctx) {
   // The screen behind that notice's Manage link: every spendable coin with
   // its expiry and arkoor depth, what an uncooperative exit costs today, and
   // what a renewal costs and buys.
-  function arkCoinsPage() {
+  function arkCoinsPage({ embedded = false } = {}) {
     // The notice that opens this page reads the persisted state; so must the
     // page, or a tap before the manager has connected (the first seconds
     // after boot) found no coins and closed itself — Manage needed two taps.
@@ -2206,8 +2206,13 @@ export function arkFeature(ctx) {
     const inRound = new Set(renewing.flatMap((a) => a.inputIds || []));
     const pendingCoins = ((st && st.vtxos) || []).filter((v) => v.state === 'pending' && inRound.has(v.id));
     const tip = (mgr && mgr._tipH) || 0;
-    const back = () => ctx.goBack(() => { ui.arkCoinsPage = null; ui.arkCoinsSel = null; }); // the page is a history entry now
-    if (!spend.length && !pendingCoins.length) { ui.arkCoinsPage = null; return null; } // nothing left to manage
+    const back = embedded
+      ? () => { ui.arkCoinsSel = null; ctx.goHome(); }
+      : () => ctx.goBack(() => { ui.arkCoinsPage = null; ui.arkCoinsSel = null; }); // the page is a history entry now
+    if (!spend.length && !pendingCoins.length) {
+      if (embedded) return h('div', { class: 'card col', style: 'gap:6px' }, h('h3', { style: 'margin:0' }, t('arkCoinsTitle')), h('p', { class: 'small muted', style: 'margin:0' }, t('arkCoinsNone')));
+      ui.arkCoinsPage = null; return null; // nothing left to manage
+    }
     if (!mgr) connectArk().then(() => render()).catch(() => {});
     const totalSat = spend.reduce((n, v) => n + v.amountSat, 0);
     const heldSat = totalSat + pendingCoins.reduce((n, v) => n + v.amountSat, 0);
@@ -2325,9 +2330,18 @@ export function arkFeature(ctx) {
           } }, ui.arkBusy === 'exit' ? h('span', { class: 'spinner sm' }) : t('arkExitConfirmGo'))),
         h('button', { class: 'btn-ghost btn-block', onClick: () => { ui.arkExitConfirm = null; render(); } }, t('cancel')));
     }
+    // what a unilateral exit costs, which used to sit under the balance (and
+    // only when the coins' chains ran deep): here it is always said
+    let depth = null;
+    if (embedded) {
+      const cached = wallet.loadFeatureState('arkDepth', null);
+      const fee = exitFee || (cached && cached.exitFee) || 0;
+      if (fee > 0) depth = t('arkDepthNotice', { fee: fmtSats(fee) });
+    }
     return h('div', { class: 'col', style: 'gap:16px' },
       h('div', { class: 'card col', style: 'gap:8px' },
         h('h3', { style: 'margin:0' }, t('arkCoinsTitle')),
+        depth ? h('div', { class: 'notice info small' }, depth) : null,
         h('p', { class: 'small muted', style: 'margin:0' },
           !spend.length
             ? t('arkCoinsIntroRenewing', { total: fmtSats(heldSat) + ' sats' })
@@ -2414,7 +2428,7 @@ export function arkFeature(ctx) {
         h('p', { class: 'small muted', style: 'margin:0' },
           t('arkCoinsExitDesc', { fee: fmtSats(exitFee), after: fmtSats(afterFee) })),
         h('button', { class: 'btn-ghost btn-block', disabled: !!ui.arkBusy || !spend.length || !mgr, onClick: () => { ui.arkExitConfirm = true; render(); } }, t('arkCoinsExitBtn'))),
-      h('button', { class: 'btn-ghost btn-block', onClick: back }, t('back')));
+      embedded ? null : h('button', { class: 'btn-ghost btn-block', onClick: back }, t('back')));
   }
 
   // What each server charges and promises, from its own published info —
@@ -2946,7 +2960,7 @@ export function arkFeature(ctx) {
       h('div', { class: 'row gap6' },
         h('button', { class: 'btn-ghost grow', onClick: () => {
           ui.arkOffboardSend = null; ui.arkError = ''; ui.send = blankSend();
-          if (o.fromCoins) ctx.goBack(() => { ui.arkCoinsPage = true; }); else render();
+          if (o.fromCoins) ctx.goBack(() => ctx.openWalletSettings('spending')); else render();
         } }, t('back')),
         ui.arkBusy === 'offboard'
           ? h('button', { class: 'btn-primary grow', disabled: true }, h('span', { class: 'spinner sm' }))
@@ -3480,6 +3494,11 @@ export function arkFeature(ctx) {
         new Promise((r) => setTimeout(r, 800)),
       ]);
     },
+    // the Spending face's settings page leads with its coins
+    spendingSettings() {
+      if (wallet.watchOnly) return null; // a locked wallet can't renew or exit
+      return arkCoinsPage({ embedded: true });
+    },
     // the wallet's own pages keep the top nav: these are pages, not takeovers
     screenView() {
       const page = ui.arkCoinsPage ? arkCoinsPage() : ui.arkExitPage ? arkExitPage() : null;
@@ -3933,15 +3952,14 @@ export function arkFeature(ctx) {
         });
         else if (expiredSat > 0) lines.push({ text: t('arkExpiredDust', { amount: fmtSats(expiredSat) + ' sats' }), manage: true });
       }
-      const depthNotice = exitDepthNotice();
-      if (depthNotice) lines.push({ text: depthNotice, manage: true });
+      // What a unilateral exit would cost is the Spending settings page's
+      // business (the gear on the card), not a line under the balance.
       // An upcoming renewal that will COST something — stated before it
       // happens. Ark is new to nearly everyone, and a fee nobody announced
       // reads as money gone missing (it did, once). Free renewals — the
       // normal case now — pass without comment, and one line under the
-      // balance is enough: the depth advisory outranks this forecast, and
-      // Manage carries the full story either way.
-      if (!depthNotice && ark && ark.state && ark._tipH && !wallet.watchOnly) {
+      // balance is enough: the settings page carries the full story.
+      if (ark && ark.state && ark._tipH && !wallet.watchOnly) {
         const spend = (ark.state.vtxos || []).filter((v) => v.state === 'spendable' && v.expiryHeight && !v.expiryRejected);
         if (spend.length) {
           const tip = ark._tipH;
@@ -3963,16 +3981,12 @@ export function arkFeature(ctx) {
           });
         }
       }
-      const manageBtn = () => h('button', { class: 'linklike small', style: 'align-self:flex-end', onClick: () => { ui.arkCoinsPage = true; render(); } }, t('arkDepthBtn'));
-      // Management follows the Spending balance, independently of notices
-      // or renewal eligibility. Keep expired coins reachable as well.
-      const balance = arkBalance();
-      const coins = (arkStateNow()?.vtxos || []).some((v) => v.state === 'spendable');
-      const hasBalance = balance && balance.spendableSat + balance.pendingSat > 0;
-      const manage = hasBalance || coins || lines.some((l) => l.manage) ? manageBtn() : null;
-      if (!lines.length) {
-        return manage ? [h('div', { class: 'small muted', style: 'margin:10px 0 0;text-align:center' }, manage)] : [];
-      }
+      // The coins themselves are always one tap away on the card's gear; a
+      // notice that is about them links straight there.
+      const manage = lines.some((l) => l.manage)
+        ? h('button', { class: 'linklike small', style: 'align-self:flex-end', onClick: () => ctx.openWalletSettings('spending') }, t('arkDepthBtn'))
+        : null;
+      if (!lines.length) return [];
       const err = lines.some((l) => l.err);
       // one plain advisory keeps its quiet centred line; anything more, or
       // anything urgent, is a card

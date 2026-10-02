@@ -82,8 +82,8 @@ try {
   await sleep(1000);
 
   console.log('\n[the padlock still asks — locking needs a password]');
-  // the padlock lives on the Accounts page (the balance card's switcher opens it)
-  await page.evaluate(() => document.querySelector('.balance-switch')?.click());
+  // the padlock lives on the wallet settings page (the balance card's gear)
+  await page.evaluate(() => document.querySelector('.balance-gear')?.click());
   await sleep(600);
   await page.evaluate(() => { const b = [...document.querySelectorAll('button')].find((n) => n.title === 'Lock wallet'); if (b) b.click(); });
   await sleep(600);
@@ -91,7 +91,7 @@ try {
   check('padlock asks even after "Not now"', /protect this device/i.test(txt), txt.slice(0, 120).replace(/\n+/g, ' | '));
   await click('button', 'Not now');
   await sleep(600);
-  check('and declining lands back on the Accounts page', /add account/i.test(await body()));
+  check('and declining lands back on the wallet settings', /security/i.test(await body()));
 
   console.log('\n[now with a password]');
   await click('button', 'Change password');
@@ -139,13 +139,17 @@ try {
   check('backing out deletes nothing', (await vaultSize()) > 0);
 
   console.log('\n[delete all is the destructive one]');
-  await page.evaluate(() => document.querySelector('.balance-switch')?.click());
+  // the same road as above, this time all the way: profile → Log out →
+  // forget all data → the warning → Delete all
+  await page.evaluate(() => document.querySelector('.header-avatar')?.click());
   await sleep(800);
-  await click('button', 'Delete all');
+  await click('button', 'Log out');
+  await sleep(500);
+  await click('button', 'forget all data');
   await sleep(600);
   txt = await body();
   check('it warns first', /delete all/i.test(txt) && /(delete|remove|erase|wipe|lose)/i.test(txt), txt.slice(0, 160).replace(/\n+/g, ' | '));
-  await page.evaluate(() => { const b = [...document.querySelectorAll('.btn-primary')].find((e) => /delete all/i.test(e.textContent)); if (b) b.click(); });
+  await page.evaluate(() => { const b = [...document.querySelectorAll('.confirm-pop button')].find((e) => /delete all/i.test(e.textContent)); if (b) b.click(); });
   await sleep(1200);
   txt = await body();
   check('everything is gone', (await vaultSize()) === 0);

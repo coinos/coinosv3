@@ -8,10 +8,11 @@ import { wordlist } from '@scure/bip39/wordlists/english';
 const bundle = await Bun.build({ entrypoints: ['src/app.js'], target: 'browser', minify: true,
   plugins: [{ name: 'cooperative-exit-test', setup(build) {
     build.onLoad({ filter: /src\/app\.js$/ }, async ({ path }) => ({ loader: 'js', contents: await Bun.file(path).text() + `
-window.coopApp = { ui, wallet, ctx, render, enterWallet, get ready() { return !_bootDeciding; } };
+window.coopApp = { ui, wallet, ctx, render, enterWallet, get ready() { return !_bootDeciding; },
+  setSpending: () => { const a = activeAccount(); if (a) a.kind = 'spending'; } };
 ` }));
     build.onLoad({ filter: /src\/features\/ark\.js$/ }, async ({ path }) => ({ loader: 'js', contents:
-      (await Bun.file(path).text()).replace("  return {\n    id: 'ark',", `
+      (await Bun.file(path).text()).replace('    arkReady() { return arkAvailable(); },', '    arkReady() { return window.forceArkReady || arkAvailable(); },').replace("  return {\n    id: 'ark',", `
   window.coopFeature = { setManager: (mgr) => { ark = mgr; }, offboard: doArkOffboard };
   return {\n    id: 'ark',`) }));
     build.onLoad({ filter: /src\/video-compress\.js$/ }, () => ({ loader: 'js', contents: 'export async function compressVideo(f) { return f; }' }));
@@ -70,6 +71,28 @@ try {
   const send = () => page.evaluate(() => [...document.querySelectorAll('.card')]
     .find((c) => c.querySelector('h3')?.textContent === 'Co-operative exit').querySelector('.btn-primary').click());
   const edit = (selector, value) => page.$eval(selector, (e, value) => { e.value = value; e.dispatchEvent(new Event('input', { bubbles: true })); }, value);
+  // The balance card's gear is the way in: Spending's settings lead with
+  // its coins and carry what a unilateral exit costs; the home screen no
+  // longer says it under the balance.
+  await page.evaluate(() => { window.forceArkReady = true; coopApp.wallet.saveFeatureState('arkDepth', { show: true, exitFee: 4321, key: 'x' }); coopApp.setSpending(); coopApp.render(); });
+  const homeText = await page.evaluate(() => document.body.innerText);
+  assert(!/Unilateral exit costs/.test(homeText), 'the exit cost is not on the home screen');
+  assert(!/Accounts/.test(homeText), 'no Accounts button on the home screen');
+  await page.screenshot({ path: '/tmp/gear-home.png' });
+  const gears = await page.$$eval('.balance-gear', (es) => es.length);
+  assert(gears >= 1, 'the balance card wears a gear');
+  const faces = await page.$$eval('.balance-face', (fs) => fs.map((f) => f.innerText.split('\n')[0]));
+  assert(faces.some((f) => /spending/i.test(f)), 'a Spending face: ' + JSON.stringify(faces));
+  await page.evaluate(() => [...document.querySelectorAll('.balance-face')].find((f) => /spending/i.test(f.innerText.split('\n')[0])).querySelector('.balance-gear').click());
+  await page.waitForSelector('.coin-table');
+  const st = await page.evaluate(() => ({ nav: coopApp.ui.screen, text: document.body.innerText }));
+  assert.equal(st.nav, 'accountSettings');
+  assert.match(st.text, /Unilateral exit costs about 4,?321 sats/, 'the exit cost lives on the settings page');
+  assert.match(st.text, /Security/); assert.match(st.text, /Lock wallet/); assert.match(st.text, /Recovery phrase/);
+  await page.screenshot({ path: '/tmp/gear-settings.png', fullPage: true });
+  console.log('✓ The Spending gear opens its settings: coins, the exit cost (gone from home), lock and recovery phrase');
+  await page.evaluate(() => { window.forceArkReady = false; coopApp.wallet.saveFeatureState('arkDepth', null); coopApp.ui.screen = 'wallet'; coopApp.render(); });
+
   await manage();
   assert.deepEqual(await page.$$eval('.card h4', (es) => es.map((e) => e.textContent)), ['Renewal', 'Co-operative exit', 'Unilateral exit']);
   await coopButton();

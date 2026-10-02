@@ -877,5 +877,7 @@
   "followHistRestore": "{n}명 복원",
   "followHistNone": "목록에 빠진 사람이 들어 있는 예전 사본이 없습니다.",
   "followHistNothing": "그 사본의 모든 사람이 이미 목록에 있습니다.",
-  "followHistRestored": "팔로우 {n}명을 복원했습니다."
+  "followHistRestored": "팔로우 {n}명을 복원했습니다.",
+  "securityTitle": "보안",
+  "arkCoinsNone": "지출에 아직 코인이 없습니다."
 }

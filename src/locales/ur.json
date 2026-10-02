@@ -214,5 +214,7 @@
   "followHistRestore": "{n} بحال کریں",
   "followHistNone": "کسی پرانی کاپی میں ایسا کوئی نہیں جو آپ کی فہرست میں نہ ہو۔",
   "followHistNothing": "اس کاپی کے سب لوگ پہلے سے آپ کی فہرست میں ہیں۔",
-  "followHistRestored": "{n} فالو بحال ہو گئے۔"
+  "followHistRestored": "{n} فالو بحال ہو گئے۔",
+  "securityTitle": "سیکیورٹی",
+  "arkCoinsNone": "خرچ میں ابھی کوئی کوائن نہیں۔"
 }

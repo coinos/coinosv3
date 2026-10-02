@@ -878,5 +878,7 @@
   "followHistRestore": "Restaurar {n}",
   "followHistNone": "Ninguna copia anterior tiene a alguien que falte en tu lista.",
   "followHistNothing": "Todos los de esa copia ya están en tu lista.",
-  "followHistRestored": "Se restauraron {n} seguidos."
+  "followHistRestored": "Se restauraron {n} seguidos.",
+  "securityTitle": "Seguridad",
+  "arkCoinsNone": "Aún no hay monedas en Gastos."
 }

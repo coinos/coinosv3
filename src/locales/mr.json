@@ -214,5 +214,7 @@
   "followHistRestore": "{n} पुनर्संचयित करा",
   "followHistNone": "तुमच्या यादीत नसलेले कोणी असलेली जुनी प्रत नाही.",
   "followHistNothing": "त्या प्रतीतील सर्वजण आधीच तुमच्या यादीत आहेत.",
-  "followHistRestored": "{n} फॉलो पुनर्संचयित केले."
+  "followHistRestored": "{n} फॉलो पुनर्संचयित केले.",
+  "securityTitle": "सुरक्षा",
+  "arkCoinsNone": "स्पेंडिंगमध्ये अद्याप कोणतेही कॉइन नाहीत."
 }

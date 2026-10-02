@@ -214,5 +214,7 @@
   "followHistRestore": "Pulihkan {n}",
   "followHistNone": "Tidak ada salinan lama yang berisi orang yang hilang dari daftarmu.",
   "followHistNothing": "Semua orang di salinan itu sudah ada di daftarmu.",
-  "followHistRestored": "{n} ikutan dipulihkan."
+  "followHistRestored": "{n} ikutan dipulihkan.",
+  "securityTitle": "Keamanan",
+  "arkCoinsNone": "Belum ada koin di Belanja."
 }

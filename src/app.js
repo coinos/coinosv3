@@ -2515,9 +2515,11 @@ function lock({ offerPassword = false } = {}) {
 // ================================================================ WALLET
 // The avatar IS your profile now — one tap opens it (edit lives there).
 // Settings and Lock stand beside it as their own icons; no popup menu.
+// The nostr identity the header avatar stands for, when there is one.
+const headerIdentity = () => (featureHook('nostrLoginIdentity') || {}).pubkey || (wallet.nostrPubkey && wallet.nostrPubkey())
+  || (activeAccount() || {}).nostrPk || null;
 function avatarMenu() {
-  const me = (featureHook('nostrLoginIdentity') || {}).pubkey || (wallet.nostrPubkey && wallet.nostrPubkey())
-    || (activeAccount() || {}).nostrPk;
+  const me = headerIdentity();
   // Older watch-only accounts may have no remembered Nostr identity. Keep
   // account access available even when there is no profile to open.
   const node = (me && featureHook('headerAvatar', me))
@@ -2527,13 +2529,11 @@ function avatarMenu() {
     });
   return h('button', {
     class: 'header-avatar',
-    title: me ? t('profYourProfile') : t('accounts'),
-    'aria-label': me ? t('profYourProfile') : t('accounts'),
+    title: me ? t('profYourProfile') : t('walletSettings'),
+    'aria-label': me ? t('profYourProfile') : t('walletSettings'),
     onClick: () => {
       clearFeatureNav(); ui.screen = 'wallet';
-      if (!me || !featureHook('showProfile', me)) {
-        ui.screen = 'accounts';
-      }
+      if (!me || !featureHook('showProfile', me)) { openWalletSettings(); return; }
       render();
     },
   }, node);
@@ -3089,17 +3089,18 @@ function claimTargets() {
 
 
 // Account switcher: pick a wallet, add another, or lock the session.
+function logoutConfirmScreen() {
+  return h('div', { class: 'col', style: 'gap:16px' },
+    brandHeader(false),
+    h('div', { class: 'card col' },
+      h('h3', {}, t('logout') + '?'),
+      h('p', { class: 'small muted' }, t('logoutPopBlurb')),
+      h('button', { class: 'btn-primary btn-block', onClick: () => { ui.logoutConfirm = null; ctx.logout(); } }, t('logout')),
+      h('button', { class: 'btn-ghost btn-block', onClick: () => { ui.logoutConfirm = null; render(); } }, t('back'))));
+}
 function accountsScreen() {
   if (ui.pw) return h('div', { class: 'col', style: 'gap:16px' }, brandHeader(false), pwPromptCard());
-  if (ui.logoutConfirm) {
-    return h('div', { class: 'col', style: 'gap:16px' },
-      brandHeader(false),
-      h('div', { class: 'card col' },
-        h('h3', {}, t('logout') + '?'),
-        h('p', { class: 'small muted' }, t('logoutPopBlurb')),
-        h('button', { class: 'btn-primary btn-block', onClick: () => { ui.logoutConfirm = null; ctx.logout(); } }, t('logout')),
-        h('button', { class: 'btn-ghost btn-block', onClick: () => { ui.logoutConfirm = null; render(); } }, t('back'))));
-  }
+  if (ui.logoutConfirm) return logoutConfirmScreen();
   if (ui.addWallet) {
     const aw = ui.addWallet;
     const fulls = accounts.filter((x) => x.type === 'full' && x.mnemonic);
@@ -3387,20 +3388,53 @@ function autolockCard(a) {
   );
 }
 
-// Per-wallet settings screen — reached from Accounts → ⚙ for any account
-// (not just the active one; full accounts keep their seed in memory).
+// The balance card's gear: one face's settings. Spending leads with its
+// coins (renewal, the cooperative move, a unilateral exit and what it costs);
+// both carry the lock, the password and the recovery phrase that used to sit
+// on the Accounts page.
+function openWalletSettings(view) {
+  clearFeatureNav();
+  ui.settingsId = activeId;
+  ui.settingsView = view || accountSel();
+  ui.editLabel = null; ui.revealShown = false; ui.pubkeyShown = false; ui.loadSeed = null;
+  ui.screen = 'accountSettings';
+  render();
+  try { window.scrollTo(0, 0); } catch {}
+}
+function securityCard() {
+  if (!activeAccount()) return null;
+  // With a nostr identity, signing in elsewhere and logging out live on your
+  // profile; a wallet without one (an old watch-only) has no profile, so
+  // they live here.
+  const anon = !headerIdentity();
+  return h('div', { class: 'card col', style: 'gap:8px' },
+    h('h3', {}, t('securityTitle')),
+    lockBtn(),
+    hasVault() ? h('button', { class: 'btn-ghost btn-block', onClick: startChangePw }, t('changePassword')) : null,
+    anon ? h('button', { class: 'btn-block', onClick: signInAnother }, t('signInAnother')) : null,
+    anon ? h('button', { class: 'btn-ghost btn-block', onClick: () => { ui.logoutConfirm = true; render(); } }, t('logout')) : null);
+}
 function accountSettingsScreen() {
+  if (ui.pw) return h('div', { class: 'col', style: 'gap:16px' }, brandHeader(false), pwPromptCard());
+  if (ui.logoutConfirm) return logoutConfirmScreen();
   const a = accounts.find((x) => x.id === ui.settingsId) || activeAccount();
   if (!a) { ui.screen = 'accounts'; return accountsScreen(); }
+  const view = ui.settingsView || accountSel();
+  const spending = view === 'spending' && a.id === activeId;
+  const leave = () => { ui.editLabel = null; ui.revealShown = false; ui.pubkeyShown = false; ui.loadSeed = null; goBack(() => { ui.screen = 'wallet'; }); };
   return h(
     'div',
     { class: 'col', style: 'gap:16px' },
-    brandHeader(false),
+    brandHeader(!!activeAccount()),
+    h('div', { class: 'row gap6', style: 'align-items:center;margin:2px 0 -4px 4px' },
+      h('span', { style: 'display:flex;color:var(--muted)', html: GEAR_ICON(20) }),
+      h('h3', { style: 'margin:0' }, viewLabel(a, view))),
+    spending ? featureHook('spendingSettings') : null,
+    securityCard(),
     recoveryCard(a),
-    walletNameCard(a),
-    pubkeyCard(a),
+    view === 'spending' ? null : pubkeyCard(a),
     autolockCard(a),
-    h('button', { class: 'btn-ghost btn-block', onClick: () => { ui.editLabel = null; ui.revealShown = false; ui.pubkeyShown = false; ui.loadSeed = null; goBack(() => { ui.screen = 'accounts'; }); } }, t('back'))
+    h('button', { class: 'btn-ghost btn-block', onClick: leave }, t('back'))
   );
 }
 
@@ -4153,6 +4187,7 @@ function setAccountSel(a, dir) {
   render();
 }
 
+const GEAR_ICON = (n) => `<svg width="${n}" height="${n}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="display:block"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.09a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.09a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>`;
 const SWAP_ICON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:block"><path d="M8 3 4 7l4 4"/><path d="M4 7h16"/><path d="m16 21 4-4-4-4"/><path d="M20 17H4"/></svg>';
 
 function balanceCard() {
@@ -4185,12 +4220,13 @@ function balanceCard() {
   // peeks at the edge and drags/snaps into place (native scroll-snap), the
   // way wallet cards behave in BlueWallet. Snapping IS the account switch.
   // Single-purpose and savings-only wallets keep the lone face.
-  const manageBtn = () => h('button', {
-    class: 'balance-switch',
-    onClick: () => { ui.screen = 'accounts'; render(); },
-  },
-    h('span', { html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:block"><rect x="2" y="6" width="20" height="14" rx="2"/><path d="M2 10h20"/><circle cx="17" cy="15" r="1.3"/></svg>' }),
-    h('span', { class: 'bsw-label' }, t('manageAccounts')));
+  // Each face's own settings: Spending's coins and exits, the seed, the lock.
+  const manageBtn = (view) => h('button', {
+    class: 'balance-switch balance-gear',
+    title: t('walletSettings'), 'aria-label': t('walletSettings'),
+    onClick: () => openWalletSettings(view),
+    html: GEAR_ICON(17),
+  });
   const faceFor = (view) => {
     const viewSpending = view === 'spending';
     return h('div', { class: 'balance-face' },
@@ -4208,7 +4244,7 @@ function balanceCard() {
           h('div', { class: 'small faint', style: 'text-transform:uppercase;letter-spacing:.06em' },
             kindLocked ? viewLabel(acc0, view)
               : hasSpending ? (viewSpending ? t('spendingLabel') : t('savingLabel')) : t('balance'))),
-        manageBtn()),
+        manageBtn(view)),
       h('div', { class: 'amt', style: firstLoad ? 'opacity:.3' : '' },
         firstLoad ? h('span', { class: 'spinner sm', style: 'margin-right:8px' }) : null,
         animatedAmount('bal:' + view, viewSpending ? spending : saving), ' ', unitTag('unit')),
@@ -5714,6 +5750,7 @@ async function importSnapshotFile(e) {
 // only invoked at runtime (first render happens after loadLocale below).
 const ctx = {
   h, ui, render, wallet, toast, copy, copyBtn, pasteBtn, blankSend, goBack, canGoBack, goHome, openExternal, showSend,
+  openWalletSettings: (view) => openWalletSettings(view),
   fmtAmount, unitLabel, unitTag, getUnit: () => unit, toggleUnit, download,
   // in fiat the typed figure is money, so it needs today's price to become sats
   parseAmount: (v, u) => parseAmount(v, u, rateNow()),

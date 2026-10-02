@@ -35,25 +35,25 @@ try {
   await click('button', 'Open wallet');
   await waitText('receive', 20000);
 
-  // open the Accounts page (the balance card's switcher) — the padlock lives there
-  await page.evaluate(() => document.querySelector('.balance-switch')?.click());
+  // open the balance card's settings (its gear) — the padlock lives there
+  await page.evaluate(() => document.querySelector('.balance-gear')?.click());
   await sleep(900);
-  check('Accounts page is open', /add account/i.test(await bodyText()), (await bodyText()).slice(0, 60).replace(/\n/g, ' | '));
+  check('the wallet settings page is open', /security/i.test(await bodyText()), (await bodyText()).slice(0, 60).replace(/\n/g, ' | '));
 
   // tap the padlock — the ask must appear without navigating anywhere
   const tapped = await page.evaluate(() => {
     const b = [...document.querySelectorAll('button')].find((e) => /lock/i.test(e.getAttribute('aria-label') || ''));
     if (!b) return false; b.click(); return true;
   });
-  check('padlock is reachable from the Accounts page', tapped);
+  check('padlock is reachable from the wallet settings', tapped);
   await sleep(500);
   const text = await bodyText();
   check('the ask appears on the tap', /protect this device/i.test(text), text.split('\n').slice(0, 3).join(' | '));
 
-  // declining lands back on the Accounts page, not somewhere else
+  // declining lands back on the settings page, not somewhere else
   await click('button', 'not now');
   await sleep(600);
-  check('declining lands back on the Accounts page', /add account/i.test(await bodyText()), (await bodyText()).slice(0, 60).replace(/\n/g, ' | '));
+  check('declining lands back on the wallet settings', /security/i.test(await bodyText()), (await bodyText()).slice(0, 60).replace(/\n/g, ' | '));
 } finally {
   await browser.close(); server.stop(true);
 }

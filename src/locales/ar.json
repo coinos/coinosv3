@@ -878,5 +878,7 @@
   "followHistRestore": "استعادة {n}",
   "followHistNone": "لا توجد نسخة أقدم فيها أحد تفتقده قائمتك.",
   "followHistNothing": "كل من في تلك النسخة موجود في قائمتك بالفعل.",
-  "followHistRestored": "تمت استعادة {n} متابَعًا."
+  "followHistRestored": "تمت استعادة {n} متابَعًا.",
+  "securityTitle": "الأمان",
+  "arkCoinsNone": "لا توجد عملات في الإنفاق بعد."
 }

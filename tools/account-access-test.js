@@ -31,9 +31,9 @@ try {
   await page.reload();
   await page.waitForSelector('.header-avatar');
   check('fresh local account defaults to mainnet', await page.evaluate(() => JSON.parse(localStorage.getItem('btc-wallet-watch'))[0].network === 'mainnet'));
-  check('anonymous avatar has an accessible Accounts label', await page.$eval('.header-avatar', (e) => e.getAttribute('aria-label') === 'Accounts'));
+  check('anonymous avatar has an accessible label', await page.$eval('.header-avatar', (e) => e.getAttribute('aria-label') === 'Account settings'));
   await page.click('.header-avatar');
-  check('avatar opens Accounts with sign-in and logout', await page.evaluate(() => ['Accounts', 'Sign into another account', 'Log out'].every((s) => document.body.innerText.includes(s))));
+  check('avatar opens the wallet settings with sign-in and logout', await page.evaluate(() => ['Security', 'Sign into another account', 'Log out'].every((s) => document.body.innerText.includes(s))));
   const saved = await page.evaluate(() => localStorage.getItem('btc-wallet-watch'));
   await click('Sign into another account');
   check('sign-in opens on Create new, not the seed import box', await page.evaluate(() =>
@@ -57,28 +57,29 @@ try {
   }, { key: cacheKeyFor(xpub) });
   await page.reload();
   await page.waitForSelector('[aria-label="Messages"]');
-  await click('Accounts');
-  const onAccounts = () => page.evaluate(() => [...document.querySelectorAll('h3')].some(e => e.textContent === 'Accounts'));
+  // the balance card's gear: a page like any other under the header
+  await page.click('.balance-gear');
+  const onSettings = () => page.evaluate(() => history.state.nav.screen === 'accountSettings' && [...document.querySelectorAll('h3')].some(e => e.textContent === 'Security'));
   for (const label of ['Search', 'Messages', 'Your profile', 'Settings']) {
-    check(label + ' starts on Accounts', await onAccounts());
+    check(label + ' starts on the wallet settings', await onSettings());
     await page.click('[aria-label="' + label + '"]');
-    check(label + ' opens from Accounts', await page.evaluate(label => {
+    check(label + ' opens from the wallet settings', await page.evaluate(label => {
       const nav = history.state.nav;
-      return nav.screen === 'wallet' && ![...document.querySelectorAll('h3')].some(e => e.textContent === 'Accounts')
+      return nav.screen === 'wallet'
         && (label === 'Search' ? !!document.querySelector('.user-search-input')
           : label === 'Messages' ? nav.chatOpen && nav.msgView === 'home'
-          : label === 'Your profile' ? !!document.querySelector('.npub-box') && nav.profilePk === 'a'.repeat(64)
+          : label === 'Your profile' ? nav.profilePk === 'a'.repeat(64)
           : nav.tab === 'settings');
     }, label));
     await page.goBack();
-    await page.waitForFunction(() => [...document.querySelectorAll('h3')].some(e => e.textContent === 'Accounts'));
-    check('Back returns from ' + label + ' to Accounts', await onAccounts());
+    await page.waitForFunction(() => history.state.nav.screen === 'accountSettings');
+    check('Back returns from ' + label + ' to the wallet settings', await onSettings());
   }
   await page.click('[aria-label="Lock wallet"]');
-  check('Lock opens its password prompt from Accounts', await page.evaluate(() => !!document.querySelector('input[type="password"]')));
+  check('Lock opens its password prompt from the wallet settings', await page.evaluate(() => !!document.querySelector('input[type="password"]')));
   await click('Not now');
   await page.click('.brand');
-  check('the logo returns to the wallet', await page.evaluate(() => history.state.nav.screen === 'wallet' && ![...document.querySelectorAll('h3')].some(e => e.textContent === 'Accounts')));
+  check('the logo returns to the wallet', await page.evaluate(() => history.state.nav.screen === 'wallet' && !!document.querySelector('.balance-gear')));
   assert.deepEqual(errors, []);
   check('no browser errors', true);
 } finally { await browser.close(); server.stop(true); }

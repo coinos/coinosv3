@@ -878,5 +878,7 @@
   "followHistRestore": "{n}人を復元",
   "followHistNone": "あなたのリストに欠けている人を含む古いコピーはありません。",
   "followHistNothing": "そのコピーの全員がすでにリストにいます。",
-  "followHistRestored": "{n}人のフォローを復元しました。"
+  "followHistRestored": "{n}人のフォローを復元しました。",
+  "securityTitle": "セキュリティ",
+  "arkCoinsNone": "支出にはまだコインがありません。"
 }

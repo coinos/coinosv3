@@ -877,5 +877,7 @@
   "followHistRestore": "{n} kişiyi geri yükle",
   "followHistNone": "Hiçbir eski kopyada listende eksik olan biri yok.",
   "followHistNothing": "O kopyadaki herkes zaten listende.",
-  "followHistRestored": "{n} takip geri yüklendi."
+  "followHistRestored": "{n} takip geri yüklendi.",
+  "securityTitle": "Güvenlik",
+  "arkCoinsNone": "Harcama’da henüz coin yok."
 }

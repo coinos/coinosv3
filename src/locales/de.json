@@ -878,5 +878,7 @@
   "followHistRestore": "{n} wiederherstellen",
   "followHistNone": "Keine ältere Kopie enthält jemanden, der in deiner Liste fehlt.",
   "followHistNothing": "Alle aus dieser Kopie sind schon in deiner Liste.",
-  "followHistRestored": "{n} Follows wiederhergestellt."
+  "followHistRestored": "{n} Follows wiederhergestellt.",
+  "securityTitle": "Sicherheit",
+  "arkCoinsNone": "Noch keine Coins in Ausgaben."
 }

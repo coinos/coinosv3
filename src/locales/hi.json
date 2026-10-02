@@ -878,5 +878,7 @@
   "followHistRestore": "{n} बहाल करें",
   "followHistNone": "किसी पुरानी कॉपी में ऐसा कोई नहीं जो आपकी सूची में न हो।",
   "followHistNothing": "उस कॉपी के सभी लोग पहले से आपकी सूची में हैं।",
-  "followHistRestored": "{n} फ़ॉलो बहाल किए गए।"
+  "followHistRestored": "{n} फ़ॉलो बहाल किए गए।",
+  "securityTitle": "सुरक्षा",
+  "arkCoinsNone": "स्पेंडिंग में अभी कोई कॉइन नहीं।"
 }

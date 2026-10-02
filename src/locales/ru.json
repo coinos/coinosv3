@@ -878,5 +878,7 @@
   "followHistRestore": "Восстановить {n}",
   "followHistNone": "Нет старых копий с людьми, которых не хватает в вашем списке.",
   "followHistNothing": "Все из этой копии уже есть в вашем списке.",
-  "followHistRestored": "Восстановлено подписок: {n}."
+  "followHistRestored": "Восстановлено подписок: {n}.",
+  "securityTitle": "Безопасность",
+  "arkCoinsNone": "В расходах пока нет монет."
 }

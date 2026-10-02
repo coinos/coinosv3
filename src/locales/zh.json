@@ -878,5 +878,7 @@
   "followHistRestore": "恢复 {n} 人",
   "followHistNone": "没有旧副本包含你列表中缺少的人。",
   "followHistNothing": "该副本中的所有人都已在你的列表中。",
-  "followHistRestored": "已恢复 {n} 个关注。"
+  "followHistRestored": "已恢复 {n} 个关注。",
+  "securityTitle": "安全",
+  "arkCoinsNone": "支出账户中还没有币。"
 }

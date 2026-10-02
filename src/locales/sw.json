@@ -214,5 +214,7 @@
   "followHistRestore": "Rejesha {n}",
   "followHistNone": "Hakuna nakala ya zamani yenye mtu anayekosekana kwenye orodha yako.",
   "followHistNothing": "Wote kwenye nakala hiyo tayari wamo kwenye orodha yako.",
-  "followHistRestored": "Umerejesha unaowafuata {n}."
+  "followHistRestored": "Umerejesha unaowafuata {n}.",
+  "securityTitle": "Usalama",
+  "arkCoinsNone": "Bado hakuna sarafu kwenye Matumizi."
 }

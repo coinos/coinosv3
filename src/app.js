@@ -584,9 +584,17 @@ setTimeout(() => { if (_bootDeciding) { _bootDeciding = false; render(); } }, 40
 // anywhere (or Escape, or Back) to close — no chrome, nothing to aim at.
 function imageViewer() {
   if (!ui.lightbox) return null;
-  const close = () => goBack(() => { ui.lightbox = null; });
-  // a tap on the picture closes it too (the × is small and far) — unless
-  // it's zoomed, or the tap is half of a double-tap (see attachZoom)
+  const close = () => {
+    if (!ui.lightbox) return;
+    ui.lightbox = null;
+    // Dismiss before history traversal and its page render finish. Read the
+    // mounted viewer: morphing can replace handlers with a new render's ones.
+    document.querySelector('.lightbox')?.remove();
+    document.documentElement.classList.remove('no-scroll');
+    goBack(() => { ui.lightbox = null; });
+  };
+  // A tap on the picture closes it at every zoom level; gestures are filtered
+  // by attachZoom before this click handler runs.
   const img = h('img', { src: ui.lightbox, alt: '', draggable: 'false' });
   const box = h('div', {
     class: 'lightbox', onClick: close,
@@ -594,19 +602,19 @@ function imageViewer() {
   }, img,
      // stop the bubble: the backdrop closes too, and two pops walk out of the room
      h('button', { class: 'lightbox-x', 'aria-label': t('close'), onClick: (e) => { e.stopPropagation(); close(); } }, '\u00d7'));
-  attachZoom(box, img, close);
+  attachZoom(box, img);
   return box;
 }
 // Pinch to zoom (up to 5×) around the fingers, drag to pan a zoomed picture,
-// double-tap (or double-click) to zoom in at a spot and again to reset, the
-// wheel to zoom on a desktop. The page's viewport meta turns browser zoom
+// the wheel to zoom on a desktop. Single taps dismiss immediately rather
+// than waiting to distinguish a double-tap. The viewport turns browser zoom
 // off, so the picture does its own. Only the first-mounted nodes keep these
 // listeners: later renders morph into them, and the img is left out of the
 // morph so its transform survives a background render.
-function attachZoom(box, img, close) {
+function attachZoom(box, img) {
   img._skipMorph = true;
   const MAX = 5, pts = new Map();
-  let s = 1, x = 0, y = 0, pinch = null, pan = null, moved = false, lastTap = 0, tapTimer = 0;
+  let s = 1, x = 0, y = 0, pinch = null, pan = null, moved = false;
   const base = () => ({ bx: img.offsetLeft + img.offsetWidth / 2, by: img.offsetTop + img.offsetHeight / 2 });
   const clamp = () => {
     if (s <= 1) { s = 1; x = 0; y = 0; return; }
@@ -634,6 +642,7 @@ function attachZoom(box, img, close) {
   const begin = () => {
     const p = [...pts.values()];
     if (p.length >= 2) {
+      moved = true; // two fingers are a gesture even before either moves
       const { bx, by } = base();
       const mx = (p[0].x + p[1].x) / 2, my = (p[0].y + p[1].y) / 2;
       pinch = { d: Math.hypot(p[0].x - p[1].x, p[0].y - p[1].y) || 1, s, px: (mx - bx - x) / s, py: (my - by - y) / s };
@@ -663,6 +672,7 @@ function attachZoom(box, img, close) {
   });
   const end = (e) => {
     if (!pts.delete(e.pointerId)) return;
+    if (e.type === 'pointercancel') moved = true;
     if (pts.size) { begin(); return; } // one finger lifted mid-pinch: carry on as a pan
     pinch = pan = null;
     clamp(); apply(true);
@@ -671,18 +681,8 @@ function attachZoom(box, img, close) {
   box.addEventListener('pointercancel', end);
   // a drag or a pinch is not a tap: nothing closes after one
   box.addEventListener('click', (e) => {
+    if (e.target.closest('.lightbox-x')) return;
     if (moved) { moved = false; e.stopImmediatePropagation(); e.preventDefault(); return; }
-    if (e.target !== img) return;
-    e.stopPropagation();
-    const now = Date.now();
-    if (now - lastTap < 300) {
-      clearTimeout(tapTimer); lastTap = 0;
-      if (s > 1) { s = 1; x = 0; y = 0; } else { zoomAt(2.5, e.clientX, e.clientY); clamp(); }
-      apply(true);
-      return;
-    }
-    lastTap = now;
-    if (s === 1) tapTimer = setTimeout(close, 300);
   }, true);
   box.addEventListener('wheel', (e) => {
     e.preventDefault();

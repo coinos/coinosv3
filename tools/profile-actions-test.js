@@ -12,7 +12,7 @@ const searchPeer = getPublicKey(generateSecretKey());
 const bundle = await Bun.build({ entrypoints: ['src/app.js'], target: 'browser', minify: true,
   plugins: [{ name: 'profile-actions-test', setup(build) {
     build.onLoad({ filter: /src\/app\.js$/ }, async ({ path }) => ({ loader: 'js', contents: await Bun.file(path).text() + `
-window.profileActions = { ui, wallet, render, showSend, enterWallet,
+window.profileActions = { ui, wallet, render, showSend, enterWallet, openImage: ctx.openImage,
   get ready() { return !_bootDeciding; },
   openProfile: (pk) => featureHook('openProfile', pk) };
 ` }));
@@ -229,6 +229,30 @@ try {
   await page.click('.chat-head .chat-back');
   await page.waitForFunction(() => profileActions.ui.msgView === 'home');
   assert.equal(await page.evaluate(() => profileActions.ui.profilePk), null);
+  console.log('✓ Conversations opened from the chat list return to it');
+
+  // Photo dismissal removes the overlay synchronously, then pops its history
+  // entry. Background morphs must keep the handler tied to the mounted box.
+  await page.setViewport({ width: 390, height: 844, isMobile: true, hasTouch: true });
+  const photoParent = await page.evaluate(() => ({ i: history.state.i, nav: history.state.nav, path: location.pathname }));
+  await page.evaluate(() => { profileActions.openImage('/recipient-portrait.svg'); profileActions.render(); });
+  await page.waitForSelector('.lightbox img');
+  assert.equal(await page.evaluate(() => history.state.i), photoParent.i + 1);
+  await page.evaluate(() => document.addEventListener('click', () => {
+    window.photoClosedDuringClick = !document.querySelector('.lightbox') && !document.documentElement.classList.contains('no-scroll');
+  }, { once: true }));
+  const photoCenter = await page.$eval('.lightbox img', e => { const r = e.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; });
+  await page.touchscreen.tap(photoCenter.x, photoCenter.y);
+  assert(await page.evaluate(() => photoClosedDuringClick), 'photo and scroll lock disappear during the tap, without waiting for popstate');
+  await page.waitForFunction(i => history.state.i === i && !document.querySelector('.lightbox'), {}, photoParent.i);
+  assert.deepEqual(await page.evaluate(() => ({ i: history.state.i, nav: history.state.nav, path: location.pathname })), photoParent,
+    'photo dismissal restores the exact originating page');
+  await page.goForward();
+  await page.waitForSelector('.lightbox');
+  assert(await page.evaluate(() => !!profileActions.ui.lightbox && document.documentElement.classList.contains('no-scroll')), 'Forward reopens the viewer and locks scrolling');
+  await page.goBack();
+  await page.waitForFunction(() => !profileActions.ui.lightbox && !document.querySelector('.lightbox') && !document.documentElement.classList.contains('no-scroll'));
+  assert.equal(await page.evaluate(() => history.state.i), photoParent.i);
   assert.deepEqual(errors, []);
-  console.log('✓ Conversations opened from the chat list return to it; no browser errors');
+  console.log('✓ Photo tap dismisses immediately after a render, restores its originating page, and preserves native Back/Forward; no browser errors');
 } finally { await browser.close(); server.stop(true); }

@@ -1,6 +1,6 @@
-// The full-screen picture: pinch to zoom, pan when zoomed, double-tap to zoom
-// and reset, a background render keeps the zoom, taps after a gesture don't
-// close it, a plain tap still does, and the wheel zooms on a desktop.
+// Pinch and pan keep the viewer open; taps dismiss at any zoom immediately,
+// even before navigation finishes. Background renders preserve zoom and
+// dismissal; the close button bypasses gesture suppression.
 // Run: bun tools/image-zoom-test.js
 import assert from 'node:assert/strict';
 import puppeteer from 'puppeteer-core';
@@ -13,9 +13,17 @@ ${dom}
 ${viewer}
 const ui = { lightbox: 'data:image/svg+xml,${svg}' };
 const t = (k) => k;
-const goBack = (fn) => { fn(); render(); };
+let backCalls = 0, backDelay = 0, backSawViewer = null;
+const goBack = (fn) => {
+  backCalls++; backSawViewer = !!document.querySelector('.lightbox');
+  if (backDelay) setTimeout(() => { fn(); render(); }, backDelay);
+  else { fn(); render(); }
+};
 function render() { morphChildren(document.querySelector('#app'), ui.lightbox ? [imageViewer()] : []); }
-window.test = { ui, render, open() { ui.lightbox = 'data:image/svg+xml,${svg}'; render(); } };
+window.test = { ui, render, get backCalls() { return backCalls; }, get backSawViewer() { return backSawViewer; },
+  delayBack(ms) { backDelay = ms; },
+  open() { ui.lightbox = 'data:image/svg+xml,${svg}'; document.documentElement.classList.add('no-scroll'); render(); } };
+document.addEventListener('click', () => { window.closedDuringClick = !document.querySelector('.lightbox'); });
 render();
 `;
 const bundle = await Bun.build({ entrypoints: ['zoom-entry'], target: 'browser', plugins: [{ name: 'zoom', setup(build) {
@@ -31,6 +39,11 @@ page.on('pageerror', (e) => errors.push(e.message));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const zoom = () => page.evaluate(() => { const m = new DOMMatrix(getComputedStyle(document.querySelector('.lightbox img')).transform); return { s: +m.a.toFixed(2), x: Math.round(m.e), y: Math.round(m.f) }; });
 const open = () => page.evaluate(() => !!test.ui.lightbox && !!document.querySelector('.lightbox'));
+const assertDismissed = async (label) => {
+  assert(!(await open()), label);
+  assert(await page.evaluate(() => closedDuringClick && test.backSawViewer === false
+    && !document.documentElement.classList.contains('no-scroll')), 'viewer disappears during the click, before navigation, and unlocks page scrolling');
+};
 try {
   await page.setViewport({ width: 390, height: 844, isMobile: true, hasTouch: true });
   await page.goto(server.url.href);
@@ -57,20 +70,43 @@ try {
   const maxX = await page.evaluate((s) => (document.querySelector('.lightbox img').offsetWidth * s - innerWidth) / 2, panned.s);
   assert(panned.x <= maxX + 1, 'pan is held to the picture edge');
   assert(await open(), 'a drag does not close the picture');
-  // a tap while zoomed does not close; a double-tap resets
-  await page.touchscreen.tap(cx, cy); await sleep(400);
-  assert(await open(), 'a tap while zoomed does not close');
-  await page.touchscreen.tap(cx, cy); await sleep(80); await page.touchscreen.tap(cx, cy); await sleep(350);
-  assert.equal((await zoom()).s, 1, 'double-tap resets the zoom');
-  // double-tap at 1× zooms in at the spot, without closing
-  await page.touchscreen.tap(cx + 60, cy); await sleep(80); await page.touchscreen.tap(cx + 60, cy); await sleep(400);
-  z = await zoom();
-  assert(z.s === 2.5 && z.x < 0, 'double-tap zooms in toward the tapped spot: ' + JSON.stringify(z));
-  assert(await open(), 'a double-tap does not close');
-  await page.touchscreen.tap(cx, cy); await sleep(80); await page.touchscreen.tap(cx, cy); await sleep(350);
-  // a single tap at 1× still closes
-  await page.touchscreen.tap(cx, cy); await sleep(450);
-  assert(!(await open()), 'a single tap closes the picture');
+  await page.evaluate(() => test.render());
+  await page.touchscreen.tap(cx, cy);
+  await assertDismissed('a tap closes the zoomed, panned picture immediately after a background render');
+
+  // No 300ms double-tap wait, nor a wait for history and page rendering.
+  await page.evaluate(() => { test.open(); test.delayBack(200); });
+  await page.waitForFunction(() => document.querySelector('.lightbox img')?.complete);
+  await page.touchscreen.tap(cx, cy);
+  await assertDismissed('a tap at 1× immediately closes even with slow navigation');
+  await sleep(250);
+  await page.evaluate(() => test.delayBack(0));
+
+  await page.evaluate(() => test.open());
+  await page.touchscreen.tap(10, 50);
+  await assertDismissed('a tap on the backdrop closes immediately');
+
+  // Two fingers without motion and a cancelled gesture aren't dismissals.
+  await page.evaluate(() => test.open());
+  await touch('touchStart', [[cx - 40, cy], [cx + 40, cy]]);
+  await touch('touchEnd', []);
+  assert(await open(), 'a two-finger touch never closes the picture');
+  await touch('touchStart', [[cx, cy]]);
+  await touch('touchCancel', []);
+  await page.evaluate(() => document.querySelector('.lightbox img').click());
+  assert(await open(), 'a cancelled gesture suppresses its click');
+  await page.touchscreen.tap(cx, cy);
+  await assertDismissed('a fresh tap after cancellation closes normally');
+
+  await page.evaluate(() => test.open());
+  await touch('touchStart', [[cx - 40, cy], [cx + 40, cy]]);
+  await touch('touchMove', [[cx - 100, cy], [cx + 100, cy]]);
+  await touch('touchEnd', []);
+  await page.evaluate(() => test.render());
+  const beforeX = await page.evaluate(() => test.backCalls);
+  await page.click('.lightbox-x');
+  assert(!(await open()), 'the close button works immediately after a pinch and render');
+  assert.equal(await page.evaluate(() => test.backCalls), beforeX + 1, 'close button navigates exactly once');
   // desktop: the wheel zooms toward the cursor
   await page.setViewport({ width: 1280, height: 800 });
   await page.evaluate(() => test.open()); await page.waitForSelector('.lightbox img');
@@ -79,6 +115,10 @@ try {
   z = await zoom();
   assert(z.s > 1.5, 'the wheel zooms in: ' + JSON.stringify(z));
   assert(await open(), 'wheel zoom leaves the picture open');
+  await page.mouse.click(700, 400);
+  await assertDismissed('a desktop click closes the wheel-zoomed picture immediately');
   assert.deepEqual(errors, []);
-  console.log('✓ Image viewer: pinch zooms, drag pans within the edges, double-tap zooms and resets, renders keep the zoom, gestures never close it, a tap does, the wheel zooms on desktop');
+  console.log('✓ Pinch zoom, clamped panning and wheel zoom work; background renders preserve zoom');
+  console.log('✓ Taps close immediately at every zoom, before slow navigation; backdrop and close button work');
+  console.log('✓ Pinches, two-finger touches and cancellations stay open; a fresh tap dismisses; no browser errors');
 } finally { await browser.close(); server.stop(true); }

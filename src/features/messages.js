@@ -3926,7 +3926,12 @@ export function messagesFeature(ctx) {
           if (n > bestN) { bestN = n; best = url; }
         }
         if (!best) break;
-        const take = [...byRelay.get(best)].filter((pk) => left.has(pk));
+        // The socket is open either way, so it's asked about EVERYONE who
+        // writes there, not just the people it was picked to cover. Covering
+        // each author once read a five-relay author on nos.lol alone, and his
+        // posts that only reached damus and primal — both in the plan, both
+        // open — never showed, while Amethyst had them.
+        const take = [...byRelay.get(best)];
         plan.push({ relays: [best], authors: take });
         for (const pk of take) left.delete(pk);
         byRelay.delete(best);

@@ -214,5 +214,6 @@
   "followHistNothing": "ఆ కాపీలోని అందరూ ఇప్పటికే మీ జాబితాలో ఉన్నారు.",
   "followHistRestored": "{n} ఫాలోలు పునరుద్ధరించబడ్డాయి.",
   "securityTitle": "భద్రత",
-  "arkCoinsNone": "ఖర్చు ఖాతాలో ఇంకా నాణేలు లేవు."
+  "arkCoinsNone": "ఖర్చు ఖాతాలో ఇంకా నాణేలు లేవు.",
+  "profKeyLink": "పబ్లిక్ కీ"
 }

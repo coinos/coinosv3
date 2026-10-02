@@ -216,5 +216,6 @@
   "followHistNothing": "Mọi người trong bản đó đã có trong danh sách của bạn.",
   "followHistRestored": "Đã khôi phục {n} người theo dõi.",
   "securityTitle": "Bảo mật",
-  "arkCoinsNone": "Chưa có coin nào trong Chi tiêu."
+  "arkCoinsNone": "Chưa có coin nào trong Chi tiêu.",
+  "profKeyLink": "Khóa công khai"
 }

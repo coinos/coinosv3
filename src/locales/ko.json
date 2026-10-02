@@ -879,5 +879,6 @@
   "followHistNothing": "그 사본의 모든 사람이 이미 목록에 있습니다.",
   "followHistRestored": "팔로우 {n}명을 복원했습니다.",
   "securityTitle": "보안",
-  "arkCoinsNone": "지출에 아직 코인이 없습니다."
+  "arkCoinsNone": "지출에 아직 코인이 없습니다.",
+  "profKeyLink": "공개 키"
 }

@@ -104,6 +104,7 @@ const STR = {
     profUploadPic: 'Upload photo',
     profDisplayName: 'Display name',
     profPublicKey: 'Nostr public key',
+    profKeyLink: 'Public key',
     followHistTitle: 'Follow list',
     followHistDesc: 'You follow {n} people. If another app replaced your follow list, an older copy may still be on a relay that keeps history. Restoring adds everyone from it back; nobody is removed.',
     followHistLook: 'Look for older copies',

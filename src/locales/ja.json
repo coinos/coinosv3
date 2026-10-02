@@ -880,5 +880,6 @@
   "followHistNothing": "そのコピーの全員がすでにリストにいます。",
   "followHistRestored": "{n}人のフォローを復元しました。",
   "securityTitle": "セキュリティ",
-  "arkCoinsNone": "支出にはまだコインがありません。"
+  "arkCoinsNone": "支出にはまだコインがありません。",
+  "profKeyLink": "公開鍵"
 }

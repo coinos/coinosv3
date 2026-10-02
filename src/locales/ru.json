@@ -880,5 +880,6 @@
   "followHistNothing": "Все из этой копии уже есть в вашем списке.",
   "followHistRestored": "Восстановлено подписок: {n}.",
   "securityTitle": "Безопасность",
-  "arkCoinsNone": "В расходах пока нет монет."
+  "arkCoinsNone": "В расходах пока нет монет.",
+  "profKeyLink": "Открытый ключ"
 }

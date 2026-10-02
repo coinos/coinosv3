@@ -880,5 +880,6 @@
   "followHistNothing": "该副本中的所有人都已在你的列表中。",
   "followHistRestored": "已恢复 {n} 个关注。",
   "securityTitle": "安全",
-  "arkCoinsNone": "支出账户中还没有币。"
+  "arkCoinsNone": "支出账户中还没有币。",
+  "profKeyLink": "公钥"
 }

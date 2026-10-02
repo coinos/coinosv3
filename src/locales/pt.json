@@ -880,5 +880,6 @@
   "followHistNothing": "Todos dessa cópia já estão na sua lista.",
   "followHistRestored": "{n} seguidos restaurados.",
   "securityTitle": "Segurança",
-  "arkCoinsNone": "Ainda não há moedas em Gastos."
+  "arkCoinsNone": "Ainda não há moedas em Gastos.",
+  "profKeyLink": "Chave pública"
 }

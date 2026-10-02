@@ -879,5 +879,6 @@
   "followHistNothing": "O kopyadaki herkes zaten listende.",
   "followHistRestored": "{n} takip geri yüklendi.",
   "securityTitle": "Güvenlik",
-  "arkCoinsNone": "Harcama’da henüz coin yok."
+  "arkCoinsNone": "Harcama’da henüz coin yok.",
+  "profKeyLink": "Açık anahtar"
 }

@@ -880,5 +880,6 @@
   "followHistNothing": "Tout le monde dans cette copie est déjà dans votre liste.",
   "followHistRestored": "{n} abonnements restaurés.",
   "securityTitle": "Sécurité",
-  "arkCoinsNone": "Aucune pièce dans Dépenses pour l’instant."
+  "arkCoinsNone": "Aucune pièce dans Dépenses pour l’instant.",
+  "profKeyLink": "Clé publique"
 }

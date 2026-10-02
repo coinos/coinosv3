@@ -216,5 +216,6 @@
   "followHistNothing": "Semua orang di salinan itu sudah ada di daftarmu.",
   "followHistRestored": "{n} ikutan dipulihkan.",
   "securityTitle": "Keamanan",
-  "arkCoinsNone": "Belum ada koin di Belanja."
+  "arkCoinsNone": "Belum ada koin di Belanja.",
+  "profKeyLink": "Kunci publik"
 }

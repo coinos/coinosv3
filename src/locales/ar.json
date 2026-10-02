@@ -880,5 +880,6 @@
   "followHistNothing": "كل من في تلك النسخة موجود في قائمتك بالفعل.",
   "followHistRestored": "تمت استعادة {n} متابَعًا.",
   "securityTitle": "الأمان",
-  "arkCoinsNone": "لا توجد عملات في الإنفاق بعد."
+  "arkCoinsNone": "لا توجد عملات في الإنفاق بعد.",
+  "profKeyLink": "المفتاح العام"
 }

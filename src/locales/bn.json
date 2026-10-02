@@ -880,5 +880,6 @@
   "followHistNothing": "ওই কপির সবাই ইতিমধ্যে আপনার তালিকায় আছেন।",
   "followHistRestored": "{n} জনকে আবার ফলো করা হয়েছে।",
   "securityTitle": "নিরাপত্তা",
-  "arkCoinsNone": "স্পেন্ডিং-এ এখনও কোনো কয়েন নেই।"
+  "arkCoinsNone": "স্পেন্ডিং-এ এখনও কোনো কয়েন নেই।",
+  "profKeyLink": "পাবলিক কী"
 }

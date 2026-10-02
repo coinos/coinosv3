@@ -3145,7 +3145,7 @@ export function messagesFeature(ctx) {
     // for the other direction (a note row tapped on a profile page).
     ui.profOverThread = !!ui.noteThread;
     ui.profEdit = null; ui.profEditFilled = false; ui.logoutConfirm = null; ui.profCompose = null;
-    ui.profPeople = null;
+    ui.profPeople = null; ui.npubShown = null;
     render();
     try { window.scrollTo(0, 0); } catch {}
     fetchFullProfile(pk);
@@ -4580,9 +4580,14 @@ export function messagesFeature(ctx) {
       type: 'button', class: 'social-count' + (ui.profPeople === which ? ' on' : ''), 'aria-expanded': String(ui.profPeople === which),
       onClick: () => pick(which),
     }, h('b', {}, n == null ? '–' : compactNum(n)), ' ', label);
+    const shown = ui.npubShown === pk;
     return h('div', { class: 'row social-line' },
       btn('following', follows, t('profFollowing')),
-      btn('followers', c?.followers, t('profFollowers')));
+      btn('followers', c?.followers, t('profFollowers')),
+      h('button', {
+        type: 'button', class: 'social-count npub-toggle' + (shown ? ' on' : ''), style: 'margin-left:auto', 'aria-expanded': String(shown),
+        onClick: () => { ui.npubShown = shown ? null : pk; render(); },
+      }, t('profKeyLink')));
   }
   function socialList(pk) {
     const which = ui.profPeople;
@@ -8141,18 +8146,13 @@ export function messagesFeature(ctx) {
           : null,
         ui.profEdit ? null : socialLine(pk),
         ui.profEdit ? null : socialList(pk),
-        // A readable public-ID preview; copying always uses the full npub.
-        // It only steps aside while the (long) edit form is open.
-        ui.profEdit ? null : h('button', {
-          type: 'button', class: 'profile-key', title: npub,
-          'aria-label': t('copy') + ': ' + t('profPublicKey'),
+        // The npub in full, monospace, tap to copy — behind the "Public key"
+        // link on the line above, so it costs no room until it's asked for.
+        ui.profEdit || ui.npubShown !== pk ? null : h('button', {
+          type: 'button', class: 'addr-box break npub-box', title: t('copy'),
+          style: 'font-size:11px;cursor:pointer;text-align:left;width:100%',
           onClick: async () => { try { await navigator.clipboard.writeText(npub); toast(t('copied')); } catch {} },
-        },
-          h('span', { class: 'profile-key-content' },
-            h('span', { class: 'profile-key-label' }, t('profPublicKey')),
-            h('bdi', { class: 'profile-key-value', dir: 'ltr' }, npub.slice(0, 12) + '…' + npub.slice(-8))),
-          h('span', { class: 'profile-key-copy', 'aria-hidden': 'true', html:
-            '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="8" width="12" height="12" rx="3"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>' })),
+        }, npub),
         ui.profEdit
           ? h('div', { class: 'col', style: 'gap:8px' },
               // the username IS the payment address and NIP-05 — the frozen

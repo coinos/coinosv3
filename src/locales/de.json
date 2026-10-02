@@ -880,5 +880,6 @@
   "followHistNothing": "Alle aus dieser Kopie sind schon in deiner Liste.",
   "followHistRestored": "{n} Follows wiederhergestellt.",
   "securityTitle": "Sicherheit",
-  "arkCoinsNone": "Noch keine Coins in Ausgaben."
+  "arkCoinsNone": "Noch keine Coins in Ausgaben.",
+  "profKeyLink": "Öffentlicher Schlüssel"
 }

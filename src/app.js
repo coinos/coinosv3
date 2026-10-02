@@ -4183,11 +4183,11 @@ function setAccountSel(a, dir) {
   _accDir = dir || (a === 'savings' ? 'left' : 'right');
   ui.account = a;
   try { localStorage.setItem(ACCOUNT_KEY, a); } catch {}
-  // Selecting an account shows its history right away — home base — and any
-  // open payment detail (which belongs to the account it was opened from)
-  // closes with it.
+  // Selecting an account shows its Receive page — its own address, the
+  // thing you most often switched for — and any open payment detail (which
+  // belongs to the account it was opened from) closes with it.
   ui.txDetail = null; ui.arkMoveDetail = null; ui.arkReconDetail = null; ui.arkExitDetail = null; ui.giftDetail = null;
-  ui.tab = 'history';
+  ui.tab = 'receive';
   render();
 }
 

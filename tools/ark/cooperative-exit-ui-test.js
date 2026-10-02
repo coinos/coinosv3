@@ -9,7 +9,7 @@ const bundle = await Bun.build({ entrypoints: ['src/app.js'], target: 'browser',
   plugins: [{ name: 'cooperative-exit-test', setup(build) {
     build.onLoad({ filter: /src\/app\.js$/ }, async ({ path }) => ({ loader: 'js', contents: await Bun.file(path).text() + `
 window.coopApp = { ui, wallet, ctx, render, enterWallet, get ready() { return !_bootDeciding; },
-  setSpending: () => { const a = activeAccount(); if (a) a.kind = 'spending'; } };
+  setSpending: (on = true) => { const a = activeAccount(); if (a) { if (on) a.kind = 'spending'; else delete a.kind; } } };
 ` }));
     build.onLoad({ filter: /src\/features\/ark\.js$/ }, async ({ path }) => ({ loader: 'js', contents:
       (await Bun.file(path).text()).replace('    arkReady() { return arkAvailable(); },', '    arkReady() { return window.forceArkReady || arkAvailable(); },').replace("  return {\n    id: 'ark',", `
@@ -100,6 +100,17 @@ try {
   assert.deepEqual(await page.evaluate(() => coopCalls), [], 'opening the form never starts an exit');
   console.log('✓ From the Spending settings, the co-operative exit opens its form, prefilled to Savings');
   await page.evaluate(() => { coopApp.ui.arkOffboardSend = null; coopApp.ui.tab = 'receive'; coopApp.render(); });
+  // switching between Spending and Savings lands on the Receive page, with
+  // that account's address, whatever tab was open
+  await page.evaluate(() => { window.forceArkReady = true; coopApp.setSpending(false); coopApp.ui.account = 'spending'; coopApp.render(); });
+  for (const [from, to] of [['history', 'savings'], ['send', 'savings']]) {
+    await page.evaluate((from) => { coopApp.ui.account = 'spending'; coopApp.ui.tab = from; coopApp.render(); }, from);
+    await page.evaluate((to) => coopApp.ctx.setAccount(to), to);
+    await new Promise((r) => setTimeout(r, 300));
+    const got = await page.evaluate(() => ({ tab: coopApp.ui.tab, account: coopApp.ctx.getAccount(), address: /bcrt1|tark1|ark1/.test(document.querySelector('.tab-pane')?.innerText || '') }));
+    assert.deepEqual(got, { tab: 'receive', account: to, address: true }, from + ' → ' + to + ': ' + JSON.stringify(got));
+  }
+  console.log('✓ Switching between Spending and Savings opens Receive, with that account\'s address');
   await page.evaluate(() => { window.forceArkReady = false; coopApp.wallet.saveFeatureState('arkDepth', null); coopApp.ui.screen = 'wallet'; coopApp.render(); });
 
   await manage();

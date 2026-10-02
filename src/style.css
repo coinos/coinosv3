@@ -844,14 +844,19 @@ html.no-scroll { overflow: hidden; scrollbar-gutter: auto; }
 .feed-page .feed-new-pill {
   bottom: calc(env(safe-area-inset-bottom, 0px) + 82px);
 }
+/* a phone is too narrow for it beside the Post button: it rides above */
+@media (max-width: 480px) {
+  .feed-page .feed-new-pill { bottom: calc(env(safe-area-inset-bottom, 0px) + 142px); }
+}
 .feed-new-pill {
   /* Rides at the bottom of the window, where a thumb already is; the tap
      takes the reader up to the new posts. */
   position: fixed; bottom: calc(env(safe-area-inset-bottom, 0px) + 18px);
   left: 50%; transform: translateX(-50%);
-  z-index: 30; width: auto; padding: 7px 16px; border-radius: 999px;
+  z-index: 30; width: auto; padding: 12px 24px; border-radius: 999px;
   background: var(--accent); color: var(--accent-fg); border: none;
-  font-size: 13px; font-weight: 650; cursor: pointer;
+  font-size: 16px; font-weight: 650; cursor: pointer;
+  touch-action: none; user-select: none; -webkit-user-select: none; /* it swipes away */
   box-shadow: 0 3px 12px rgba(0, 0, 0, .28);
   animation: pill-in .18s ease-out;
 }

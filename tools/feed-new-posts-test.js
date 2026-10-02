@@ -93,6 +93,30 @@ try {
   assert(await page.$('.notes-feed > .row.note-fresh[data-key="'+F(0)+'"]'),'the newest, still offscreen above, keeps its tint');
   await page.evaluate(()=>window.scrollTo(0,0)); await sleep(2600);
   assert.deepEqual(await fresh(),[],'back at the top, the rest fade once seen');
+  // swipe the pill away: it goes, the page doesn't move, and it's back once more arrive
+  await page.evaluate((id)=>{const r=document.querySelector('.notes-feed > [data-key="'+id+'"]');window.scrollTo(0,scrollY+r.getBoundingClientRect().top-100);},reading);
+  await sleep(300);
+  await page.evaluate(()=>test.arriveIds(['a1','a2'])); await sleep(400);
+  const pr=await page.$eval('.feed-new-pill',e=>{const r=e.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2,h:r.height};});
+  assert(pr.h>=40,'the pill is a thumb-sized target: '+pr.h);
+  await page.screenshot({path:'/tmp/feed-pill-big.png'});
+  const clash=await page.evaluate(()=>{const a=document.querySelector('.feed-new-pill')?.getBoundingClientRect(),b=document.querySelector('.feed-post-fab')?.getBoundingClientRect();return a&&b&&!(a.right<=b.left||b.right<=a.left||a.bottom<=b.top||b.bottom<=a.top);});
+  assert(!clash,'the pill clears the Post button');
+  const y0=await page.evaluate(()=>scrollY);
+  await page.mouse.move(pr.x,pr.y); await page.mouse.down();
+  for(let i=1;i<=8;i++){await page.mouse.move(pr.x+i*18,pr.y+2); await sleep(16);}
+  await page.mouse.up(); await sleep(500);
+  assert(!(await page.$('.feed-new-pill')),'a sideways swipe sends the pill away');
+  assert.equal(await page.evaluate(()=>scrollY),y0,'and does not jump to the new posts');
+  await page.evaluate(()=>test.arriveIds(['b1'])); await sleep(400);
+  assert(await page.$('.feed-new-pill'),'more posts bring it back');
+  // a short drag springs back and stays
+  const pr2=await page.$eval('.feed-new-pill',e=>{const r=e.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};});
+  const y1=await page.evaluate(()=>scrollY);
+  await page.mouse.move(pr2.x,pr2.y); await page.mouse.down(); await page.mouse.move(pr2.x+20,pr2.y); await page.mouse.up(); await sleep(400);
+  assert(await page.$('.feed-new-pill'),'a short drag leaves it');
+  assert.equal(await page.evaluate(()=>scrollY),y1,'and is not a tap');
+  assert.equal(await page.$eval('.feed-new-pill',e=>e.style.transform),'','sprung back into place');
   assert.deepEqual(errors,[]);
-  console.log('✓ New posts: pill lands on the oldest new post; tints stay until each post has been in view ~2s; the reading row stays put');
+  console.log('✓ New posts: pill lands on the oldest new post; tints stay until each post has been in view ~2s; the reading row stays put; swiping the pill dismisses it until more arrive');
 } finally { await page.close(); await browser.close(); server.stop(true); }

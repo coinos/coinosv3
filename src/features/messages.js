@@ -5167,6 +5167,56 @@ export function messagesFeature(ctx) {
   // to the OLDEST of them, the one right above where you were reading, so
   // you read on upward through the rest. Reaching the top by yourself clears
   // the pill too (see the scroll listener).
+  // Drag the new-posts pill any way but up and let go past a short
+  // distance: it flies off that way and onDismiss runs. A short drag springs
+  // back, and the click a drag ends in is swallowed.
+  function pillSwipe(onDismiss) {
+    let d = null;
+    const move = (el, dx, dy) => {
+      el.style.transition = 'none';
+      el.style.transform = `translate(calc(-50% + ${dx}px), ${dy}px)`;
+      el.style.opacity = String(Math.max(0.2, 1 - Math.hypot(dx, dy) / 160));
+    };
+    return {
+      onPointerdown: (e) => {
+        d = { x: e.clientX, y: e.clientY, id: e.pointerId, dx: 0, dy: 0, moved: false };
+      },
+      onPointermove: (e) => {
+        if (!d || e.pointerId !== d.id) return;
+        const el = e.currentTarget;
+        d.dx = e.clientX - d.x; d.dy = Math.max(0, e.clientY - d.y); // down or sideways
+        // a repaint mid-drag would wipe the inline transform: hold the morph off
+        if (!d.moved && Math.hypot(d.dx, d.dy) > 6) { d.moved = true; el._skipMorph = true; try { el.setPointerCapture(d.id); } catch {} }
+        if (d.moved) move(el, d.dx, d.dy);
+      },
+      onPointerup: (e) => {
+        if (!d || e.pointerId !== d.id) return;
+        const el = e.currentTarget, { dx, dy, moved } = d;
+        d = null;
+        if (!moved) return;
+        el._skipMorph = false;
+        el._swiped = true;
+        setTimeout(() => { el._swiped = false; }, 400);
+        el.style.transition = 'transform .18s ease-out, opacity .18s ease-out';
+        if (Math.hypot(dx, dy) > 60) {
+          const k = 400 / Math.max(1, Math.hypot(dx, dy));
+          el.style.transform = `translate(calc(-50% + ${dx * k}px), ${dy * k}px)`;
+          el.style.opacity = '0';
+          setTimeout(onDismiss, 180);
+        } else {
+          el.style.transform = ''; el.style.opacity = '';
+        }
+      },
+      onPointercancel: (e) => {
+        if (!d) return;
+        d = null;
+        const el = e.currentTarget;
+        el._skipMorph = false;
+        el.style.transition = 'transform .18s ease-out, opacity .18s ease-out';
+        el.style.transform = ''; el.style.opacity = '';
+      },
+    };
+  }
   function jumpToNew() {
     const c = feed;
     if (!c) return;
@@ -8402,11 +8452,18 @@ export function messagesFeature(ctx) {
     // Keyed, so the morph keeps this very node while the count changes —
     // the count itself is a fresh node each time, which is what replays its
     // bump. The tap is the pill's alone (no bubbling into the page).
+    // A swipe sends it away until more posts arrive than it was showing.
     const waiting = c.unseen || 0;
-    const pill = waiting
+    if (!waiting) c.pillDismissed = 0;
+    const pill = waiting > (c.pillDismissed || 0)
       ? h('button', {
           class: 'feed-new-pill', 'data-key': 'feed-pill', type: 'button',
-          onClick: (e) => { e.preventDefault(); e.stopPropagation(); jumpToNew(); },
+          onClick: (e) => {
+            e.preventDefault(); e.stopPropagation();
+            if (e.currentTarget._swiped) { e.currentTarget._swiped = false; return; }
+            jumpToNew();
+          },
+          ...pillSwipe(() => { c.pillDismissed = c.unseen || 0; render(); }),
         }, '↑ ', h('span', { class: 'n', 'data-key': 'n:' + waiting }, String(waiting)), ' ',
           waiting === 1 ? t('feedOneNewWord') : t('feedNNewWord'))
       : null;

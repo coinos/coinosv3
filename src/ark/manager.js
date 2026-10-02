@@ -696,6 +696,23 @@ export class ArkManager {
     return action;
   }
 
+  // What a cooperative offboard to `spk` would cost right now, before any
+  // coin is touched: the miners' share at the ASP's current rate plus its
+  // service fee, and the smallest balance that still lands above dust.
+  async offboardQuote(spk, vtxoIds) {
+    const inputs = vtxoIds
+      ? vtxoIds.map((id) => this._vtxo(id)).filter(Boolean)
+      : this.state.vtxos.filter((v) => v.state === 'spendable');
+    const tip = await this.chain.tipHeight();
+    const satVkb = await getOffboardFeeRate(this.arkUrl);
+    const parts = offboardFeeParts({
+      spkLen: spk.length, satVkb, fees: this.info.offboardFees, tip,
+      inputs: (inputs.length ? inputs : [{ amountSat: 0, expiryHeight: tip }])
+        .map((v) => ({ amountSat: v.amountSat, expiryHeight: v.expiryHeight })),
+    });
+    return { ...parts, minSat: parts.totalSat + P2TR_DUST };
+  }
+
   // ---- offboard (collaborative exit: spendable vtxos -> one on-chain output) ----
   // Whole vtxos only — there is no change on this path. Default is everything
   // spendable; vtxoIds selects a subset (the feature splits an exact-amount
@@ -721,7 +738,10 @@ export class ArkManager {
     });
     const feeSat = feeParts.totalSat;
     const netSat = grossSat - feeSat;
-    if (netSat < P2TR_DUST) throw new Error('ark balance too small to offboard after fees');
+    if (netSat < P2TR_DUST) {
+      throw Object.assign(new Error('ark balance too small to offboard after fees'),
+        { tooSmall: true, feeSat, minSat: feeSat + P2TR_DUST });
+    }
     const action = {
       id: `offboard-${Date.now()}`, type: 'offboard', step: 'created',
       inputIds: inputs.map((v) => v.id), address, spkHex: hex.encode(spk),

@@ -2903,16 +2903,39 @@ export function arkFeature(ctx) {
   // leaves Spending; fees come off what arrives in Savings.
   // Send-to-on-chain from Spending: amount in, exit out — an offboard whose
   // destination is whatever address was pasted.
+  // The cooperative fee, asked of the ASP for the address on screen: what
+  // the send costs and the smallest balance it can move, before anyone taps.
+  async function quoteOffboard(o, address) {
+    o.quoteFor = address; o.quote = null;
+    let quote = null;
+    try { quote = await (await connectArk()).offboardQuote(addrScript(address)); }
+    catch {} // no quote: the send itself still says what went wrong
+    if (o.quoteFor !== address) return; // the address changed meanwhile
+    o.quote = quote; o.quoteDone = true;
+    if (ui.arkOffboardSend === o) render();
+  }
   function arkOffboardSendView() {
     const o = ui.arkOffboardSend;
     const spendable = arkBalance()?.spendableSat || 0;
+    if (o.quoteFor !== o.address) {
+      o.quote = null; o.quoteDone = false; o.quoteFor = o.address;
+      let ok = false; try { addrScript(o.address); ok = true; } catch {}
+      if (ok) quoteOffboard(o, o.address); else o.quoteDone = true;
+    }
+    const q = o.quote;
+    const tooSmall = !!q && spendable < q.minSat;
     return h('div', { class: 'card col', style: 'gap:12px' },
       h('h3', {}, t(o.fromCoins ? 'arkCoinsCoopTitle' : 'arkExitSendTitle')),
       h('label', { class: 'field' },
         h('span', { class: 'lab' }, t('recipient')),
         h('input', { type: 'text', class: 'mono-input', value: o.address, spellcheck: 'false', autocomplete: 'off', autocapitalize: 'none',
-          onInput: (e) => { o.address = e.target.value.trim(); } })),
+          onInput: (e) => { o.address = e.target.value.trim(); },
+          onChange: () => render() })), // a new address gets its own quote
       h('div', { class: 'small faint' }, t('arkExitSendNote')),
+      q ? h('div', { class: 'small muted' }, t('arkOffboardQuote', {
+        fee: fmtSats(q.totalSat), chain: fmtSats(q.chainSat), service: fmtSats(q.serviceSat), min: fmtSats(q.minSat),
+      })) : !o.quoteDone ? h('div', { class: 'small faint' }, t('arkOffboardQuoting')) : null,
+      tooSmall ? h('div', { class: 'notice' }, t('arkOffboardBelowMin', { n: fmtSats(spendable), min: fmtSats(q.minSat) })) : null,
       h('div', { class: 'input-group' },
         h('input', { type: 'number', min: '1', placeholder: String(spendable), value: o.amount,
           onInput: (e) => { o.amount = e.target.value; } }),
@@ -2925,19 +2948,25 @@ export function arkFeature(ctx) {
         } }, t('back')),
         ui.arkBusy === 'offboard'
           ? h('button', { class: 'btn-primary grow', disabled: true }, h('span', { class: 'spinner sm' }))
-          : h('button', { class: 'btn-primary grow', onClick: () => {
+          : h('button', { class: 'btn-primary grow', disabled: tooSmall, onClick: () => {
               const amount = String(o.amount ?? '').trim();
               const sats = amount ? Number(amount) : spendable;
               if (!Number.isSafeInteger(sats) || sats <= 0 || sats > spendable) { ui.arkError = t('enterValidAmtForN', { n: 1 }); render(); return; }
               try { addrScript(o.address); } catch { ui.arkError = t('arkOffboardBadAddress'); render(); return; }
+              // checked before a partial amount is split off into its own coin
+              if (q && sats < q.minSat) {
+                ui.arkCoopFailed = false;
+                ui.arkError = t('arkOffboardAmtBelowMin', { min: fmtSats(q.minSat), fee: fmtSats(q.totalSat) }); render(); return;
+              }
               doArkOffboard(sats >= spendable ? 0 : sats, o.address);
             } }, t('arkSendBtn'))),
       // This send IS the cooperative exit. The trustless fallback only
-      // appears when cooperation actually failed — and it states, before
+      // appears when cooperation actually failed (not when the amount was
+      // just too small for the fees) — and it states, before
       // anything is confirmed, exactly what it does and what the mining
       // fees from Savings will be.
       (() => {
-        if (!ui.arkError || ui.arkBusy === 'offboard' || !ark) return null;
+        if (!ui.arkError || !ui.arkCoopFailed || ui.arkBusy === 'offboard' || !ark) return null;
         let feeEst = 0;
         try { feeEst = estimateExitFeeSat(ark); } catch {}
         const balance = arkBalance()?.spendableSat || 0;
@@ -2966,7 +2995,7 @@ export function arkFeature(ctx) {
   }
 
   async function doArkOffboard(amountSat, destAddress = null) {
-    ui.arkBusy = 'offboard'; ui.arkError = ''; render();
+    ui.arkBusy = 'offboard'; ui.arkError = ''; ui.arkCoopFailed = false; render();
     try {
       const address = destAddress || wallet.freshReceive().address;
       const spk = addrScript(address);
@@ -2997,7 +3026,8 @@ export function arkFeature(ctx) {
       ui.arkOffboarded = { txid: action.txid, netSat: action.netSat, feeSat: action.feeSat };
       wallet.scan().catch(() => {}); // surface the incoming pending tx promptly
     } catch (e) {
-      ui.arkError = e.message;
+      ui.arkCoopFailed = !e.tooSmall;
+      ui.arkError = e.tooSmall ? t('arkOffboardAmtBelowMin', { min: fmtSats(e.minSat), fee: fmtSats(e.feeSat) }) : e.message;
     }
     ui.arkBusy = null; render();
   }

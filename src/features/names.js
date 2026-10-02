@@ -923,6 +923,14 @@ export function namesFeature(ctx) {
         render: (seg) => namePane(seg),
       }];
     },
+    // Is a typed name real yet? (the send form asks once typing pauses, and
+    // only moves on when something answers — never on a half-typed domain)
+    async probeLnAddress(text) {
+      const parsed = parsePaymentName(text);
+      if (!parsed) return false;
+      if (OUR_DOMAINS.includes(parsed.domain)) return !!(await registrarLookup(parsed.name, parsed.domain).catch(() => null));
+      return !!(await resolveBip353(parsed.name, parsed.domain).catch(() => null));
+    },
     // BEFORE zaps in the registry: a pasted user@domain tries DNS first.
     matchSendText(text, typed) {
       if (typed) return false; // don't yank the form away mid-keystroke

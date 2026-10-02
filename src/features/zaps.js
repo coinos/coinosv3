@@ -414,6 +414,12 @@ export function zapsFeature(ctx) {
       begin(target, zapDisplay(target, text), tap);
       return true;
     },
+    // A lightning address is real when its server answers as a pay endpoint.
+    async probeLnAddress(text) {
+      const target = parseZapTarget(text);
+      if (!target || target.kind !== 'lnaddr') return false;
+      return fetchPayParams(target.url).then(() => true, () => false);
+    },
     // The typed-lightning-address affordance on the send form.
     sendFormNote(a) {
       if (!canPay() || !ui.send || ui.send.recipients.length !== 1) return null;

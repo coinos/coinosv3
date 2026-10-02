@@ -5059,6 +5059,13 @@ function destReady(a) {
 // to candidates with avatars; picking one runs the same path as pasting.
 const sendSearch = { rows: null, sync: null, pick: null, el: null };
 let sendRevealTimer = null;
+// A lightning address typed and then left alone: once typing has paused,
+// ask whether it's real (the names and zaps features each know a way), and
+// go on to the amount if anything answers. A half-typed domain answers
+// nothing, so it just waits, with no error.
+let sendPauseTimer = null;
+const LN_ADDRESS_SHAPE = /^[^\s@]+@[^\s@]+\.[a-z]{2,}$/i;
+const SEND_PAUSE_MS = 900;
 // With the phone keyboard up, the space under the recipient field is scarce —
 // park the field at the top of the view so the candidate list gets what's
 // left. Runs on focus and again whenever fresh candidates land (the list
@@ -5132,6 +5139,8 @@ function recipientRow(s, r, i) {
     autocapitalize: 'none', autocomplete: 'off', spellcheck: 'false', value: shown,
     // one line of text: Enter doesn't break it
     onKeydown: (e) => { if (e.key === 'Enter') e.preventDefault(); },
+    // pasted text is complete: it moves on at once, like the Paste button
+    onPaste: () => { r._pasted = true; },
     // the delay lets the keyboard start opening (and any render() swap of
     // this input) before parkSendField measures the live activeElement.
     // warmSearch pre-opens the search transports so the first keystroke's
@@ -5147,7 +5156,19 @@ function recipientRow(s, r, i) {
       const hadError = !!ui.sendError;
       ui.sendError = ''; // editing the destination starts over — drop stale errors
       if (i === 0) sendSearcher.update(v); // candidates render when results land
-      if (tryFeature(v, true)) return;              // a bolt11 advances to its own confirmation
+      const pasted = r._pasted; r._pasted = false;
+      clearTimeout(sendPauseTimer);
+      if (tryFeature(v, !pasted)) return;           // a bolt11 (or anything pasted) advances to its own confirmation
+      if (single && LN_ADDRESS_SHAPE.test(v.trim())) {
+        sendPauseTimer = setTimeout(async () => {
+          if (r.address !== v) return;
+          const answers = featureAll('probeLnAddress', v.trim());
+          if (!answers.length) return;
+          const real = await Promise.any(answers.map((p) => Promise.resolve(p).then((x) => x || Promise.reject()))).then(() => true, () => false);
+          // still the same text, still on this form
+          if (real && r.address === v && ui.tab === 'send' && ui.send === s) tryFeature(v, false);
+        }, SEND_PAUSE_MS);
+      }
       // reveal/hide amount + controls as validity flips, an annotation
       // (zap button) appears/disappears, or an error clears — but only after
       // typing pauses: an immediate render swaps this input for a fresh node,

@@ -262,6 +262,8 @@ coinos-text:focus { outline: 2px solid var(--accent); outline-offset: -1px; bord
 .media-progress-track { height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; }
 .media-progress-fill { height: 100%; background: var(--accent); border-radius: 3px; transition: width .2s linear; }
 coinos-text[data-empty]::before { content: attr(placeholder); color: var(--muted); pointer-events: none; }
+/* the hint is text in the flow, so the caret would blink after it: gone once you're in */
+coinos-text[data-empty]:focus::before { content: none; }
 .chat-compose coinos-text { flex: 1; min-width: 0; padding: 10px 13px; max-height: 120px; }
 .mono-input { font-family: var(--mono); }
 .input-group { display: flex; gap: 8px; }

@@ -8392,7 +8392,8 @@ export function messagesFeature(ctx) {
             try { window.scrollTo({ top: 0, behavior: 'smooth' }); } catch { window.scrollTo(0, 0); }
             setTimeout(() => document.querySelector('.post-input')?.focus(), 60);
           },
-        }, h('span', { style: 'display:flex', html: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:block"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>' }), h('span', {}, t('feedPostFab'))),
+        }, h('span', { class: 'feed-compose-icon', 'aria-hidden': 'true', html:
+          '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path stroke="currentColor" d="M12 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-6"/><path stroke="currentColor" opacity=".5" d="M8 17h5"/><path class="compose-pen-fill" d="m16.5 3.5 3 3-8 8-4 1 1-4Z"/><path class="compose-pen" d="M16.5 3.5a2.1 2.1 0 0 1 3 3l-8 8-4 1 1-4Z"/><path class="compose-pen" d="m14.5 5.5 3 3"/></svg>' }), h('span', {}, t('feedPostFab'))),
         visitor ? null : postComposer(),
         def.of && !ofLoaded(def)
           ? h('div', { class: 'row gap6', style: 'justify-content:center;align-items:center;padding:12px 0' },

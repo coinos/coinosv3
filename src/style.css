@@ -837,6 +837,9 @@ html.no-scroll { overflow: hidden; scrollbar-gutter: auto; }
   padding: 12px 18px; border-radius: 999px; font-weight: 600;
   box-shadow: 0 4px 14px rgba(0, 0, 0, .22);
 }
+.feed-compose-icon { display: flex; flex-shrink: 0; }
+.feed-compose-icon .compose-pen { stroke: #14935a; }
+.feed-compose-icon .compose-pen-fill { fill: #14935a; opacity: .18; }
 .feed-page .feed-new-pill {
   bottom: calc(env(safe-area-inset-bottom, 0px) + 82px);
 }

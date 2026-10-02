@@ -59,7 +59,7 @@ try {
   // the suggestion's metadata and fetch the large image before selection.
   await page.evaluate(() => { profileActions.showSend({ fresh: true }); profileActions.render(); });
   const portraitResponse = page.waitForResponse(r => r.url().endsWith('/recipient-portrait.svg'));
-  await page.type('input.mono-input', 'carol');
+  await page.type('textarea.send-dest', 'carol');
   await page.waitForSelector('.send-suggest .ava-img');
   await portraitResponse;
   await page.evaluate(() => {
@@ -73,7 +73,7 @@ try {
   });
   await page.click('.send-suggest .chat-thread-row');
   await page.waitForSelector('.send-avatar');
-  assert.equal(await page.$eval('input.mono-input', e => e.value), npubEncode(searchPeer));
+  assert.equal(await page.$eval('textarea.send-dest', e => e.value), npubEncode(searchPeer));
   assert(await page.$eval('.send-avatar', e => e.classList.contains('ava-img') && e.style.backgroundImage.includes('/recipient-portrait.svg') && getComputedStyle(e).visibility !== 'hidden'), 'selection immediately uses the already-fetched suggestion portrait');
   assert(await page.evaluate(() => recipientFrames.length > 0 && recipientFrames.every(f => !f.punk && !f.hidden && f.picture.includes('/recipient-portrait.svg'))), 'every selected-recipient frame has the real avatar, without fallback or placeholder');
   await page.evaluate(() => recipientObserver.disconnect());
@@ -99,11 +99,11 @@ try {
       Object.assign(ui, previous);
       render();
     }, previous);
-    assert.equal(await page.$('input.mono-input'), null, 'previous payment displays its success view');
+    assert.equal(await page.$('textarea.send-dest'), null, 'previous payment displays its success view');
     await openProfile(nextPeer);
     await action('Pay');
-    await page.waitForSelector('input.mono-input');
-    assert.equal(await page.$eval('input.mono-input', (e) => e.value), npubEncode(nextPeer));
+    await page.waitForSelector('textarea.send-dest');
+    assert.equal(await page.$eval('textarea.send-dest', (e) => e.value), npubEncode(nextPeer));
     assert(!(await page.$('.check-badge')), 'previous success must not win over the new payment form');
     const state = await page.evaluate(() => ({
       recipients: profileActions.ui.send.recipients.map(({ address, amount }) => ({ address, amount })),
@@ -125,8 +125,8 @@ try {
     ui.zap = { stale: true }; ui.nameResolve = { text: 'old@example.test' };
   });
   await action('Pay');
-  await page.waitForSelector('input.mono-input');
-  assert.equal(await page.$eval('input.mono-input', (e) => e.value), npubEncode(peer));
+  await page.waitForSelector('textarea.send-dest');
+  assert.equal(await page.$eval('textarea.send-dest', (e) => e.value), npubEncode(peer));
   assert(await page.evaluate(() => {
     const { ui } = profileActions;
     return !ui.send.max && !ui.arkLnFromSavingsOk && ui.send.recipients.length === 1 && ui.send.recipients[0].amount === ''
@@ -183,7 +183,7 @@ try {
   assert.equal(await page.evaluate(() => profileActions.ui.profilePk), peer);
   await assertBlank();
   await page.goBack();
-  await page.waitForSelector('input.mono-input');
+  await page.waitForSelector('textarea.send-dest');
   await assertBlank();
   assert.equal(await page.$('.send-person'), null, 'returning to Send has no old recipient portrait');
 
@@ -194,7 +194,7 @@ try {
   await page.waitForFunction(() => profileActions.ui.tab === 'receive');
   await assertBlank();
   await page.goForward();
-  await page.waitForSelector('input.mono-input');
+  await page.waitForSelector('textarea.send-dest');
   await assertBlank();
   console.log('✓ Leaving Send for navigation tabs, a recipient profile or browser Back clears it; returning starts blank');
 

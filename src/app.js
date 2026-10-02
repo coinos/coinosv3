@@ -4625,7 +4625,11 @@ function tabContent() {
   const detailOpen = ui.bump || ui.txDetail || ui.arkMoveDetail
     || ui.arkReconDetail || ui.arkExitDetail || ui.giftDetail;
   if (detailOpen) return hist;
+  sendFocused = false;
   const pane = ui.tab === 'receive' ? receiveTab() : sendTab();
+  // Past the recipient — an amount to enter, a payment to confirm — the
+  // history is one more thing on screen while you're about to send.
+  if (ui.tab === 'send' && sendFocused) return pane;
   return h('div', { class: 'col', style: 'gap:16px' },
     pane,
     h('div', { class: 'small faint', style: 'text-transform:uppercase;letter-spacing:.06em;margin-top:4px' }, t('tabHistory')),
@@ -4766,6 +4770,7 @@ function loadSeedCard() {
   );
 }
 
+let sendFocused = false; // the send pane is past the recipient (set while it renders)
 function sendTab() {
   sendPageRendered = true;
   // Watch-only wallet (e.g. restored after a session wipe without "Save to
@@ -4779,10 +4784,12 @@ function sendTab() {
     );
   }
   if (ui.sendResult) return sendResultView();
-  if (ui.broadcastTx) return broadcastConfirmView();
+  if (ui.broadcastTx) { sendFocused = true; return broadcastConfirmView(); }
   const featView = featureHook('sendView');
-  if (featView) return featView;
-  if (ui.draft) return reviewView();
+  if (featView) { sendFocused = true; return featView; }
+  if (ui.draft) { sendFocused = true; return reviewView(); }
+  // the amount shows once a recipient is a real destination
+  if ((ui.send.recipients || []).some((r) => destReady(r.address))) sendFocused = true;
   return sendForm();
 }
 
@@ -5014,16 +5021,31 @@ async function broadcastScanned() {
 // Full address as wrapping nodes, first/last 6 chars emphasized — readable
 // without horizontally scrolling the input. Returns DOM nodes for in-place
 // updates (the address input doesn't re-render on every keystroke).
-function addrVerifyNodes(a) {
-  const n = 6;
-  if (!a) return [];
-  if (a.length <= n * 2) return [document.createTextNode(a)];
-  return [
-    h('span', { class: 'hl' }, a.slice(0, n)),
-    document.createTextNode(a.slice(n, -n)),
-    h('span', { class: 'hl' }, a.slice(-n)),
-  ];
+// How many lines the recipient field needs to show all of what's in it.
+// Characters per line come from the field's own width and font, measured
+// the first time it's typed in (a monospace field: every character is as
+// wide as a 0); until then a phone-width guess. A rows attribute, not an
+// inline height, so a re-render reproduces it instead of resetting it.
+// An empty field is as tall as its hint, measured in the hint's own font:
+// the whole of it shows too, in any language.
+let destCpl = 30, destHintRows = 1;
+function measureDest(el) {
+  try {
+    const cs = getComputedStyle(el);
+    const c = measureDest.c || (measureDest.c = document.createElement('canvas').getContext('2d'));
+    c.font = cs.font;
+    const w = el.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+    const cw = c.measureText('0').width;
+    if (w > 0 && cw > 0) destCpl = Math.max(8, Math.floor(w / cw));
+    const ph = el.getAttribute('placeholder') || '';
+    const pcs = getComputedStyle(el, '::placeholder');
+    c.font = `${pcs.fontSize} ${pcs.fontFamily}`;
+    if (w > 0 && ph) destHintRows = Math.min(3, Math.max(1, Math.ceil(c.measureText(ph).width / w)));
+  } catch {}
 }
+const destRows = (v) => (String(v || '').length
+  ? Math.min(6, Math.max(1, Math.ceil(String(v).length / destCpl)))
+  : destHintRows);
 
 // True once the destination is a real on-chain or silent-payment address — used to
 // progressively reveal the amount/fee/coin controls. A Lightning invoice instead
@@ -5079,13 +5101,9 @@ function recipientRow(s, r, i) {
   // render's nodes — the morph must install these exact nodes, not keep last
   // render's (whose closures are stale). Both are fully filled before the
   // morph runs, so the wholesale swap carries identical content.
-  const check = h('div', { class: 'addr-check', 'data-fresh': '1' });
-  const syncCheck = () => {
-    const a = r.address.trim();
-    const nodes = addrVerifyNodes(a);
-    check.replaceChildren(...nodes);
-    check.style.display = a && !viaOf() ? '' : 'none';
-  };
+  // The field itself wraps and grows, so a whole address is always on
+  // screen (it used to be repeated below a one-line input for checking).
+  const syncCheck = () => {};
   // The suggestions panel gets the same imperative treatment — see the
   // sendSearcher note: a render between key repeats kills backspace-hold.
   // One panel for the life of the page, rows rebuilt only when the results
@@ -5107,16 +5125,24 @@ function recipientRow(s, r, i) {
   // A pasted/typed/scanned payload a feature recognizes (e.g. a bolt11) jumps
   // straight to that feature's own confirmation flow.
   const tryFeature = (v, typed) => featureMatchSend(v, typed);
-  const addrInput = h('input', {
-    type: 'text', class: 'mono-input grow', placeholder: i === 0 ? t('destPlaceholder') : 'bc1q…',
-    autocapitalize: 'none', autocomplete: 'off', spellcheck: 'false', value: via ? via.name : r.address,
+  const shown = via ? via.name : r.address;
+  const addrInput = h('textarea', {
+    class: 'mono-input grow send-dest', placeholder: i === 0 ? t('destPlaceholder') : 'bc1q…',
+    rows: String(destRows(shown)), wrap: 'soft',
+    autocapitalize: 'none', autocomplete: 'off', spellcheck: 'false', value: shown,
+    // one line of text: Enter doesn't break it
+    onKeydown: (e) => { if (e.key === 'Enter') e.preventDefault(); },
     // the delay lets the keyboard start opening (and any render() swap of
     // this input) before parkSendField measures the live activeElement.
     // warmSearch pre-opens the search transports so the first keystroke's
     // results don't pay three cold handshakes.
     onFocus: () => { warmSearch(); setTimeout(parkSendField, 300); },
     onInput: (e) => {
+      // a pasted address with a line break in it is still one address
+      if (/[\r\n]/.test(e.target.value)) e.target.value = e.target.value.replace(/[\r\n]+/g, '');
       const v = e.target.value;
+      measureDest(e.target);
+      e.target.rows = destRows(v);
       r.address = v; syncCheck();
       const hadError = !!ui.sendError;
       ui.sendError = ''; // editing the destination starts over — drop stale errors
@@ -5156,7 +5182,6 @@ function recipientRow(s, r, i) {
       }),
       !single && h('button', { type: 'button', class: 'btn-sm', title: t('remove'), onClick: () => { s.recipients.splice(i, 1); render(); } }, '✕')
     ),
-    check,
     via ? h('div', { class: 'row gap6 send-via', style: 'align-items:center' },
       via.pk && !single ? featureHook('avatarNode', via.pk) : null,
       via.pk && single ? null : h('span', { class: 'small' }, via.name),
@@ -5196,6 +5221,16 @@ function recipientRow(s, r, i) {
     ) : null
   );
   syncCheck();
+  // the field's real width, once: a pasted or picked address gets its true
+  // line count rather than the guess
+  if (!measureDest.done) requestAnimationFrame(() => {
+    const el = document.querySelector('.send-dest');
+    if (!el || measureDest.done) return;
+    measureDest.done = true;
+    const before = destCpl + ':' + destHintRows;
+    measureDest(el);
+    if (destCpl + ':' + destHintRows !== before) render();
+  });
   if (i === 0) sendSearch.pick = pickRecipient; // the persistent rows call this render's
   syncSuggest();
   return row;

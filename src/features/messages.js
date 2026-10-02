@@ -713,12 +713,13 @@ export function messagesFeature(ctx) {
   const THUMB_VERSION = 1;
   const thumbing = new Set();
   const thumbQueue = new Map();
-  // Hosts that serve pictures without CORS headers (primal's blossom,
-  // cdn.nostrcheck.me, most personal sites): the browser refuses the bytes to
+  // Hosts that serve pictures without CORS headers (cdn.nostrcheck.me, most
+  // personal sites): the browser refuses the bytes to
   // a fetch and prints a red line per face while the <img> paints fine. No
   // thumbnail is to be had there, so after a second quick refusal the host
   // is left alone for a week rather than asked about every new face.
-  const NOCORS_KEY = 'coinos-thumb-nocors';
+  // v2: the first list was mostly wrong (primal's CDN, coinos.io) — see corsFetch
+  const NOCORS_KEY = 'coinos-thumb-nocors-v2';
   const NOCORS_MS = 7 * 24 * 3600_000;
   let noCors = null; // host -> { n, until }
   const noCorsNow = () => { if (!noCors) { try { noCors = JSON.parse(localStorage.getItem(NOCORS_KEY) || '{}'); } catch { noCors = {}; } } return noCors; };
@@ -731,6 +732,22 @@ export function messagesFeature(ctx) {
     if (Object.keys(m).length > 200) delete m[Object.keys(m)[0]];
     try { localStorage.setItem(NOCORS_KEY, JSON.stringify(m)); } catch {}
   };
+  // The bytes of a picture, readable by script. The HTTP cache comes first:
+  // the face was usually just painted from this URL. But a CDN that sends
+  // its CORS header only to requests carrying an Origin, and caches the
+  // plain answer without `Vary: Origin` (primal's r2a.primal.net does), hands
+  // the cached copy — header-less — to our CORS fetch, which then fails as if
+  // the host refused. That wrote primal and coinos.io off as "no CORS" and
+  // left every picture hosted there painting from the full-size original.
+  // So a refusal is retried once past the cache before anyone is blamed.
+  async function corsFetch(url, signal) {
+    try {
+      return await fetch(url, { mode: 'cors', signal });
+    } catch (e) {
+      if (!e || e.name !== 'TypeError') throw e;
+      return fetch(url, { mode: 'cors', cache: 'reload', signal });
+    }
+  }
   function makeThumb(pk, p) {
     if (!p || !p.picture || typeof document === 'undefined') return;
     if (noCorsHost(p.picture)) return; // a host that won't hand over bytes; the <img> shows it anyway
@@ -788,7 +805,7 @@ export function messagesFeature(ctx) {
         // the browser's cache is welcome: the face was just painted from this
         // very URL, and 'reload' re-downloaded every original (38 MB in one
         // scroll) — a stale copy still makes a fine thumbnail
-        const res = await fetch(url, { mode: 'cors', signal: AbortSignal.timeout(THUMB_SLOW) });
+        const res = await corsFetch(url, AbortSignal.timeout(THUMB_SLOW));
         if (!res.ok) throw new Error('http ' + res.status);
         bmp = await createImageBitmap(await res.blob());
         // centre-crop to a square, the way background-size:cover paints it
@@ -3096,6 +3113,15 @@ export function messagesFeature(ctx) {
   const prefetched = new Set();
   const prefetchQueue = [];
   let prefetching = 0;
+  const bannerOf = (pk) => {
+    const full = fullProfiles.get(pk), lp = profiles.get(pk) || {};
+    const b = (full && full.banner) || lp.banner;
+    return typeof b === 'string' && /^https?:\/\//i.test(b.trim()) ? b.trim() : null;
+  };
+  function warmBanner(pk) {
+    const b = bannerOf(pk);
+    if (b && !mediaReady.has(b)) return warmMedia(b, { thumb: true }).then(() => scheduleRepaint());
+  }
   function prefetchProfilePage(pk) {
     if (!pk || prefetched.has(pk)) return;
     prefetched.add(pk);
@@ -3107,7 +3133,8 @@ export function messagesFeature(ctx) {
       const pk = prefetchQueue.shift();
       prefetching++;
       Promise.allSettled([
-        Promise.resolve(fetchFullProfile(pk)),
+        // the cover photo as a column-sized copy, ready before the page opens
+        Promise.resolve(fetchFullProfile(pk)).then(() => warmBanner(pk)),
         Promise.resolve(notesFor(pk)),
       ]).finally(() => { prefetching--; drainPrefetch(); });
     }
@@ -4962,9 +4989,97 @@ export function messagesFeature(ctx) {
   const READY_MS = 8000;
   const mediaReady = new Map(); // URL -> decoded dimensions
   const mediaWarming = new Map();
-  const warmMedia = (url) => {
+  // A post's photo is often the camera's original — 3024px wide, twelve
+  // megapixels — painted into a column a sixth of that. Chrome decodes it
+  // again whenever the page that holds it is rebuilt (its decoded copy is
+  // long evicted by then), and until it has, the picture is a blank box: the
+  // feed came back from a profile with every post's text in place and its
+  // photo 200ms behind. So a big picture is painted from a copy the size the
+  // column can actually show, made once and kept on disk; it decodes in a few
+  // milliseconds, inside the same frame as the text. The original is still
+  // what the lightbox opens. A host that won't hand over its bytes (no CORS)
+  // keeps the old way.
+  const MEDIA_THUMB_W = 1100; // the 560px column at 2x
+  const MEDIA_THUMB_CACHE = 'coinos-media-thumbs-v1';
+  const MEDIA_THUMB_MAX = 400; // copies kept on disk, oldest out first
+  const thumbStore = () => (typeof caches !== 'undefined' ? caches.open(MEDIA_THUMB_CACHE) : Promise.reject(new Error('no cache')));
+  async function storedMediaThumb(url) {
+    try {
+      const r = await (await thumbStore()).match(url);
+      if (!r) return null;
+      const dims = JSON.parse(r.headers.get('x-dims') || 'null');
+      if (!dims || !dims.width) return null;
+      const src = r.headers.get('x-original') === '1' ? null : URL.createObjectURL(await r.blob());
+      return { ...dims, thumb: src };
+    } catch { return null; }
+  }
+  async function makeMediaThumb(url) {
+    if (noCorsHost(url) || typeof createImageBitmap === 'undefined' || typeof OffscreenCanvas === 'undefined') return null;
+    const t0 = Date.now();
+    let blob;
+    try {
+      const res = await corsFetch(url, AbortSignal.timeout(READY_MS));
+      if (!res.ok) return null;
+      blob = await res.blob();
+    } catch (e) {
+      // a quick TypeError is the CORS refusal (a dead host takes longer)
+      if (e && e.name === 'TypeError' && Date.now() - t0 < 4000) noteNoCors(url);
+      return null;
+    }
+    let bmp;
+    try { bmp = await createImageBitmap(blob); } catch { return null; }
+    const dims = { width: bmp.width, height: bmp.height };
+    // small enough already, or animated (a GIF's copy would be one frame):
+    // remember the shape and paint the original
+    const keep = bmp.width <= MEDIA_THUMB_W * 1.25 || /gif/i.test(blob.type);
+    let out = null;
+    if (!keep) {
+      try {
+        const h = Math.max(1, Math.round(bmp.height * MEDIA_THUMB_W / bmp.width));
+        const c = new OffscreenCanvas(MEDIA_THUMB_W, h);
+        const g = c.getContext('2d');
+        g.imageSmoothingQuality = 'high';
+        g.drawImage(bmp, 0, 0, MEDIA_THUMB_W, h);
+        out = await c.convertToBlob({ type: 'image/webp', quality: 0.82 });
+        if (!/webp/.test(out.type)) out = await c.convertToBlob({ type: 'image/jpeg', quality: 0.82 });
+      } catch { out = null; }
+    }
+    try { bmp.close(); } catch {}
+    try {
+      const store = await thumbStore();
+      await store.put(url, new Response(out || new Blob(), { headers: { 'x-dims': JSON.stringify(dims), 'x-original': out ? '0' : '1' } }));
+      const keys = await store.keys();
+      for (const k of keys.slice(0, Math.max(0, keys.length - MEDIA_THUMB_MAX))) store.delete(k);
+    } catch {}
+    return { ...dims, thumb: out ? URL.createObjectURL(out) : null };
+  }
+  // Decode a copy ahead, so the <img> that paints it finds it ready.
+  const decodeAhead = (src) => new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => (img.decode ? img.decode() : Promise.resolve()).then(resolve, resolve);
+    img.onerror = resolve;
+    img.src = src;
+  });
+  const warmMedia = (url, { thumb = false } = {}) => {
     if (!url || mediaReady.has(url) || typeof Image === 'undefined') return Promise.resolve();
     if (mediaWarming.has(url)) return mediaWarming.get(url);
+    if (thumb && /^https?:/i.test(url)) {
+      const task = (async () => {
+        const got = (await storedMediaThumb(url)) || (await makeMediaThumb(url).catch(() => null));
+        if (got) {
+          if (got.thumb) await decodeAhead(got.thumb);
+          mediaReady.set(url, got);
+          return;
+        }
+        await plainWarm(url);
+      })().finally(() => mediaWarming.delete(url));
+      mediaWarming.set(url, task);
+      return task;
+    }
+    return plainWarm(url);
+  };
+  const plainWarm = (url) => {
+    if (mediaWarming.has(url) && mediaWarming.get(url).plain) return mediaWarming.get(url);
     const task = new Promise((resolve) => {
       const img = new Image();
       const timer = setTimeout(() => done(false), READY_MS);
@@ -4977,10 +5092,14 @@ export function messagesFeature(ctx) {
       img.onload = () => { (img.decode ? img.decode() : Promise.resolve()).then(() => done(true), () => done(false)); };
       img.onerror = () => done(false);
       img.src = url;
-    }).finally(() => mediaWarming.delete(url));
-    mediaWarming.set(url, task);
+    }).finally(() => { if (mediaWarming.get(url) === task) mediaWarming.delete(url); });
+    task.plain = true;
+    if (!mediaWarming.has(url)) mediaWarming.set(url, task);
     return task;
   };
+  // What an <img> for this picture should load: the column-sized copy when
+  // there is one.
+  const mediaSrc = (url, d = feedMedia(url)) => (d && d.thumb) || url;
   // A video's shape, so the feed paints its box at the clip's own aspect
   // instead of a 16:9 frame with black bands either side of a portrait clip.
   // The post's imeta `dim` says it for free (Amethyst, Primal and others
@@ -5140,7 +5259,7 @@ export function messagesFeature(ctx) {
     if (p?.picture) makeThumb(pk, p);
   }
   async function noteReady(ev, deadline = Date.now() + READY_MS, depth = 0) {
-    const tasks = [warmAvatar(ev.pubkey, deadline), ...noteMediaUrls(ev.content).map(warmMedia),
+    const tasks = [warmAvatar(ev.pubkey, deadline), ...noteMediaUrls(ev.content).map((u) => warmMedia(u, { thumb: true })),
       ...noteVideoUrls(ev.content).map((u) => warmVideo(u, imetaDim(ev, u))),
       ...notePreviewUrls(ev.content).map(warmPreview),
       ...[...emojiTagMap(ev.tags).values()].map(warmMedia)];
@@ -6036,8 +6155,10 @@ export function messagesFeature(ctx) {
       if (feedPaint && !size) return h('a', { href: url, target: '_blank', rel: 'noopener noreferrer' }, label || url);
       // tap it to see it properly — a 320px-tall crop of someone's
       // photograph is a thumbnail, not the picture they posted
+      const known = size || mediaReady.get(url);
       return h('img', {
-        src: url, class: 'note-img clickable', loading: feedPaint ? 'eager' : 'lazy', alt: label || '',
+        src: mediaSrc(url, known), class: 'note-img clickable', loading: feedPaint || known ? 'eager' : 'lazy', alt: label || '',
+        decoding: known && known.thumb ? 'sync' : undefined, // a few-ms decode: paint it with the page
         width: size?.width, height: size?.height,
         style: size ? 'height:auto;aspect-ratio:' + size.width + '/' + size.height : undefined,
         onClick: (e) => { if (!onPicture(e)) return; e.stopPropagation(); ctx.openImage && ctx.openImage(url); },
@@ -8115,6 +8236,7 @@ export function messagesFeature(ctx) {
       // doesn't drop by the height of a cover photo when it arrives
       : urlish(lp.banner);
     const draftPic = draft && urlish(draft.picture);
+    if (bannerUrl && !draft && !mediaReady.has(bannerUrl)) warmBanner(pk);
     return h('div', { class: 'col', style: 'gap:16px' },
       // full header on profiles too — losing the search button here made
       // finding the NEXT person a trek back home
@@ -8123,7 +8245,7 @@ export function messagesFeature(ctx) {
         t(full || lp.eventAt || lp.name || lp.picture ? 'profFetchFailed' : 'profNotFound'),
         h('button', { class: 'btn-sm', onClick: () => { fetchFullProfile(pk); render(); } }, t('retry'))) : null,
       h('div', { class: 'card col', style: 'gap:12px' },
-        bannerUrl ? h('div', { class: 'profile-banner', style: `background-image:url(${JSON.stringify(bannerUrl)})` }) : null,
+        bannerUrl ? h('div', { class: 'profile-banner', style: `background-image:url(${JSON.stringify(draft ? bannerUrl : mediaSrc(bannerUrl, mediaReady.get(bannerUrl)))})` }) : null,
         h('div', { class: 'row gap6', style: 'align-items:center' },
           draftPic
             ? h('div', { class: 'chat-avatar profile-avatar ava-img', style: `background-image:url(${JSON.stringify(draftPic)})` })
@@ -9376,10 +9498,10 @@ export function messagesFeature(ctx) {
             h('div', { class: 'col grow', style: 'min-width:0;gap:1px' },
               h('div', { class: 'row between' },
                 h('span', { class: 'chat-name' }, displayName(peer)),
-                h('span', { class: 'chat-time thread-when' },
-                  timeLabel(last.rumor.created_at * 1000),
-                  unread ? h('i', { class: 'thread-dot' }) : null)),
-              h('div', { class: 'muted small chat-preview' }, (last.mine ? t('msgYouPrefix') + ' ' : '') + (last.rumor.kind === 15 ? '📎 ' + t('msgPhoto') : last.rumor.content))))))
+                h('span', { class: 'chat-time thread-when' }, timeLabel(last.rumor.created_at * 1000))),
+              h('div', { class: 'muted small chat-preview' }, (last.mine ? t('msgYouPrefix') + ' ' : '') + (last.rumor.kind === 15 ? '📎 ' + t('msgPhoto') : last.rumor.content))),
+            // the row's own dot, centred and inset like the communities' below
+            unread ? h('i', { class: 'thread-dot' }) : null)))
         : h('div', { class: 'muted small' }, t('msgNoDms')));
     if (shownDms.length < dmRows.length)
       kids.push(h('button', { class: 'linklike small', onClick: () => { ui.msgAllDms = true; render(); } },

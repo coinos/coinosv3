@@ -18,6 +18,11 @@ import { dlog } from './debug.js';
 // White Noise (MDK's RETIRED_RELAY_HOSTS) never dials those.
 export const GROUP_RELAYS = ['wss://relay.coinos.io', 'wss://nos.lol', 'wss://relay.primal.net'];
 
+// Where White Noise looks people up. It will not invite an account whose
+// relay lists (kinds 10002 and 10050) it cannot find, and it looks on its own
+// relays and the purplepag.es index — not on ours.
+const DIRECTORY_RELAYS = ['wss://relay.eu.whitenoise.chat', 'wss://relay.us.whitenoise.chat', 'wss://purplepag.es'];
+
 const DAY = 86400;
 const KP_REFRESH = 30 * DAY;     // republish well inside the 84-day lifetime
 const REACH_TTL = 10 * 60_000;
@@ -83,7 +88,11 @@ export function marmotClient({ scope, pubkey, identity, on, relays = GROUP_RELAY
   // KeyPackage where our NIP-65 write relays say to look. Silent unless
   // `interactive`; returns whether we are reachable.
   function ready(opts = {}) {
-    if (!kpBusy) kpBusy = ensure(opts).catch((e) => { dlog('marmot: keypackage', e); return false; }).finally(() => { kpBusy = null; });
+    if (!kpBusy) kpBusy = ensure(opts).catch((e) => { dlog('marmot: keypackage', e); return false; }).finally(() => {
+      kpBusy = null;
+      // a little later: a brand-new wallet is still publishing its lists
+      if (dev && now() - (dev.announced || 0) > 7 * DAY) setTimeout(announce, 8000);
+    });
     return kpBusy;
   }
   async function ensure(opts) {
@@ -94,6 +103,21 @@ export function marmotClient({ scope, pubkey, identity, on, relays = GROUP_RELAY
     if (!s) return false;
     if (!dev) { dev = { ...(await M.newDevice(s.sign, pubkey)), kps: [] }; await saveDev(); }
     return publishKeyPackage(s);
+  }
+
+  // Put the account's relay lists where White Noise will find them. These
+  // are the events the account already signed, passed along unchanged — so
+  // no signer is asked, and a login npub's lists stay exactly as its other
+  // clients wrote them. Redone weekly, and until both lists exist.
+  async function announce() {
+    if (stopped || !dev) return;
+    try {
+      const evs = await queryOn(PROFILE_RELAYS, { kinds: [10002, 10050], authors: [pubkey] }, 3500);
+      const newest = (kind) => evs.filter((e) => e.kind === kind).sort((a, b) => b.created_at - a.created_at)[0];
+      const lists = [newest(10002), newest(10050)];
+      for (const ev of lists) if (ev) await publishOn(DIRECTORY_RELAYS, ev);
+      if (lists.every(Boolean)) { dev.announced = now(); await saveDev(); }
+    } catch (e) { dlog('marmot: announce', e); }
   }
 
   async function publishKeyPackage(s) {

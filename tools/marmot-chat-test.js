@@ -135,6 +135,16 @@ try {
   const chk = wn(['keys', 'check', me]);
   check('wn can use it', !chk.error && JSON.stringify(chk).includes('true'), JSON.stringify(chk).slice(0, 200));
 
+  if (SITE) {
+    // White Noise only invites an account whose relay lists it can find on ITS relays
+    const dir = 'wss://relay.eu.whitenoise.chat';
+    const found = await until(async () => {
+      const evs = await new Promise((res) => { const ws = new WebSocket(dir), out = []; ws.onopen = () => ws.send(JSON.stringify(['REQ', 'q', { kinds: [10002, 10050], authors: [me] }])); ws.onmessage = (m) => { const d = JSON.parse(m.data); if (d[0] === 'EVENT') out.push(d[2].kind); else { ws.close(); res(out); } }; ws.onerror = () => res(out); setTimeout(() => res(out), 4000); });
+      return evs.includes(10002) && evs.includes(10050);
+    }, 40000);
+    check('its relay lists are on the White Noise directory relays', !!found);
+  }
+
   console.log('\n[a White Noise group invites us]');
   const made = wn(['groups', 'create', 'Trail crew', me], alice);
   check('wn groups create', !made.error, JSON.stringify(made.error || ''));

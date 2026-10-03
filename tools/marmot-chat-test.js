@@ -6,6 +6,10 @@
 // running `wn` daemon); skips cleanly without them. Every relay socket the
 // page opens is pointed at the local relay, so nothing leaves the machine.
 //
+// Against a deployed site instead (real relays, throwaway identities):
+//   SITE=https://v3.coinos.io RELAY=wss://relay.coinos.io bun tools/marmot-chat-test.js
+// with the wn daemon started on public relays (e.g. wss://nos.lol).
+//
 // Covers: becoming invitable (KeyPackage published at boot), a wn group
 // invitation → card → Join → messages both ways; "New message" to a White
 // Noise user founding a direct group whose replies land in the DM thread;
@@ -25,6 +29,7 @@ import { join } from 'node:path';
 const shot = (name) => join(tmpdir(), name);
 
 const RELAY = process.env.RELAY || 'ws://127.0.0.1:27777';
+const SITE = process.env.SITE || '';
 const PORT = 5247;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let ok = true;
@@ -45,21 +50,23 @@ function relayQuery(filter) {
     setTimeout(done, 3000);
   });
 }
-const until = async (fn, ms = 20000) => { const end = Date.now() + ms; for (;;) { const v = await fn(); if (v) return v; if (Date.now() > end) return null; await sleep(500); } };
+const until = async (fn, ms = SITE ? 45000 : 20000) => { const end = Date.now() + ms; for (;;) { const v = await fn(); if (v) return v; if (Date.now() > end) return null; await sleep(500); } };
 
 if (wn(['whoami']).error) { console.log('SKIP: wn daemon not reachable'); process.exit(0); }
 if (!(await relayQuery({ kinds: [0], limit: 1 }))) { console.log('SKIP: no relay'); process.exit(0); }
 const alice = wn(['create-identity']).account_id, bob = wn(['create-identity']).account_id;
 
-const html = await buildHtml({ minify: true, pwa: false });
-const server = Bun.serve({ port: PORT, fetch: () => new Response(html, { headers: { 'content-type': 'text/html' } }) });
+const server = SITE ? null : Bun.serve({
+  port: PORT,
+  fetch: ((html) => () => new Response(html, { headers: { 'content-type': 'text/html' } }))(await buildHtml({ minify: true, pwa: false })),
+});
 
 const browser = await puppeteer.launch({ executablePath: '/usr/bin/google-chrome', headless: 'new', args: ['--no-sandbox'] });
 const page = await browser.newPage();
 await page.setViewport({ width: 1100, height: 850 });
 page.on('pageerror', (e) => { console.log('   page error:', e.message); ok = false; });
 // every relay is the local relay
-await page.evaluateOnNewDocument((relay) => {
+if (!SITE) await page.evaluateOnNewDocument((relay) => {
   const Real = window.WebSocket;
   window.WebSocket = function (url, protocols) { return new Real(/^wss?:/.test(url) ? relay : url, protocols); };
   window.WebSocket.prototype = Real.prototype;
@@ -91,7 +98,7 @@ try {
   const me = seedPubkey(mnemonic);
   // wn follows an account's relay lists to real URLs; ours must name the
   // local relay before the wallet (which would publish its defaults) opens
-  {
+  if (!SITE) {
     const sk = nip06.privateKeyFromSeedWords(mnemonic);
     const at = Math.floor(Date.now() / 1000);
     for (const ev of [
@@ -99,7 +106,7 @@ try {
       finalizeEvent({ kind: 10050, created_at: at, tags: [['relay', RELAY]], content: '' }, sk),
     ]) await new Promise((res) => { const ws = new WebSocket(RELAY); ws.onopen = () => ws.send(JSON.stringify(['EVENT', ev])); ws.onmessage = () => { ws.close(); res(); }; ws.onerror = res; });
   }
-  await page.goto(`http://localhost:${PORT}/`, { waitUntil: 'domcontentloaded' });
+  await page.goto(SITE || `http://localhost:${PORT}/`, { waitUntil: 'domcontentloaded' });
   await sleep(500);
   await click('button', 'Create a new wallet');
   await sleep(300);
@@ -200,6 +207,6 @@ try {
   check('no group was founded for it', (await relayQuery({ kinds: [1059], '#p': [stranger] })).length <= 1);
 } catch (e) { console.log(e); ok = false; }
 await browser.close();
-server.stop();
+if (server) server.stop();
 console.log(ok ? '\nall passed' : '\nFAILED');
 process.exit(ok ? 0 : 1);

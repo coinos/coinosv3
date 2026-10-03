@@ -14,8 +14,9 @@ import { wrapDM } from './dm.js';
 import { dlog } from './debug.js';
 
 // Where the groups we found live. Signed into group state, so every member
-// reads and writes the same list.
-export const GROUP_RELAYS = ['wss://relay.coinos.io', 'wss://nos.lol', 'wss://relay.damus.io'];
+// reads and writes the same list. Not relay.damus.io or relay.nostr.band:
+// White Noise (MDK's RETIRED_RELAY_HOSTS) never dials those.
+export const GROUP_RELAYS = ['wss://relay.coinos.io', 'wss://nos.lol', 'wss://relay.primal.net'];
 
 const DAY = 86400;
 const KP_REFRESH = 30 * DAY;     // republish well inside the 84-day lifetime

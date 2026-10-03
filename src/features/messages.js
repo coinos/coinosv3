@@ -6540,7 +6540,7 @@ export function messagesFeature(ctx) {
   };
   async function loadAttachment(a) {
     const entry = { state: 'loading' };
-    attachCache.set(a.url, entry);
+    attachCache.set(a.key || a.url, entry);
     try {
       if (+a.size > ATTACH_MAX) throw new Error('too big');
       let buf = null;
@@ -6556,7 +6556,12 @@ export function messagesFeature(ctx) {
       if (!buf) throw new Error('unreachable');
       let bytes = new Uint8Array(buf);
       const alg = (a['encryption-algorithm'] || '').toLowerCase();
-      if (alg) {
+      if (a.wn) {
+        // White Noise: the key is the group's, for the epoch the message came in
+        const g = wn && wn.groups.get(a.wn.gid);
+        if (!g) throw new Error('group gone');
+        bytes = wn.media.open(g, a.wn.epoch, bytes, a.wn.ref);
+      } else if (alg) {
         if (alg !== 'aes-gcm' || !a['decryption-key'] || !a['decryption-nonce']) throw new Error('unsupported');
         const key = await crypto.subtle.importKey('raw', hexToBytes(a['decryption-key']), 'AES-GCM', false, ['decrypt']);
         bytes = new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: hexToBytes(a['decryption-nonce']) }, key, bytes));
@@ -6576,13 +6581,25 @@ export function messagesFeature(ctx) {
   // The nodes for a rumor's attachments: a picture inline (tap to view),
   // any other file as a download by name, a grey box the picture's shape
   // while it loads, and a quiet note when it can't be had.
-  function attachmentNodes(rumor) {
-    return attachmentsOf(rumor).map((a) => {
+  // A White Noise message's attachments (encrypted-media-v2): the blob is
+  // found by its locators, then by its hash on the usual Blossom hosts.
+  const WN_BLOB_HOSTS = ['https://blossom.ditto.pub', 'https://nostr.download', 'https://blossom.primal.net', 'https://blossom.divine.video', 'https://cdn.hzrd149.com'];
+  const wnAttachmentsOf = (rumor, gid) => (wn ? (rumor.tags || []).map(wn.media.read).filter(Boolean) : []).map((x) => ({
+    key: 'wn:' + x.ref.cipher,
+    url: x.urls[0] || WN_BLOB_HOSTS[0] + '/' + x.ref.cipher,
+    fallback: [...x.urls.slice(1), ...WN_BLOB_HOSTS.map((u) => u + '/' + x.ref.cipher)].filter((u) => u !== x.urls[0]),
+    m: x.ref.m, name: x.ref.name, dim: x.dim,
+    wn: { gid, epoch: rumor.epoch, ref: x.ref },
+  }));
+  // `gid`: the White Noise group the message came through, if it did
+  function attachmentNodes(rumor, gid) {
+    return (gid ? wnAttachmentsOf(rumor, gid) : attachmentsOf(rumor)).map((a) => {
       const isImg = /^image\//i.test(a.m || '') || /\.(png|jpe?g|gif|webp|avif)$/i.test(a.name || a.url.split('?')[0]);
-      const encrypted = !!a['encryption-algorithm'];
+      const encrypted = !!a['encryption-algorithm'] || !!a.wn;
       if (!encrypted && isImg) return urlNode(a.url, { isImage: true });
-      let entry = attachCache.get(a.url);
-      if (!entry && isImg) { loadAttachment(a); entry = attachCache.get(a.url); }
+      const ck = a.key || a.url;
+      let entry = attachCache.get(ck);
+      if (!entry && isImg) { loadAttachment(a); entry = attachCache.get(ck); }
       const [w, hgt] = String(a.dim || '').split('x').map(Number);
       const ratio = w > 0 && hgt > 0 ? `${w}/${hgt}` : '4/3';
       if (entry && entry.state === 'ready') {
@@ -6595,7 +6612,7 @@ export function messagesFeature(ctx) {
       }
       if (entry && entry.state === 'error') return h('div', { class: 'small muted' }, t('msgAttachFailed'));
       if (!isImg) return h('button', {
-        class: 'chat-attach linklike', onClick: (e) => { e.stopPropagation(); if (!attachCache.has(a.url)) loadAttachment(a); },
+        class: 'chat-attach linklike', onClick: (e) => { e.stopPropagation(); if (!attachCache.has(ck)) loadAttachment(a); },
       }, '📎 ' + (a.name || 'file') + (a.size ? ` · ${Math.round(+a.size / 1024)} KB` : ''));
       return h('div', { class: 'chat-attach-ph', style: `aspect-ratio:${ratio}` });
     });
@@ -6687,13 +6704,52 @@ export function messagesFeature(ctx) {
     } catch (e) { toast(e.message || String(e)); }
     ui.msgUploading = false; render();
   }
+  // A file into a White Noise group (encrypted-media-v2): sealed under the
+  // group's media secret for the epoch it goes out in, uploaded, and sent as
+  // a kind 9 with an imeta tag. A commit landing during the upload moves the
+  // epoch and would leave the key behind it — then it is sealed again.
+  // `road`: a group record, or 'new' (a direct chat with `peer` to found).
+  async function wnSendFile(road, file, peer) {
+    const id = await identity();
+    if (!id) { noIdToast(); return; }
+    if (file.size > MEDIA_MAX) { toast(t('msgAttachTooBig')); return; }
+    ui.msgUploading = true; render();
+    try {
+      const plain = new Uint8Array(await file.arrayBuffer());
+      let dim = '';
+      if (/^image\//.test(file.type)) {
+        try { const bmp = await createImageBitmap(file); dim = `${bmp.width}x${bmp.height}`; bmp.close(); } catch {}
+      }
+      const g = road === 'new' ? await wn.create({ members: [peer] }) : road;
+      const thread = peer ? threadOf(peer) : null;
+      const replyTo = ui.msgReplyTo && (thread ? thread.has(ui.msgReplyTo) : wnFold(g).rows.some((m) => m.rumor.id === ui.msgReplyTo)) ? ui.msgReplyTo : null;
+      for (let tries = 0; ; tries++) {
+        const sealed = wn.media.seal(g, plain, { type: file.type, name: file.name });
+        const urls = await uploadEncrypted(id, { cipher: sealed.cipher, x: sealed.ref.cipher });
+        if (g.tip.epoch !== sealed.epoch && tries < 2) continue;
+        // the local copy shows at once, from the plaintext we still hold
+        const blob = new Blob([file], { type: sealed.ref.m });
+        attachCache.set('wn:' + sealed.ref.cipher, { state: 'ready', blob, src: URL.createObjectURL(blob) });
+        const inner = wn.event(9, '', [wn.media.tag(sealed.ref, urls, dim), ...(replyTo ? [['e', replyTo]] : [])]);
+        ui.msgReplyTo = null;
+        if (!(await wn.send(g, inner))) throw new Error(t('msgSendFailed'));
+        if (thread) thread.set(inner.id, { rumor: g.log.find((m) => m.id === inner.id) || inner, mine: true, wn: g.id });
+        wnFolds.delete(g.id);
+        break;
+      }
+      ui.msgStick = true;
+    } catch (e) { toast(e.message === 'no signer' ? t('msgNoIdentity') : (e.message || String(e))); }
+    ui.msgUploading = false; render();
+  }
+
   // A DM picture is a NIP-17 kind-15 file message: url as content, the
   // same fields as flat tags, wrapped to the peer and to ourselves.
   async function sendDMFile(peer, file) {
     const id = await identity();
     if (!id) { noIdToast(); return; }
     if (!(id.signer instanceof Uint8Array) && !id.signer.encryptTo) { toast(t('msgSignerNoDm')); return; }
-    if (await wnRoute(peer).catch(() => null)) { toast(t('msgGroupNoFiles')); return; }
+    const road = await wnRoute(peer).catch(() => null);
+    if (road) return wnSendFile(road, file, peer);
     ui.msgUploading = true; render();
     try {
       const enc = await encryptFile(file);
@@ -9877,7 +9933,7 @@ export function messagesFeature(ctx) {
               h('div', { class: 'row between' },
                 h('span', { class: 'chat-name' }, displayName(peer)),
                 h('span', { class: 'chat-time thread-when' }, timeLabel(last.rumor.created_at * 1000))),
-              h('div', { class: 'muted small chat-preview' }, (last.mine ? t('msgYouPrefix') + ' ' : '') + (last.rumor.kind === 15 ? '📎 ' + t('msgPhoto') : last.rumor.content))),
+              h('div', { class: 'muted small chat-preview' }, (last.mine ? t('msgYouPrefix') + ' ' : '') + (last.rumor.kind === 15 || (!last.rumor.content && last.wn) ? '📎 ' + t('msgPhoto') : last.rumor.content))),
             // the row's own dot, centred and inset like the communities' below
             unread ? h('i', { class: 'thread-dot' }) : null))(row.dm)))
         : h('div', { class: 'muted small' }, t('msgNoDms')));
@@ -10439,9 +10495,13 @@ export function messagesFeature(ctx) {
       const myReact = reacts && my.map((pk) => reacts.get(pk)).find(Boolean);
       const replyId = (m.rumor.tags.find((x) => x[0] === 'e') || [])[1];
       const src = replyId && byId.get(replyId);
-      const body = m.rumor.content
-        ? noteBody(m.rumor.content, 0, em)
-        : [h('span', { class: 'muted' }, '📎 ' + t('msgGroupAttachment'))];
+      const files = attachmentNodes(m.rumor, g.id);
+      const body = [
+        ...(m.rumor.content ? noteBody(m.rumor.content, 0, em) : []),
+        ...files,
+        // an attachment in a shape we can't read (another format, a malformed tag)
+        ...(!m.rumor.content && !files.length ? [h('span', { class: 'muted' }, '📎 ' + t('msgGroupAttachment'))] : []),
+      ];
       return h('div', { class: 'chat-row' + (m.mine ? ' mine' : '') + (grouped ? ' grouped' : '') },
         grouped ? h('div', { class: 'chat-avatar spacer' }) : avatar(m.rumor.pubkey),
         h('div', { class: 'chat-body' },
@@ -10511,7 +10571,7 @@ export function messagesFeature(ctx) {
           h('span', { class: 'small muted chat-quote-text' }, ...snippetNodes(reply.rumor))),
         h('button', { class: 'chat-del', style: 'position:static;display:flex;flex-shrink:0', onClick: () => { ui.msgReplyTo = null; render(); } }, '×')) : null,
       live
-        ? composer(t('msgDmPlaceholder'), () => wnSend(g), null, 'wn:' + g.id, null)
+        ? composer(t('msgDmPlaceholder'), () => wnSend(g), null, 'wn:' + g.id, (f) => wnSendFile(g, f))
         : h('div', { class: 'muted small', style: 'text-align:center;padding:12px' }, t('msgGroupGone')),
       ui.msgSheet ? wnSheet(g) : null);
   }
@@ -10649,7 +10709,7 @@ export function messagesFeature(ctx) {
                     ui.msgSheet = ui.msgSheet === m.rumor.id ? null : m.rumor.id;
                     render();
                   },
-                }, dmQuote(m), ...(m.rumor.kind === 15 ? [] : noteBody(m.rumor.content, 0, emojiTagMap(m.rumor.tags))), ...attachmentNodes(m.rumor), dmChips(m)),
+                }, dmQuote(m), ...(m.rumor.kind === 15 ? [] : noteBody(m.rumor.content, 0, emojiTagMap(m.rumor.tags))), ...attachmentNodes(m.rumor, m.wn), dmChips(m)),
                 h('div', { class: 'chat-time' }, timeLabel(m.rumor.created_at * 1000)))))
         : [h('div', { class: 'muted small', style: 'text-align:center;padding:24px 0' }, t('msgNoDmsYet'))])),
       dmReplyBar(),

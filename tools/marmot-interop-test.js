@@ -16,6 +16,11 @@
 // add and remove members, and commit a wn member's SelfRemove.
 
 import { spawnSync } from 'node:child_process';
+import { mkdtempSync, writeFileSync, readFileSync, readdirSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { sha256 } from '@noble/hashes/sha256';
+import { bytesToHex, randomBytes } from '@noble/hashes/utils';
 import { finalizeEvent, generateSecretKey, getPublicKey } from 'nostr-tools/pure';
 import * as nip19 from 'nostr-tools/nip19';
 import { wrapDM, unwrapDM } from '../src/dm.js';
@@ -126,6 +131,25 @@ async function waitFor(fn, label, ms = 15000) {
   }
 }
 
+// BUD-02 upload with a kind-24242 auth, as the app does it
+async function upload(cipher, x) {
+  const at = now();
+  const auth = finalizeEvent({ kind: 24242, created_at: at - 5, content: 'upload', tags: [['t', 'upload'], ['x', x], ['expiration', String(at + 600)]] }, sk);
+  for (const server of M.MEDIA_ENDPOINTS) {
+    try {
+      const r = await fetch(server + 'upload', { method: 'PUT', body: cipher, headers: { authorization: 'Nostr ' + btoa(JSON.stringify(auth)), 'content-type': 'application/octet-stream' } });
+      if (r.ok) return (await r.json()).url;
+    } catch {}
+  }
+  throw new Error('no blossom host took the blob');
+}
+async function fetchBlob(urls) {
+  for (const u of urls) { try { const r = await fetch(u); if (r.ok) return new Uint8Array(await r.arrayBuffer()); } catch {} }
+  return null;
+}
+// a small real PNG, so every app treats it as a picture
+const PNG = Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAFklEQVR4nGP8z8DAwMDAxMDAwMDAAAANHQEDasKb6QAAAABJRU5ErkJggg=='), (c) => c.charCodeAt(0));
+
 async function main() {
   try { await connect(); } catch (e) { console.log('SKIP: ' + e.message); return; }
   const who = wn(['whoami']);
@@ -170,6 +194,39 @@ async function main() {
   const seen = await waitFor(async () => JSON.stringify(wn(['messages', 'list', wnGroup, '--limit', '20'], { account: alice })).includes('hello from js'), 'us → wn application message');
   ok(!!seen, 'wn decrypts our message');
 
+  console.log('\n3b. pictures both ways (encrypted-media-v2)');
+  {
+    const dir = mkdtempSync(join(tmpdir(), 'wn-media-'));
+    const file = join(dir, 'from-wn.png');
+    const body = new Uint8Array([...PNG, ...randomBytes(8)]); // unique bytes per run
+    writeFileSync(file, body);
+    const up = wn(['media', 'upload', wnGroup, file, '--send'], { account: alice });
+    ok(!up.error, 'wn uploads and sends a picture', JSON.stringify(up.error || ''));
+    const got = await waitFor(async () => { await sync(g); return g.log.find((m) => m.tags.some((t) => t[0] === 'imeta')); }, 'picture message arrives');
+    if (got) {
+      const ref = got.tags.map(M.readMediaTag).filter(Boolean)[0];
+      ok(!!ref, 'its imeta tag reads as encrypted-media-v2', JSON.stringify(got.tags).slice(0, 300));
+      const blob = ref && await fetchBlob(ref.urls);
+      ok(!!blob, 'the blob is fetchable from its locator');
+      let plain = null;
+      try { plain = M.openMedia(M.mediaSecretAt(g, got.epoch), blob, ref.ref); } catch (e) { ok(false, 'decrypt', e.message); }
+      ok(plain && bytesToHex(plain) === bytesToHex(body), 'we decrypt wn\'s picture to the original bytes');
+    }
+    // ours to wn
+    const mine = new Uint8Array([...PNG, ...randomBytes(8)]);
+    const sealed = M.sealMedia(M.mediaSecret(g.tip), mine, { type: 'image/png', name: 'from-js.png' });
+    const url = await upload(sealed.cipher, sealed.ref.cipher);
+    await publish(M.send(g, M.appEvent(pk, 9, 'a picture', [M.mediaTag(sealed.ref, [url], '2x2')])));
+    const listed = await waitFor(async () => JSON.stringify(wn(['media', 'list', wnGroup], { account: alice })).includes(sealed.ref.plain), 'wn lists our picture');
+    if (listed) {
+      const out = mkdtempSync(join(tmpdir(), 'wn-dl-'));
+      const dl = wn(['media', 'download', wnGroup, sealed.ref.plain, '--output', out], { account: alice });
+      ok(!dl.error, 'wn downloads our picture', JSON.stringify(dl.error || ''));
+      const f = readdirSync(out)[0];
+      ok(f && bytesToHex(readFileSync(join(out, f))) === bytesToHex(mine), 'wn decrypts it to the original bytes');
+    }
+  }
+
   console.log('\n4. our self-update commit, then traffic in the new epoch');
   const e0 = g.tip.epoch;
   await commit(g, []);
@@ -206,6 +263,21 @@ async function main() {
   wn(['messages', 'send', mineId, 'reply from wn'], { account: alice });
   await waitFor(async () => { await sync(mine); return texts(mine).includes('reply from wn'); }, 'wn → our group');
   ok(texts(mine).includes('reply from wn'), 'we decrypt wn in our group');
+  {
+    // our group carries our media policy: wn must accept it and upload where it says
+    const dir = mkdtempSync(join(tmpdir(), 'wn-media-'));
+    const file = join(dir, 'into-ours.png');
+    const body = new Uint8Array([...PNG, ...randomBytes(8)]);
+    writeFileSync(file, body);
+    const up = wn(['media', 'upload', mineId, file, '--send'], { account: alice });
+    ok(!up.error, 'wn sends a picture into our group (our endpoints)', JSON.stringify(up.error || ''));
+    const got = await waitFor(async () => { await sync(mine); return mine.log.find((m) => m.tags.some((t) => t[0] === 'imeta')); }, 'picture in our group');
+    const ref = got && got.tags.map(M.readMediaTag).filter(Boolean)[0];
+    const blob = ref && await fetchBlob(ref.urls);
+    let plain = null;
+    try { plain = blob && M.openMedia(M.mediaSecretAt(mine, got.epoch), blob, ref.ref); } catch {}
+    ok(plain && bytesToHex(plain) === bytesToHex(body), 'and we decrypt it', ref ? ref.urls.join(' ') : '');
+  }
 
   console.log('\n7. our commits in our group: add, rename, remove');
   const bobKp = await fetchKp(bob);

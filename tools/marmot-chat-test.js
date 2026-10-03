@@ -24,6 +24,12 @@ import * as nip06 from 'nostr-tools/nip06';
 import { finalizeEvent } from 'nostr-tools/pure';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { mkdtempSync, writeFileSync, readFileSync, readdirSync } from 'node:fs';
+import { randomBytes, bytesToHex } from '@noble/hashes/utils';
+
+// a tiny real PNG with a few random bytes after it, so every run's file is new
+const png = () => new Uint8Array([...Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAFklEQVR4nGP8z8DAwMDAxMDAwMDAAAANHQEDasKb6QAAAABJRU5ErkJggg=='), (c) => c.charCodeAt(0)), ...randomBytes(8)]);
+const imgShown = () => page.evaluate(() => [...document.querySelectorAll('.chat-log img.note-img')].filter((i) => i.complete && i.naturalWidth > 0 && i.src.startsWith('blob:')).length);
 
 // shots go somewhere every machine has
 const shot = (name) => join(tmpdir(), name);
@@ -169,6 +175,28 @@ try {
   }
   await say('hello from coinos');
   check('ours reaches wn', !!await until(() => JSON.stringify(wn(['messages', 'list', gid, '--limit', '20'], alice)).includes('hello from coinos')));
+
+  console.log('\n[pictures]');
+  {
+    const dir = mkdtempSync(join(tmpdir(), 'wn-ui-'));
+    const theirs = join(dir, 'from-wn.png');
+    writeFileSync(theirs, png());
+    const before = await imgShown();
+    const up = wn(['media', 'upload', gid, theirs, '--send'], alice);
+    check('wn sends a picture', !up.error, JSON.stringify(up.error || ''));
+    check('it shows in the group', !!await until(async () => (await imgShown()) > before, SITE ? 90000 : 30000));
+    const ours = join(dir, 'from-coinos.png');
+    const bytes = png();
+    writeFileSync(ours, bytes);
+    const input = await page.$('#msg-file');
+    await input.uploadFile(ours);
+    const plain = bytesToHex((await import('@noble/hashes/sha256')).sha256(bytes));
+    check('ours reaches wn', !!await until(() => JSON.stringify(wn(['media', 'list', gid], alice)).includes(plain), 40000));
+    const out = mkdtempSync(join(tmpdir(), 'wn-dl-'));
+    wn(['media', 'download', gid, plain, '--output', out], alice);
+    const f = readdirSync(out)[0];
+    check('and wn decrypts it', !!f && bytesToHex(readFileSync(join(out, f))) === bytesToHex(bytes));
+  }
   await page.screenshot({ path: shot('marmot-group.png') });
 
   console.log('\n[a first message to a White Noise user founds a direct chat]');

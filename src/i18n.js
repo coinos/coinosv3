@@ -476,7 +476,6 @@ const STR = {
     msgGroupRemove: 'Remove',
     msgGroupRename: 'Rename',
     msgGroupGone: 'You are no longer in this group',
-    msgGroupNoFiles: "Attachments aren't available in this chat yet",
     msgGroupAttachment: 'Attachment',
     msgGroupFailed: "Couldn't update the group. Try again",
     msgGroupSetup: 'Your signer is needed once to set up group chats',

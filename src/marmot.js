@@ -8,6 +8,7 @@
 // no relay I/O. The messages feature drives it and owns storage and sockets.
 
 import { sha256 } from "@noble/hashes/sha256";
+import { expand } from "@noble/hashes/hkdf";
 import { schnorr } from "@noble/curves/secp256k1";
 import { bytesToHex, hexToBytes, concatBytes, randomBytes } from "@noble/hashes/utils";
 import { chacha20poly1305 } from "@noble/ciphers/chacha.js";
@@ -600,12 +601,13 @@ export function directPeer(g) {
 // the invitees (nobody else exists yet, so nothing has to be published).
 // Returns the record and the Welcome to deliver to each invitee.
 export function found(device, { name = "", about = "", relays, invitees = [], adminKeys = [] }) {
-  const reqComps = [COMP.ADMINS, COMP.ROUTING, COMP.PROOF, COMP.LIFECYCLE, ...(name || about ? [COMP.PROFILE] : [])];
+  const reqComps = [COMP.ADMINS, COMP.ROUTING, COMP.PROOF, COMP.LIFECYCLE, COMP.MEDIA_V2, ...(name || about ? [COMP.PROFILE] : [])];
   const entries = [
     { id: COMP.APP_COMPONENTS, data: idList.enc(reqComps) },
     { id: COMP.ADMINS, data: admins.enc([device.pubkey, ...adminKeys]) },
     { id: COMP.ROUTING, data: routing.enc({ id: bytesToHex(randomBytes(32)), relays }) },
     { id: COMP.LIFECYCLE, data: Uint8Array.of(0) },
+    { id: COMP.MEDIA_V2, data: mediaPolicy.enc(MEDIA_ENDPOINTS) },
     ...(name || about ? [{ id: COMP.PROFILE, data: profile.enc({ name, about }) }] : []),
   ];
   const required = {
@@ -683,11 +685,23 @@ function changes(before, after, actor, at) {
   return out;
 }
 
-function deliver(g, out, ev, epoch) {
+function deliver(g, out, ev, epoch, state) {
   if (g.log.some((m) => m.id === ev.id)) return;
   ev = { ...ev, epoch };
+  // an attachment is keyed to the epoch its message came in: keep that
+  // epoch's media secret for as long as the message is in the log
+  if (state && ev.tags.some(isMediaTag)) {
+    g.media ||= {};
+    g.media[epoch] ||= bytesToHex(mediaSecret(state));
+  }
   g.log.push(ev);
-  if (g.log.length > LOG_MAX) g.log.splice(0, g.log.length - LOG_MAX);
+  if (g.log.length > LOG_MAX) {
+    g.log.splice(0, g.log.length - LOG_MAX);
+    if (g.media) {
+      const live = new Set(g.log.map((m) => String(m.epoch)));
+      for (const e of Object.keys(g.media)) if (!live.has(e)) delete g.media[e];
+    }
+  }
   out.push(ev);
 }
 
@@ -759,7 +773,7 @@ function take(g, ev, out) {
       const r = mls.processMessage(src, bytes);
       swap(g, src, r.state);
       const inner = readAppEvent(r.data, accountAt(src, r.sender));
-      if (inner) deliver(g, out, inner, src.epoch);
+      if (inner) deliver(g, out, inner, src.epoch, src);
     } else if (peek.contentType === "proposal") {
       if (src !== g.tip) return true; // proposals are epoch-bound: stale
       const r = mls.processMessage(src, bytes);
@@ -813,6 +827,7 @@ function swap(g, old, next) {
 // An app event out. The ratchet has moved once this returns: persist the
 // record before the event leaves.
 export function send(g, inner) {
+  const at = g.tip;
   const r = mls.encryptApplication(g.tip, utf8(JSON.stringify(inner)));
   const v = groupView(g.tip);
   const ev = seal(g.tip, r.message, v.retention ? inner.created_at + v.retention : 0);
@@ -820,7 +835,7 @@ export function send(g, inner) {
   see(g, ev.id);
   see(g, bytesToHex(sha256(r.message)));
   const out = [];
-  deliver(g, out, inner, g.tip.epoch);
+  deliver(g, out, inner, at.epoch, at);
   return ev;
 }
 
@@ -884,3 +899,99 @@ export function leave(g) {
   see(g, bytesToHex(sha256(r.message)));
   return ev;
 }
+
+// ---- encrypted media (encrypted-media-v2) ----
+// An attachment is a blob on a Blossom server, encrypted under a key that
+// only members can derive: the group's media secret at the epoch the
+// carrying message is sent in, stretched by the file's own hash, type and
+// name. The message carries an imeta tag that points at the blob.
+
+const MEDIA_V2 = "encrypted-media-v2";
+// where members of the groups we found upload: hosts that take an anonymous
+// encrypted blob and serve it with CORS
+export const MEDIA_ENDPOINTS = ["https://blossom.ditto.pub/", "https://nostr.download/"];
+
+const mediaPolicy = {
+  enc: (endpoints) => concatBytes(
+    vec(utf8(MEDIA_V2)),
+    vec(vec(utf8("blossom-v1"))),
+    vec(...endpoints.map((u) => concatBytes(vec(utf8("blossom-v1")), vec(utf8(u)))))),
+};
+
+export const mediaSecret = (state) => mls.exportSecret(state, "marmot", utf8("encrypted-media"), 32);
+
+// the shared Marmot media-type algorithm (canonical-encoding.md)
+const TOKEN = /^[A-Za-z0-9!#$%&'*+\-.^_`|~]+$/;
+export function mediaType(value) {
+  let m = String(value || "").split(";")[0].replace(/^[\t\n\f\r ]+|[\t\n\f\r ]+$/g, "").replace(/[A-Z]/g, (c) => c.toLowerCase());
+  const parts = m.split("/");
+  if (parts.length !== 2 || !parts[0] || !parts[1] || parts[0].length > 64 || parts[1].length > 64 || m.length > 128 ||
+      !TOKEN.test(parts[0]) || !TOKEN.test(parts[1])) return null;
+  return m === "image/jpg" ? "image/jpeg" : m;
+}
+const nameOk = (n) => typeof n === "string" && !n.includes("\0") && utf8(n).length >= 1 && utf8(n).length <= 255;
+
+const nul = Uint8Array.of(0);
+const mediaAad = (hash, m, name) => concatBytes(utf8(MEDIA_V2), nul, hash, nul, utf8(m), nul, utf8(name));
+const fileKey = (secret, hash, m, name) => expand(sha256, secret, concatBytes(mediaAad(hash, m, name), nul, utf8("key")), 32);
+
+// Encrypt one file for this epoch. Returns the blob to upload and the
+// reference the imeta tag is made from once the blob has a URL.
+export function sealMedia(secret, plain, { type, name }) {
+  const m = mediaType(type) || "application/octet-stream";
+  name = String(name || "file").replace(/\0/g, "");
+  while (utf8(name).length > 255) name = name.slice(0, -1);
+  if (!nameOk(name)) name = "file";
+  const hash = sha256(plain);
+  const nonce = randomBytes(12);
+  const cipher = chacha20poly1305(fileKey(secret, hash, m, name), nonce, mediaAad(hash, m, name)).encrypt(plain);
+  return { cipher, ref: { plain: bytesToHex(hash), cipher: bytesToHex(sha256(cipher)), nonce: bytesToHex(nonce), m, name } };
+}
+
+export function mediaTag(ref, urls, dim) {
+  return ["imeta", "v " + MEDIA_V2, ...urls.map((u) => "locator blossom-v1 " + u),
+    "ciphertext_sha256 " + ref.cipher, "plaintext_sha256 " + ref.plain, "nonce " + ref.nonce,
+    "m " + ref.m, "filename " + ref.name, ...(dim ? ["dim " + dim] : [])];
+}
+
+const isMediaTag = (t) => t[0] === "imeta" && t.includes("v " + MEDIA_V2);
+const HEX32 = /^[0-9a-f]{64}$/;
+
+// A v2 imeta tag, validated; null when it is not one or is malformed
+// (which drops that attachment only, never the message).
+export function readMediaTag(tag) {
+  if (!Array.isArray(tag) || tag[0] !== "imeta") return null;
+  const one = {}, urls = [];
+  for (const f of tag.slice(1)) {
+    const i = f.indexOf(" ");
+    if (i < 1) return null;
+    const k = f.slice(0, i), v = f.slice(i + 1);
+    if (k === "locator") {
+      const j = v.indexOf(" ");
+      const kind = v.slice(0, j), url = v.slice(j + 1);
+      if (j < 1 || !url) return null;
+      if (kind === "blossom-v1") {
+        try { if (!/^https?:$/.test(new URL(url).protocol)) return null; } catch { return null; }
+        urls.push(url);
+      }
+      continue;
+    }
+    if (k in one) return null; // every other field appears once
+    one[k] = v;
+  }
+  if (one.v !== MEDIA_V2 || "blurhash" in one || !HEX32.test(one.ciphertext_sha256 || "") || !HEX32.test(one.plaintext_sha256 || "") ||
+      !/^[0-9a-f]{24}$/.test(one.nonce || "") || !one.m || mediaType(one.m) !== one.m || !nameOk(one.filename)) return null;
+  return { urls, ref: { plain: one.plaintext_sha256, cipher: one.ciphertext_sha256, nonce: one.nonce, m: one.m, name: one.filename }, dim: one.dim || "" };
+}
+
+// Decrypt a fetched blob. Throws when the blob is not the one referenced.
+export function openMedia(secret, cipher, ref) {
+  if (bytesToHex(sha256(cipher)) !== ref.cipher) throw new Error("blob hash mismatch");
+  const hash = hexToBytes(ref.plain);
+  const plain = chacha20poly1305(fileKey(secret, hash, ref.m, ref.name), hexToBytes(ref.nonce), mediaAad(hash, ref.m, ref.name)).decrypt(cipher);
+  if (bytesToHex(sha256(plain)) !== ref.plain) throw new Error("plaintext hash mismatch");
+  return plain;
+}
+
+// The media secret for an epoch this group record has kept, or null.
+export const mediaSecretAt = (g, epoch) => (g.media && g.media[epoch] ? hexToBytes(g.media[epoch]) : null);

@@ -400,6 +400,18 @@ export function marmotClient({ scope, pubkey, identity, on, relays = GROUP_RELAY
     pubkey, groups, load, start, stop, resubscribe, ready, announce, lookup, welcome, accept,
     create, send, add, kick, rename, leave, forget,
     event: (kind, content, tags) => M.appEvent(pubkey, kind, content, tags),
+    // attachments: seal for the epoch a message is about to go out in, and
+    // open with the secret of the epoch it came in
+    media: {
+      read: M.readMediaTag,
+      tag: M.mediaTag,
+      seal: (g, plain, meta) => ({ epoch: g.tip.epoch, ...M.sealMedia(M.mediaSecret(g.tip), plain, meta) }),
+      open(g, epoch, cipher, ref) {
+        const secret = M.mediaSecretAt(g, epoch) || (g.tip.epoch === epoch ? M.mediaSecret(g.tip) : null);
+        if (!secret) throw new Error('media key for this epoch is gone');
+        return M.openMedia(secret, cipher, ref);
+      },
+    },
     view: (g) => M.groupView(g.tip),
     peer: (g) => M.directPeer(g),
     accounts: (g) => M.accounts(g.tip),

@@ -244,5 +244,9 @@
   "mediaImages": "Ảnh",
   "mediaVideos": "Video",
   "mediaNoImages": "Bảng tin này chưa có ảnh.",
-  "mediaNoVideos": "Bảng tin này chưa có video."
+  "mediaNoVideos": "Bảng tin này chưa có video dọc.",
+  "videoTapToPlay": "Chạm để phát",
+  "videoLargeTitle": "Video",
+  "videoLargeToggle": "Tự động phát video lớn",
+  "videoLargeHelp": "Video trên {mb} MB hoặc cao hơn 1080p sẽ chờ bạn chạm, để bảng tin không ngốn dữ liệu. Giới hạn thấp hơn khi kết nối chậm hoặc tiết kiệm dữ liệu."
 }

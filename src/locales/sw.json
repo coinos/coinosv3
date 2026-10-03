@@ -244,5 +244,9 @@
   "mediaImages": "Picha",
   "mediaVideos": "Video",
   "mediaNoImages": "Bado hakuna picha kwenye mlisho huu.",
-  "mediaNoVideos": "Bado hakuna video kwenye mlisho huu."
+  "mediaNoVideos": "Bado hakuna video wima kwenye mlisho huu.",
+  "videoTapToPlay": "Gusa ili kucheza",
+  "videoLargeTitle": "Video",
+  "videoLargeToggle": "Cheza video kubwa zenyewe",
+  "videoLargeHelp": "Video zaidi ya MB {mb} au juu ya 1080p husubiri uguse, ili mlisho usimalize data yako. Kikomo ni cha chini kwenye muunganisho wa polepole au wa kuokoa data."
 }

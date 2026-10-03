@@ -908,5 +908,9 @@
   "mediaImages": "画像",
   "mediaVideos": "動画",
   "mediaNoImages": "このフィードにはまだ画像がありません。",
-  "mediaNoVideos": "このフィードにはまだ動画がありません。"
+  "mediaNoVideos": "このフィードにはまだ縦型動画がありません。",
+  "videoTapToPlay": "タップして再生",
+  "videoLargeTitle": "動画",
+  "videoLargeToggle": "大きな動画を自動再生",
+  "videoLargeHelp": "{mb} MBを超える動画や1080pを超える動画は、データを使いすぎないようタップするまで再生しません。低速回線やデータセーバー時は上限が下がります。"
 }

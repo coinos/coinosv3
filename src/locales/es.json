@@ -908,5 +908,9 @@
   "mediaImages": "Imágenes",
   "mediaVideos": "Vídeos",
   "mediaNoImages": "Aún no hay imágenes en este feed.",
-  "mediaNoVideos": "Aún no hay vídeos en este feed."
+  "mediaNoVideos": "Aún no hay vídeos verticales en este feed.",
+  "videoTapToPlay": "Toca para reproducir",
+  "videoLargeTitle": "Vídeos",
+  "videoLargeToggle": "Reproducir vídeos grandes automáticamente",
+  "videoLargeHelp": "Los vídeos de más de {mb} MB o por encima de 1080p esperan a que los toques, para que el feed no se coma tus datos. El límite es menor con una conexión lenta o en ahorro de datos."
 }

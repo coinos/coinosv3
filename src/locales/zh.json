@@ -908,5 +908,9 @@
   "mediaImages": "图片",
   "mediaVideos": "视频",
   "mediaNoImages": "此动态中还没有图片。",
-  "mediaNoVideos": "此动态中还没有视频。"
+  "mediaNoVideos": "此动态中还没有竖屏视频。",
+  "videoTapToPlay": "点按播放",
+  "videoLargeTitle": "视频",
+  "videoLargeToggle": "自动播放大视频",
+  "videoLargeHelp": "超过 {mb} MB 或高于 1080p 的视频会等你点按再播放，以免动态耗尽流量。在慢速或省流量连接下，上限更低。"
 }

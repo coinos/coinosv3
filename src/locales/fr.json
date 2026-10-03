@@ -908,5 +908,9 @@
   "mediaImages": "Images",
   "mediaVideos": "Vidéos",
   "mediaNoImages": "Pas encore d’images dans ce fil.",
-  "mediaNoVideos": "Pas encore de vidéos dans ce fil."
+  "mediaNoVideos": "Pas encore de vidéos verticales dans ce fil.",
+  "videoTapToPlay": "Touchez pour lire",
+  "videoLargeTitle": "Vidéos",
+  "videoLargeToggle": "Lire automatiquement les grosses vidéos",
+  "videoLargeHelp": "Les vidéos de plus de {mb} Mo ou au-delà de 1080p attendent un toucher, pour que le fil ne dévore pas vos données. La limite est plus basse sur une connexion lente ou en économie de données."
 }

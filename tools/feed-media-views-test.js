@@ -16,13 +16,23 @@ let ok = true;
 const check = (n, c, d = '') => { console.log(` ${c ? '✓' : '✗'} ${n}${d ? ' — ' + d : ''}`); if (!c) ok = false; };
 const dir = mkdtempSync(tmpdir() + '/media-');
 const ff = (args) => { const p = Bun.spawnSync(['ffmpeg', '-y', '-loglevel', 'error', ...args]); if (p.exitCode !== 0) throw new Error('ffmpeg failed'); };
-for (const n of ['a', 'b']) ff(['-f', 'lavfi', '-i', 'testsrc=size=360x640:rate=10', '-t', '2', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', `${dir}/${n}.mp4`]);
+for (const n of ['a', 'b', 'c']) ff(['-f', 'lavfi', '-i', 'testsrc=size=360x640:rate=10', '-t', '2', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', `${dir}/${n}.mp4`]);
+// index last (no faststart), from a server that ignores ranges
+ff(['-f', 'lavfi', '-i', 'testsrc=size=480x270:rate=10', '-t', '2', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', `${dir}/slow.mp4`]);
 for (const n of ['p1', 'p2', 'p3']) ff(['-f', 'lavfi', '-i', 'testsrc=size=800x600', '-frames:v', '1', `${dir}/${n}.jpg`]);
 
 const html = await buildHtml({ minify: true, pwa: false });
 const server = Bun.serve({ port: 0, idleTimeout: 30, fetch: (req) => {
   const path = new URL(req.url).pathname;
-  if (path.startsWith('/v/')) return new Response(Bun.file(dir + path.slice(2)), { headers: { 'content-type': 'video/mp4' } });
+  if (path.startsWith('/v/')) {
+    const f = Bun.file(dir + path.slice(2));
+    const m = /bytes=(\d+)-(\d*)/.exec(req.headers.get('range') || '');
+    if (m && path !== '/v/slow.mp4') {
+      const a = +m[1], b = Math.min(m[2] ? +m[2] : f.size - 1, f.size - 1);
+      return new Response(f.slice(a, b + 1), { status: 206, headers: { 'content-type': 'video/mp4', 'content-range': `bytes ${a}-${b}/${f.size}`, 'accept-ranges': 'bytes' } });
+    }
+    return new Response(f, { headers: { 'content-type': 'video/mp4' } });
+  }
   if (path.startsWith('/i/')) return new Response(Bun.file(dir + path.slice(2)), { headers: { 'content-type': 'image/jpeg' } });
   if (path.startsWith('/punks') || path === '/verify-worker.js') return new Response(Bun.file('dist' + path));
   return new Response(html, { headers: { 'content-type': 'text/html' } });
@@ -31,13 +41,16 @@ const base = server.url.origin;
 const SK = generateSecretKey(), PK = getPublicKey(SK);
 const FAN = generateSecretKey();
 const now = Math.floor(Date.now() / 1000);
-const post = (i, content) => finalizeEvent({ kind: 1, created_at: now - 100 - i * 60, tags: [], content }, SK);
+const post = (i, content, tags = []) => finalizeEvent({ kind: 1, created_at: now - 100 - i * 60, tags, content }, SK);
 const notes = [
   post(0, 'first clip, look at this ' + base + '/v/a.mp4'),
   post(1, 'a plain post with no media at all'),
   post(2, 'sunset over the bay ' + base + '/i/p1.jpg'),
   post(3, base + '/v/b.mp4'),
   post(4, 'two at once ' + base + '/i/p2.jpg ' + base + '/i/p3.jpg'),
+  // the post says this one is 50 MB (it isn't; the post is believed)
+  post(5, 'a huge clip ' + base + '/v/c.mp4', [['imeta', 'url ' + base + '/v/c.mp4', 'm video/mp4', 'size 50000000', 'dim 360x640']]),
+  post(6, 'index last ' + base + '/v/slow.mp4'),
 ];
 const LIKE = finalizeEvent({ kind: 7, created_at: now - 50, tags: [['e', notes[2].id], ['p', PK]], content: '+' }, FAN);
 
@@ -141,20 +154,60 @@ try {
   check('Back closes the pager, leaving the grid', await page.evaluate(() => !document.querySelector('.media-pager') && !!document.querySelector('.media-grid')));
   check('...and the page scrolls again', await page.evaluate(() => !document.documentElement.classList.contains('no-scroll')));
 
+  console.log('\n[the big clip in the feed]');
+  await mode('all'); await sleep(800);
+  await page.evaluate(() => { const v = [...document.querySelectorAll('.note-video-box video')].find((x) => /c\.mp4/.test(x.getAttribute('src') || x.getAttribute('data-lazy-src') || '')); v.scrollIntoView({ block: 'center' }); });
+  check('it waits under a cover with its size', await waitFor(() => [...document.querySelectorAll('.note-video-box .vid-heavy')].some((b) => /50 MB/.test(b.textContent)), 8000));
+  check('feed clips fetch nothing until they play', await page.evaluate(() => [...document.querySelectorAll('.note-video-box video')].every((v) => v.preload === 'none' || !v.paused)));
   console.log('\n[Videos: flip through]');
+  const info = () => page.evaluate(() => Object.fromEntries(JSON.parse(localStorage.getItem('coinos-video-info') || '[]').map(([u, d]) => [u.split('/').pop(), d])));
+  const srcs = () => page.evaluate(() => [...document.querySelectorAll('.media-pager video')].map((v) => ({ src: !!v.getAttribute('src'), pre: v.preload })));
   await mode('videos');
   check('Videos opens straight into the pager', await waitFor(() => !!document.querySelector('.media-pager.videos'), 4000));
   check('...the first clip playing', await waitFor(() => { const v = document.querySelector('.media-pager video'); return v && !v.paused && v.currentTime > 0; }, 8000), JSON.stringify(await pagerState()));
   st = await pagerState();
-  check('...two clips in all, nothing over them, sound on', st.n === 2 && st.src === 'a.mp4' && !st.show && st.meta === '0'
+  check('...the three vertical clips, nothing over them, sound on', st.n === 3 && st.src === 'a.mp4' && !st.show && st.meta === '0'
     && await page.evaluate(() => !document.querySelector('.media-pager video').muted), JSON.stringify(st));
+  await waitFor(() => { const v = document.querySelectorAll('.media-pager video')[1]; return v && !!v.getAttribute('src'); }, 5000);
+  let ss = await srcs();
+  check('only the clip on screen loads in full; the next gets its opening; the rest nothing',
+    ss[0].src && ss[0].pre === 'auto' && ss[1].src && ss[1].pre === 'metadata' && !ss[2].src, JSON.stringify(ss));
+  await waitFor(() => Object.keys(JSON.parse(localStorage.getItem('coinos-video-info') || '[]')).length >= 3, 6000);
+  await sleep(1500);
+  const vi = await info();
+  check('a probe reads the size, ranges, layout and picture size from 64 KB', vi['a.mp4']?.probed && vi['a.mp4'].ranges && vi['a.mp4'].faststart
+    && vi['a.mp4'].size > 1000 && vi['a.mp4'].w === 360 && vi['a.mp4'].h === 640, JSON.stringify(vi['a.mp4']));
+  check('the landscape clip is left out of Videos', !(await page.evaluate(() => [...document.querySelectorAll('.media-pager video')].some((v) => /slow/.test(v.getAttribute('data-src'))))));
+  check('an index-last file from a server without ranges is seen for what it is', vi['slow.mp4']?.probed && vi['slow.mp4'].faststart === false && vi['slow.mp4'].ranges === false, JSON.stringify(vi['slow.mp4']));
+  check('the size a post states is believed', vi['c.mp4']?.size === 50000000, JSON.stringify(vi['c.mp4']));
   await page.keyboard.press('ArrowDown'); await sleep(1200);
   st = await pagerState();
   check('↓ flips to the next, which plays while the first stops', st.i === 1 && st.src === 'b.mp4' && st.playing[1] && !st.playing[0], JSON.stringify(st));
-  await shot('videos');
+  ss = await srcs();
+  check('...and the window moves with it: the first lets go, the big one is not fetched as next', !ss[0].src && ss[1].pre === 'auto' && !ss[2].src, JSON.stringify(ss));
+  await page.keyboard.press('ArrowDown'); await sleep(1200);
+  st = await pagerState();
+  check('the 50 MB clip waits for a tap, saying what it costs', st.src === 'c.mp4' && await page.evaluate(() => {
+    const s = document.querySelectorAll('.mp-slide')[2]; const b = s.querySelector('.vid-heavy');
+    return !!b && /50 MB/.test(b.textContent) && !s.querySelector('video').getAttribute('src'); }), JSON.stringify(st));
+  await shot('heavy');
+  await page.evaluate(() => document.querySelectorAll('.mp-slide')[2].querySelector('.vid-heavy').click());
+  check('a tap plays it', await waitFor(() => { const v = document.querySelectorAll('.media-pager video')[2]; return !v.paused && v.currentTime > 0; }, 6000));
+  check('...without showing the overlay', !(await pagerState()).show);
   await page.keyboard.press('Escape'); await sleep(600);
-  check('Escape closes it, leaving a grid of the clips', await page.evaluate(() => !document.querySelector('.media-pager') && document.querySelectorAll('.media-grid .media-tile.video').length === 2));
+  check('Escape closes it, leaving a grid of the clips', await page.evaluate(() => !document.querySelector('.media-pager') && document.querySelectorAll('.media-grid .media-tile.video').length === 3));
   check('no clip goes on playing behind', await page.evaluate(() => [...document.querySelectorAll('video')].every((v) => v.paused)));
+  check('the big clip\'s tile shows its cost, not a frame', await waitFor(() => [...document.querySelectorAll('.media-tile-cost')].some((x) => /50 MB/.test(x.textContent)), 6000));
+  check('...the small ones show their first frame', await waitFor(() => [...document.querySelectorAll('.media-tile video')].filter((v) => v.getAttribute('src')).length >= 2, 6000));
+
+  console.log('\n[the setting]');
+  await page.evaluate(() => localStorage.setItem('coinos-video-large', '1'));
+  await mode('videos');
+  await waitFor(() => !!document.querySelector('.media-pager.videos'), 4000);
+  await page.keyboard.press('ArrowDown'); await sleep(900); await page.keyboard.press('ArrowDown'); await sleep(1500);
+  check('with "Autoplay large videos" on, it plays by itself', await page.evaluate(() => { const s = document.querySelectorAll('.mp-slide')[2]; const v = s.querySelector('video'); return !s.querySelector('.vid-heavy') && !v.paused; }));
+  await page.keyboard.press('Escape'); await sleep(400);
+  await page.evaluate(() => localStorage.removeItem('coinos-video-large'));
 
   console.log('\n[remembered]');
   await page.reload({ waitUntil: 'domcontentloaded' });

@@ -907,5 +907,9 @@
   "mediaImages": "이미지",
   "mediaVideos": "동영상",
   "mediaNoImages": "이 피드에는 아직 이미지가 없습니다.",
-  "mediaNoVideos": "이 피드에는 아직 동영상이 없습니다."
+  "mediaNoVideos": "이 피드에는 아직 세로 동영상이 없습니다.",
+  "videoTapToPlay": "탭하여 재생",
+  "videoLargeTitle": "동영상",
+  "videoLargeToggle": "큰 동영상 자동 재생",
+  "videoLargeHelp": "{mb}MB를 넘거나 1080p보다 높은 동영상은 데이터를 아끼기 위해 탭할 때까지 기다립니다. 느린 연결이나 데이터 절약 모드에서는 한도가 더 낮습니다."
 }

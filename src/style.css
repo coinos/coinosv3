@@ -1443,3 +1443,20 @@ body::after {
 .media-pager.quiet .mp-top .mp-x { opacity: 0; pointer-events: none; }
 .media-pager.quiet .mp-top .mp-sound { pointer-events: auto; }
 .media-pager.quiet.show .mp-top .mp-x { opacity: 1; pointer-events: auto; }
+
+/* a clip that waits for a tap: what it costs, over its (blank or still) box */
+.vid-heavy {
+  position: absolute; inset: 0; z-index: 2; margin: 0; padding: 0; border: 0; border-radius: inherit;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px;
+  background: rgba(0, 0, 0, .45); color: #fff; font-size: 14px; font-weight: 600; cursor: pointer;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, .6);
+}
+.vid-heavy-play {
+  width: 56px; height: 56px; border-radius: 50%; background: rgba(255, 255, 255, .2);
+  display: flex; align-items: center; justify-content: center; font-size: 22px; padding-left: 4px;
+}
+.note-video-box .vid-heavy { min-height: 120px; }
+.media-tile-cost {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  color: var(--muted); font-size: 12px; font-weight: 600; background: var(--surface2);
+}

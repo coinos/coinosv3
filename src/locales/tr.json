@@ -907,5 +907,9 @@
   "mediaImages": "Görseller",
   "mediaVideos": "Videolar",
   "mediaNoImages": "Bu akışta henüz görsel yok.",
-  "mediaNoVideos": "Bu akışta henüz video yok."
+  "mediaNoVideos": "Bu akışta henüz dikey video yok.",
+  "videoTapToPlay": "Oynatmak için dokun",
+  "videoLargeTitle": "Videolar",
+  "videoLargeToggle": "Büyük videoları otomatik oynat",
+  "videoLargeHelp": "{mb} MB’den büyük veya 1080p’nin üzerindeki videolar, akış verini tüketmesin diye dokunmanı bekler. Yavaş ya da veri tasarruflu bağlantıda sınır daha düşüktür."
 }

@@ -5477,12 +5477,170 @@ export function messagesFeature(ctx) {
     }
     return null;
   };
+  // ---- what a clip costs, before it's downloaded --------------------------
+  // A post's imeta often says (size in bytes, dim, a still); otherwise one
+  // 64 KB ranged request does: the total from Content-Range, whether the
+  // server takes ranges at all, and the file's layout — an MP4 whose index
+  // (moov) sits behind its data can't start until the whole file is in when
+  // the server won't serve ranges. Its track header gives the size on screen
+  // too. Clips over the budget, above 1080p, or that we couldn't measure
+  // wait for a tap — unless the reader asked for large clips to play.
+  const VIDEO_INFO_KEY = 'coinos-video-info', VIDEO_INFO_KEEP = 600, VIDEO_PROBE_BYTES = 65536;
+  const VIDEO_LARGE_KEY = 'coinos-video-large';
+  const videoInfo = new Map(); // url -> { size, w, h, image, faststart, ranges, probed, failed }
+  try { for (const [u, d] of JSON.parse(localStorage.getItem(VIDEO_INFO_KEY) || '[]')) videoInfo.set(u, d); } catch {}
+  let videoInfoFlush = null;
+  const saveVideoInfo = () => {
+    if (videoInfoFlush) return;
+    videoInfoFlush = setTimeout(() => {
+      videoInfoFlush = null;
+      try { localStorage.setItem(VIDEO_INFO_KEY, JSON.stringify([...videoInfo].slice(-VIDEO_INFO_KEEP))); } catch {}
+    }, 1000);
+  };
+  const noteVideoInfo = (url, d) => { videoInfo.set(url, { ...(videoInfo.get(url) || {}), ...d }); saveVideoInfo(); };
+  // what the post itself says about its clips (NIP-92)
+  function learnVideoMeta(ev) {
+    for (const tag of ev?.tags || []) {
+      if (tag[0] !== 'imeta') continue;
+      const f = {};
+      for (const p of tag.slice(1)) { const i = typeof p === 'string' ? p.indexOf(' ') : -1; if (i > 0) f[p.slice(0, i)] = p.slice(i + 1); }
+      if (!f.url || !(VIDEO_RE.test(f.url) || /^video\//.test(f.m || ''))) continue;
+      const have = videoInfo.get(f.url) || {};
+      const d = {};
+      if (!have.size && +f.size > 0) d.size = +f.size;
+      const m = /^(\d+)x(\d+)$/.exec(f.dim || '');
+      if (!have.w && m) { d.w = +m[1]; d.h = +m[2]; }
+      if (!have.image && /^https?:\/\//.test(f.image || '')) d.image = f.image;
+      if (Object.keys(d).length) noteVideoInfo(f.url, d);
+    }
+  }
+  // the top-level boxes of an MP4's first bytes: is moov ahead of mdat, and
+  // how big is the picture (a video track's tkhd ends in its width/height)
+  function readMp4Head(b) {
+    const u32 = (i) => ((b[i] << 24) | (b[i + 1] << 16) | (b[i + 2] << 8) | b[i + 3]) >>> 0;
+    const type = (i) => String.fromCharCode(b[i], b[i + 1], b[i + 2], b[i + 3]);
+    if (b.length >= 4 && u32(0) === 0x1a45dfa3) return { faststart: true }; // WebM/Matroska streams from the start
+    let faststart, i = 0;
+    while (i + 8 <= b.length) {
+      let size = u32(i);
+      const tp = type(i + 4);
+      if (tp === 'moov') { faststart = true; break; }
+      if (tp === 'mdat') { faststart = false; break; }
+      if (size === 1) size = i + 16 <= b.length ? u32(i + 8) * 2 ** 32 + u32(i + 12) : 0;
+      if (size < 8) break;
+      i += size;
+    }
+    let w = 0, h = 0;
+    for (let j = 4; j + 4 <= b.length && !w; j++) {
+      if (b[j] !== 0x74 || type(j) !== 'tkhd') continue; // 't'
+      const end = j - 4 + u32(j - 4);
+      if (end > b.length || end < j + 8) continue;
+      const tw = u32(end - 8) >>> 16, th = u32(end - 4) >>> 16;
+      if (tw && th) { w = tw; h = th; }
+    }
+    return { faststart, ...(w ? { w, h } : {}) };
+  }
+  const videoProbes = new Map();
+  let videoProbing = 0;
+  const videoProbeQueue = [];
+  function probeVideo(url) {
+    const have = videoInfo.get(url);
+    // a post that states size and shape is taken at its word: no request at all
+    if (have && (have.probed || have.failed || (have.size && have.w))) return Promise.resolve(have);
+    if (videoProbes.has(url)) return videoProbes.get(url);
+    const task = new Promise((resolve) => videoProbeQueue.push({ url, resolve })).finally(() => videoProbes.delete(url));
+    videoProbes.set(url, task);
+    pumpVideoProbes();
+    return task;
+  }
+  function pumpVideoProbes() {
+    while (videoProbing < 3 && videoProbeQueue.length) {
+      const { url, resolve } = videoProbeQueue.shift();
+      videoProbing++;
+      runVideoProbe(url).then(resolve, () => resolve(videoInfo.get(url) || {}))
+        .finally(() => { videoProbing--; pumpVideoProbes(); });
+    }
+  }
+  async function runVideoProbe(url) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 6000);
+    try {
+      const r = await fetch(url, { headers: { Range: 'bytes=0-' + (VIDEO_PROBE_BYTES - 1) }, signal: ctrl.signal });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const ranges = r.status === 206;
+      const total = ranges ? +(/\/(\d+)\s*$/.exec(r.headers.get('content-range') || '') || [])[1] : +r.headers.get('content-length');
+      // never more than the first bytes, even from a server that ignored the range
+      const reader = r.body.getReader();
+      const parts = [];
+      let got = 0;
+      while (got < VIDEO_PROBE_BYTES) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        parts.push(value); got += value.length;
+      }
+      try { reader.cancel(); } catch {}
+      const buf = new Uint8Array(Math.min(got, VIDEO_PROBE_BYTES));
+      let o = 0;
+      for (const p of parts) { if (o >= buf.length) break; buf.set(p.subarray(0, buf.length - o), o); o += p.length; }
+      const head = readMp4Head(buf);
+      const d = { probed: true, ranges, faststart: head.faststart === true };
+      if (total > 0) d.size = total;
+      if (head.w && !(videoInfo.get(url) || {}).w) { d.w = head.w; d.h = head.h; }
+      if (head.w) rememberVideo(url, head.w, head.h);
+      noteVideoInfo(url, d);
+    } catch {
+      noteVideoInfo(url, { failed: true }); // a host that won't say (no CORS, down): asked again next session only
+    } finally { clearTimeout(timer); }
+    return videoInfo.get(url);
+  }
+  // How much a clip may cost before it waits for a tap: less on a slow or
+  // metered connection.
+  const largeVideosOk = () => { try { return localStorage.getItem(VIDEO_LARGE_KEY) === '1'; } catch { return false; } };
+  function videoBudget() {
+    try {
+      const c = navigator.connection;
+      if (c && c.saveData) return 3e6;
+      if (c && /(^|-)2g$|^3g$/.test(c.effectiveType || '')) return 8e6;
+    } catch {}
+    return 25e6;
+  }
+  const tappedClips = new Set(); // asked for by hand this session: plays, whatever it costs
+  function videoHeavy(url) {
+    if (tappedClips.has(url) || largeVideosOk()) return false;
+    const d = videoInfo.get(url) || {};
+    if (d.w && d.h && Math.min(d.w, d.h) > 1080) return true;
+    if (!d.size) return true; // nothing known: don't spend data blind
+    if (d.size > videoBudget()) return true;
+    // the whole file before the first frame: only worth it for a small one
+    if (d.probed && !d.faststart && !d.ranges && d.size > 8e6) return true;
+    return false;
+  }
+  const fmtBytes = (n) => n >= 1e9 ? (n / 1e9).toFixed(1) + ' GB' : n >= 1e6 ? Math.round(n / 1e6) + ' MB' : Math.max(1, Math.round(n / 1e3)) + ' KB';
+  function heavyLabel(url) {
+    const d = videoInfo.get(url) || {};
+    const edge = d.w && d.h ? Math.min(d.w, d.h) : 0;
+    const res = edge >= 2160 ? '4K' : edge > 1080 ? edge + 'p' : '';
+    return [d.size ? fmtBytes(d.size) : '', res].filter(Boolean).join(' · ') || t('videoTapToPlay');
+  }
   const warmVideo = (url, dim) => {
     if (!url || mediaReady.has(url)) return Promise.resolve();
     const known = videoDims.get(url) || dim;
     if (known) { rememberVideo(url, known.width, known.height); return Promise.resolve(); }
     if (typeof document === 'undefined' || videoUnknown.has(url)) return Promise.resolve();
     if (mediaWarming.has(url)) return mediaWarming.get(url);
+    // the 64 KB probe first: it reads the shape from the file's own header
+    // and costs nothing like a player's metadata load of an index-last file
+    const task = probeVideo(url).then(() => {
+      if (mediaReady.has(url)) return;
+      const d = videoInfo.get(url) || {};
+      if (d.probed) { videoUnknown.add(url); return; }
+      return playerShape(url);
+    }).finally(() => mediaWarming.delete(url));
+    mediaWarming.set(url, task);
+    return task;
+  };
+  // a host that wouldn't answer the probe: ask a player for the shape, briefly
+  const playerShape = (url) => {
     const task = new Promise((resolve) => {
       const v = document.createElement('video');
       const done = () => {
@@ -5496,8 +5654,7 @@ export function messagesFeature(ctx) {
       const timer = setTimeout(done, VIDEO_PROBE_MS);
       v.onloadedmetadata = done; v.onerror = done;
       v.muted = true; v.preload = 'metadata'; v.src = url;
-    }).finally(() => mediaWarming.delete(url));
-    mediaWarming.set(url, task);
+    });
     return task;
   };
   // ---- link previews --------------------------------------------------
@@ -5605,7 +5762,7 @@ export function messagesFeature(ctx) {
   }
   async function noteReady(ev, deadline = Date.now() + READY_MS, depth = 0) {
     const tasks = [warmAvatar(ev.pubkey, deadline), ...noteMediaUrls(ev.content).map((u) => warmMedia(u, { thumb: true })),
-      ...noteVideoUrls(ev.content).map((u) => warmVideo(u, imetaDim(ev, u))),
+      ...(learnVideoMeta(ev), noteVideoUrls(ev.content).map((u) => warmVideo(u, imetaDim(ev, u)))),
       ...notePreviewUrls(ev.content).map(warmPreview),
       ...[...emojiTagMap(ev.tags).values()].map(warmMedia)];
     for (const part of String(ev.content || '').split(NOTE_SPLIT)) {
@@ -6241,10 +6398,30 @@ export function messagesFeature(ctx) {
   const videoBoxStyle = (d) => d && d.width && d.height
     ? `width:100%;aspect-ratio:${d.width}/${d.height};max-height:100vh;object-fit:contain`
     : 'width:100%;aspect-ratio:16/9;object-fit:contain';
+  // Over a clip that waits for a tap: what it costs, and the tap that plays
+  // it (with sound — the reader asked for this one). The box is left alone
+  // by the morph from here, or a repaint would take the cover off.
+  function heavyCover(box, url, onPlay) {
+    if (box.querySelector('.vid-heavy')) return;
+    box._skipMorph = true;
+    const cover = h('button', { class: 'vid-heavy', type: 'button', 'aria-label': t('videoTapToPlay'),
+      onClick: (e) => {
+        e.stopPropagation(); e.preventDefault();
+        tappedClips.add(url);
+        cover.remove();
+        onPlay && onPlay();
+        const v = box.querySelector('video');
+        if (v) { if (!v.getAttribute('src')) v.setAttribute('src', url); v.preload = 'auto'; v.play().catch(() => {}); }
+      } }, h('span', { class: 'vid-heavy-play', 'aria-hidden': 'true' }, '\u25b6'), h('span', {}, heavyLabel(url)));
+    box.append(cover);
+  }
   function videoNode(url, { stable = false } = {}) {
     const loud = unmutedClips.has(url);
-    const v = h('video', { src: url, class: 'note-video', controls: true,
-      preload: 'metadata', playsinline: true, muted: loud ? undefined : true, // play() in view fetches; a window of videos must not all stream
+    // Nothing is fetched until the clip is about to play (preload none): a
+    // window of rows used to pull every clip's metadata, which for a file
+    // with its index at the end can be most of the file.
+    const v = h('video', { src: url, class: 'note-video', controls: true, poster: (videoInfo.get(url) || {}).image || undefined,
+      preload: 'none', playsinline: true, muted: loud ? undefined : true,
       style: stable ? videoBoxStyle(feedMedia(url)) : undefined,
       // learned now, used by the next paint of any row with this clip
       onLoadedmetadata: (e) => rememberVideo(url, e.target.videoWidth, e.target.videoHeight),
@@ -6281,7 +6458,12 @@ export function messagesFeature(ctx) {
           v.setAttribute('src', url);
           v.addEventListener('loadedmetadata', () => { v.style.minHeight = ''; }, { once: true });
         }
-        if (v.paused) v.play().then(() => { box._skipMorph = true; }).catch(() => {});
+        // a clip over the budget waits for a tap, with what it costs on it
+        probeVideo(url).then(() => {
+          if (!box._inView || !v.isConnected) return;
+          if (videoHeavy(url)) { heavyCover(box, url, () => { v.muted = false; unmutedClips.add(url); if (btn && btn.isConnected) btn.remove(); }); return; }
+          if (v.paused) v.play().then(() => { box._skipMorph = true; }).catch(() => {});
+        });
       },
       () => {
         box._inView = false;
@@ -7800,6 +7982,18 @@ export function messagesFeature(ctx) {
       h('div', { class: 'row gap6', style: 'margin-top:4px' },
         h('button', { class: 'grow relays-save', disabled: rm.saving, onClick: () => saveRelayMgr() }, rm.saving ? t('relaysSaving') : t('relaysSave')),
         h('button', { class: 'btn-ghost', disabled: rm.saving, onClick: () => loadRelayMgr(me) }, t('relaysReload'))));
+  }
+
+  // Settings → Nostr: whether clips over the budget play by themselves.
+  function videosCard() {
+    const on = largeVideosOk();
+    return h('div', { class: 'card col videos-card', style: 'gap:8px' },
+      h('h3', {}, t('videoLargeTitle')),
+      h('label', { class: 'row gap6', style: 'align-items:center;cursor:pointer' },
+        h('input', { type: 'checkbox', class: 'video-large', checked: on, style: 'width:18px;height:18px;accent-color:var(--accent);margin:0',
+          onChange: (e) => { try { localStorage.setItem(VIDEO_LARGE_KEY, e.target.checked ? '1' : '0'); } catch {} render(); } }),
+        h('span', {}, t('videoLargeToggle'))),
+      h('div', { class: 'small faint' }, t('videoLargeHelp', { mb: Math.round(videoBudget() / 1e6) })));
   }
 
   function moderationCard() {
@@ -9370,6 +9564,7 @@ export function messagesFeature(ctx) {
   // it), built outside the morph so a repaint never restarts a playing clip.
   const MEDIA_MODE_KEY = 'coinos-feed-media';
   let mediaMode = 'all';
+  let videosAutoOpen = false;
   try { const m = localStorage.getItem(MEDIA_MODE_KEY); if (m === 'images' || m === 'videos') mediaMode = m; } catch {}
   const mediaKey = (it) => it.ev.id + '|' + it.url;
   // the picture an imeta tag names for a clip (NIP-92 `image`), if any
@@ -9381,11 +9576,32 @@ export function messagesFeature(ctx) {
     }
     return null;
   };
+  // Videos is for flipping through phone-shaped clips: only those known to
+  // stand taller than they're wide. A clip of unknown shape is measured
+  // (the header probe, or a player when the index sits at the end of a
+  // file a server serves in ranges) and joins once it's known to qualify.
+  function verticalClip(url) {
+    const d = videoInfo.get(url) || {};
+    const k = d.w && d.h ? d : videoDims.get(url) || mediaReady.get(url);
+    const w = k && (k.w || k.width), hh = k && (k.h || k.height);
+    if (w && hh) return hh > w;
+    if (!d.failed && !(d.probed && (!d.ranges || videoUnknown.has(url)))) measureClip(url);
+    return false;
+  }
+  const measuring = new Set();
+  function measureClip(url) {
+    if (measuring.has(url)) return;
+    measuring.add(url);
+    probeVideo(url).then((d) => {
+      if (d && d.probed && !d.w && d.ranges && !videoDims.has(url)) return playerShape(url);
+    }).finally(() => { if (mediaMode === 'videos') scheduleRepaint(); });
+  }
   function mediaItems(c, kind) {
     const out = [], seen = new Set();
     for (const ev of c.notes) {
       if (hidden(ev)) continue;
-      const urls = kind === 'videos' ? noteVideoUrls(ev.content)
+      if (kind === 'videos') learnVideoMeta(ev);
+      const urls = kind === 'videos' ? noteVideoUrls(ev.content).filter(verticalClip)
         : noteMediaUrls(ev.content).filter((u) => !u.startsWith('https://i.ytimg.com/'));
       for (const url of urls) {
         const it = { ev, url };
@@ -9406,9 +9622,11 @@ export function messagesFeature(ctx) {
   function setMediaMode(m) {
     mediaMode = m;
     try { localStorage.setItem(MEDIA_MODE_KEY, m); } catch {}
+    videosAutoOpen = false;
     if (m === 'videos') {
       const items = mediaItems(feedNow(), 'videos');
       if (items.length) { openMediaPager('videos', mediaKey(items[0])); return; }
+      videosAutoOpen = true; // the first vertical clip found opens the pager
     }
     render();
     try { window.scrollTo({ top: 0 }); } catch {}
@@ -9425,6 +9643,7 @@ export function messagesFeature(ctx) {
     const items = mediaItems(c, mediaMode);
     if (!items.length) {
       return c.booting || c.status === 'loading' || c.loadingMore || !c.end
+        || (mediaMode === 'videos' && (videoProbes.size || videoProbeQueue.length))
         ? h('div', { class: 'row gap6', 'data-key': 'media-empty', style: 'justify-content:center;padding:12px 0' }, h('span', { class: 'spinner sm' }))
         : h('div', { class: 'small faint', 'data-key': 'media-empty', style: 'text-align:center;padding:12px 0' },
             t(mediaMode === 'videos' ? 'mediaNoVideos' : 'mediaNoImages'));
@@ -9432,7 +9651,7 @@ export function messagesFeature(ctx) {
     return h('div', { class: 'media-grid', 'data-key': 'media-grid:' + mediaMode },
       ...items.map((it) => {
         const k = mediaKey(it);
-        const poster = mediaMode === 'videos' ? posterOf(it.ev, it.url) : null;
+        const poster = mediaMode === 'videos' ? posterOf(it.ev, it.url) || (videoInfo.get(it.url) || {}).image : null;
         return h('button', {
           class: 'media-tile' + (mediaMode === 'videos' ? ' video' : ''), type: 'button', 'data-key': 'tile:' + k,
           'aria-label': displayName(it.ev.pubkey), onClick: () => openMediaPager(mediaMode, k),
@@ -9455,10 +9674,17 @@ export function messagesFeature(ctx) {
         if (!e.isIntersecting) continue;
         const v = e.target;
         tileObs.unobserve(v);
-        v.muted = true;
-        v.src = v.getAttribute('data-src');
         const tile = v.closest('.media-tile');
         if (tile) tile._skipMorph = true;
+        // a first frame only from a clip that starts quickly and is within
+        // budget: a player asked for a still of an index-last file fetches
+        // most of it; the rest show what they'd cost instead
+        const url = v.getAttribute('data-src').replace(/#t=[\d.]+$/, '');
+        probeVideo(url).then((d) => {
+          if (!v.isConnected) return;
+          if (d && d.faststart !== false && (d.faststart || d.size) && !videoHeavy(url)) { v.muted = true; v.src = v.getAttribute('data-src'); return; }
+          v.replaceWith(h('span', { class: 'media-tile-cost' }, d && d.size ? heavyLabel(url) : ''));
+        });
       }
     }, { rootMargin: '400px 0px' });
     for (const v of document.querySelectorAll('.media-tile video[data-src]:not([data-obs])')) {
@@ -9507,7 +9733,8 @@ export function messagesFeature(ctx) {
     const { ev, url } = it;
     const video = pager.kind === 'videos';
     const media = video
-      ? h('video', { class: 'mp-media', 'data-src': url, loop: true, playsinline: true, preload: 'auto', poster: posterOf(ev, url) || undefined })
+      ? h('video', { class: 'mp-media', 'data-src': url, loop: true, playsinline: true, preload: 'none',
+          poster: posterOf(ev, url) || (videoInfo.get(url) || {}).image || undefined })
       : h('img', { class: 'mp-media', 'data-src': url, alt: '', draggable: 'false' });
     const caption = mediaCaption(ev);
     const stop = (fn) => (e) => { e.stopPropagation(); fn(e); };
@@ -9547,9 +9774,52 @@ export function messagesFeature(ctx) {
     const m = slide.querySelector('video.mp-media');
     if (m && m.getAttribute('src')) { try { m.pause(); m.removeAttribute('src'); m.load(); } catch {} }
   }
+  // Only the clip on screen loads in full. The next one gets its opening
+  // (preload metadata: the index and first frames) if it's within budget;
+  // every other clip holds nothing. Sizes are asked for a few slides ahead,
+  // so the verdict is in before the reader gets there.
+  function pagerNeighbours(slide) {
+    if (!pager || pager.kind !== 'videos') return;
+    const slides = [...pager.scroller.children];
+    const i = slides.indexOf(slide);
+    slides.forEach((s, j) => {
+      if (j === i) return;
+      const v = s.querySelector('video.mp-media');
+      if (j === i + 1) {
+        const url = v.getAttribute('data-src');
+        probeVideo(url).then(() => {
+          if (!pager || pager.cur === s || videoHeavy(url) || slides.indexOf(pager.cur) !== i) return;
+          v.preload = 'metadata';
+          pagerAttach(s);
+        });
+      } else pagerRelease(s);
+    });
+    for (const s of slides.slice(i + 2, i + 4)) probeVideo(s.querySelector('video.mp-media').getAttribute('data-src'));
+  }
   function playSlide(slide) {
     const v = slide.querySelector('video.mp-media');
     if (!v) return;
+    pagerNeighbours(slide);
+    const url = v.getAttribute('data-src');
+    probeVideo(url).then(() => {
+      if (!pager || pager.cur !== slide) return;
+      if (videoHeavy(url)) {
+        if (slide.querySelector('.vid-heavy')) return;
+        pagerRelease(slide);
+        slide.append(h('button', { class: 'vid-heavy', type: 'button', 'aria-label': t('videoTapToPlay'), onClick: (e) => {
+          e.stopPropagation();
+          tappedClips.add(url);
+          e.currentTarget.remove();
+          startSlide(slide);
+        } }, h('span', { class: 'vid-heavy-play', 'aria-hidden': 'true' }, '\u25b6'), h('span', {}, heavyLabel(url))));
+        return;
+      }
+      startSlide(slide);
+    });
+  }
+  function startSlide(slide) {
+    const v = slide.querySelector('video.mp-media');
+    v.preload = 'auto';
     pagerAttach(slide);
     v.muted = !pagerLoud;
     v.play().catch((err) => {
@@ -9587,8 +9857,9 @@ export function messagesFeature(ctx) {
     pager = { el, scroller, kind: want.kind, keys: new Set(), cur: null, feed: want.feed };
     pager.near = new IntersectionObserver((entries) => {
       for (const e of entries) {
-        if (e.isIntersecting) { pagerAttach(e.target); watchZaps([e.target._ev.id]); }
-        else pagerRelease(e.target);
+        if (!e.isIntersecting) continue;
+        watchZaps([e.target._ev.id]);
+        if (pager.kind === 'images') pagerAttach(e.target); // pictures are cheap; clips are pagerNeighbours' call
       }
     }, { root: scroller, rootMargin: '150% 0px' });
     pager.io = new IntersectionObserver((entries) => {
@@ -9650,7 +9921,14 @@ export function messagesFeature(ctx) {
     c.opened = true;
     const def = feedDef();
     const visitor = isVisitor();
-    queueMicrotask(() => { syncMediaPager(); if (mediaMode !== 'all') watchMediaTiles(); });
+    queueMicrotask(() => {
+      if (videosAutoOpen && mediaMode === 'videos' && !ui.mediaPager) {
+        const items = mediaItems(feedNow(), 'videos');
+        if (items.length) { videosAutoOpen = false; openMediaPager('videos', mediaKey(items[0])); return; }
+      }
+      syncMediaPager();
+      if (mediaMode !== 'all') watchMediaTiles();
+    });
     const authors = feedAuthors(def);
     const hasQuery = feedHasQuery(def);
     prepareFeedAhead(c);
@@ -11527,7 +11805,7 @@ export function messagesFeature(ctx) {
     id: 'messages',
     // group-chat state is device state in IndexedDB: it goes with the account
     wipeCache(bases) { import('../marmot-store.js').then((m) => { for (const b of bases) m.wipeMarmot(b); }).catch(() => {}); },
-    nostrSettingsCards() { return [relaysCard(), followHistoryCard(), moderationCard()]; },
+    nostrSettingsCards() { return [relaysCard(), followHistoryCard(), moderationCard(), videosCard()]; },
     // The app came back after being backgrounded. A phone freezes a hidden
     // tab: the relay sockets are cut and every post made in the meantime is
     // simply missing, which is why the feed used to sit there looking stale

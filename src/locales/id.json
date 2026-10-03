@@ -244,5 +244,9 @@
   "mediaImages": "Gambar",
   "mediaVideos": "Video",
   "mediaNoImages": "Belum ada gambar di feed ini.",
-  "mediaNoVideos": "Belum ada video di feed ini."
+  "mediaNoVideos": "Belum ada video vertikal di feed ini.",
+  "videoTapToPlay": "Ketuk untuk memutar",
+  "videoLargeTitle": "Video",
+  "videoLargeToggle": "Putar otomatis video besar",
+  "videoLargeHelp": "Video di atas {mb} MB atau lebih dari 1080p menunggu ketukan, agar feed tidak menghabiskan kuota. Batasnya lebih rendah di koneksi lambat atau mode hemat data."
 }

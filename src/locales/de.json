@@ -908,5 +908,9 @@
   "mediaImages": "Bilder",
   "mediaVideos": "Videos",
   "mediaNoImages": "Noch keine Bilder in diesem Feed.",
-  "mediaNoVideos": "Noch keine Videos in diesem Feed."
+  "mediaNoVideos": "Noch keine Hochkant-Videos in diesem Feed.",
+  "videoTapToPlay": "Zum Abspielen tippen",
+  "videoLargeTitle": "Videos",
+  "videoLargeToggle": "Große Videos automatisch abspielen",
+  "videoLargeHelp": "Videos über {mb} MB oder über 1080p warten auf einen Tipp, damit der Feed nicht dein Datenvolumen frisst. Bei langsamer Verbindung oder Datensparmodus ist die Grenze niedriger."
 }

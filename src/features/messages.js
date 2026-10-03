@@ -44,6 +44,7 @@ import { inLanguage, isMachinePost } from '../lang-guess.js';
 import { animateZap, warmZapSound } from '../zap-animation.js';
 import { SIGNER_SILENT } from '../dm.js';
 import { dlog } from '../debug.js';
+import { qrSvg } from '../qr.js';
 
 // The coinos community's join material lives in ../community.js — shared
 // with the public read-only chat page so the two can never drift.
@@ -8554,6 +8555,10 @@ export function messagesFeature(ctx) {
         ui.profEdit ? null : socialList(pk),
         // The npub in full, monospace, tap to copy — behind the "Public key"
         // link on the line above, so it costs no room until it's asked for.
+        // Its QR sits above it: the same key for a phone held up to the
+        // screen. The bare npub, lowercase — what every app's scanner takes.
+        ui.profEdit || ui.npubShown !== pk || !npub ? null
+          : h('div', { class: 'npub-qr', style: 'align-self:center', html: qrSvg(npub) }),
         ui.profEdit || ui.npubShown !== pk ? null : h('button', {
           type: 'button', class: 'addr-box break npub-box', title: t('copy'),
           style: 'font-size:11px;cursor:pointer;text-align:left;width:100%',

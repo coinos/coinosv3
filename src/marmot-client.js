@@ -19,8 +19,9 @@ import { dlog } from './debug.js';
 export const GROUP_RELAYS = ['wss://relay.coinos.io', 'wss://nos.lol', 'wss://relay.primal.net'];
 
 // Where White Noise looks people up. It will not invite an account whose
-// relay lists (kinds 10002 and 10050) it cannot find, and it looks on its own
-// relays and the purplepag.es index — not on ours.
+// relay lists (kinds 10002 and 10050) it cannot find, and one whose profile
+// (kind 0) it cannot find is shown under a made-up name ("Rapid Flamingo").
+// It looks on its own relays and the purplepag.es index — not on ours.
 const DIRECTORY_RELAYS = ['wss://relay.eu.whitenoise.chat', 'wss://relay.us.whitenoise.chat', 'wss://purplepag.es'];
 
 const DAY = 86400;
@@ -35,7 +36,7 @@ export function marmotClient({ scope, pubkey, identity, on, relays = GROUP_RELAY
   const subs = new Map();     // route id -> { unsub, gid }
   const reach = new Map();    // pubkey -> { at, p }
   const inbox = new Map();    // gid -> queued 445 events
-  let dev = null, stopped = false, loaded = null, kpBusy = null, rebuilding = false;
+  let dev = null, stopped = false, loaded = null, kpBusy = null, rebuilding = false, announcedAt = 0;
   const dirty = new Set();
   let flushTimer = 0, rotateTimer = 0;
 
@@ -91,7 +92,7 @@ export function marmotClient({ scope, pubkey, identity, on, relays = GROUP_RELAY
     if (!kpBusy) kpBusy = ensure(opts).catch((e) => { dlog('marmot: keypackage', e); return false; }).finally(() => {
       kpBusy = null;
       // a little later: a brand-new wallet is still publishing its lists
-      if (dev && now() - (dev.announced || 0) > 7 * DAY) setTimeout(announce, 8000);
+      setTimeout(announce, 8000);
     });
     return kpBusy;
   }
@@ -105,18 +106,27 @@ export function marmotClient({ scope, pubkey, identity, on, relays = GROUP_RELAY
     return publishKeyPackage(s);
   }
 
-  // Put the account's relay lists where White Noise will find them. These
-  // are the events the account already signed, passed along unchanged — so
-  // no signer is asked, and a login npub's lists stay exactly as its other
-  // clients wrote them. Redone weekly, and until both lists exist.
+  // Put the account's profile and relay lists where White Noise will find
+  // them. These are the events the account already signed, passed along
+  // unchanged — so no signer is asked, and a login npub's lists stay exactly
+  // as its other clients wrote them. Asked for freely (at boot, whenever
+  // Chat is on screen) and looked at once every two minutes at most: an event goes
+  // out when it is new (a renamed profile) or was last sent over a week ago.
   async function announce() {
-    if (stopped || !dev) return;
+    if (stopped || !dev || Date.now() - announcedAt < 120_000) return;
+    announcedAt = Date.now();
     try {
-      const evs = await queryOn(PROFILE_RELAYS, { kinds: [10002, 10050], authors: [pubkey] }, 3500);
-      const newest = (kind) => evs.filter((e) => e.kind === kind).sort((a, b) => b.created_at - a.created_at)[0];
-      const lists = [newest(10002), newest(10050)];
-      for (const ev of lists) if (ev) await publishOn(DIRECTORY_RELAYS, ev);
-      if (lists.every(Boolean)) { dev.announced = now(); await saveDev(); }
+      const evs = await queryOn(PROFILE_RELAYS, { kinds: [0, 10002, 10050], authors: [pubkey] }, 3500);
+      const sent = dev.sent || (dev.sent = {});
+      let changed = false;
+      for (const kind of [0, 10002, 10050]) {
+        const ev = evs.filter((e) => e.kind === kind).sort((a, b) => b.created_at - a.created_at)[0];
+        if (!ev) continue;
+        const last = sent[kind];
+        if (last && last.id === ev.id && now() - last.at < 7 * DAY) continue;
+        if (await publishOn(DIRECTORY_RELAYS, ev)) { sent[kind] = { id: ev.id, at: now() }; changed = true; }
+      }
+      if (changed) await saveDev();
     } catch (e) { dlog('marmot: announce', e); }
   }
 
@@ -387,7 +397,7 @@ export function marmotClient({ scope, pubkey, identity, on, relays = GROUP_RELAY
   }
 
   return {
-    pubkey, groups, load, start, stop, resubscribe, ready, lookup, welcome, accept,
+    pubkey, groups, load, start, stop, resubscribe, ready, announce, lookup, welcome, accept,
     create, send, add, kick, rename, leave, forget,
     event: (kind, content, tags) => M.appEvent(pubkey, kind, content, tags),
     view: (g) => M.groupView(g.tip),

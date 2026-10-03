@@ -9702,6 +9702,8 @@ export function messagesFeature(ctx) {
     // Group chats ride along: the client loads with the wallet, and standing
     // on this screen is what makes us invitable (a KeyPackage on the relays).
     whiteNoise().then(async (c) => {
+      // a profile renamed since boot should reach White Noise's relays too (throttled inside)
+      if (c && wnReadied) c.announce();
       if (!c || wnReadied) return;
       wnReadied = true;
       await c.load();

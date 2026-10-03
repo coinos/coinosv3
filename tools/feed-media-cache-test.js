@@ -14,7 +14,7 @@ let ok = true;
 const check = (n, c, d = '') => { console.log(` ${c ? '✓' : '✗'} ${n}${d ? ' — ' + d : ''}`); if (!c) ok = false; };
 const dir = mkdtempSync(tmpdir() + '/mcache-');
 const ff = (args) => { const p = Bun.spawnSync(['ffmpeg', '-y', '-loglevel', 'error', ...args]); if (p.exitCode !== 0) throw new Error('ffmpeg failed'); };
-for (const n of ['v1', 'v2', 'v3', 'h4', 'n5']) ff(['-f', 'lavfi', '-i', 'testsrc=size=360x640:rate=10', '-t', '2', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', `${dir}/${n}.mp4`]);
+for (const n of ['v1', 'v2', 'v3', 'h4', 'n5', 'r6']) ff(['-f', 'lavfi', '-i', 'testsrc=size=360x640:rate=10', '-t', '2', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', `${dir}/${n}.mp4`]);
 ff(['-f', 'lavfi', '-i', 'testsrc=size=800x600', '-frames:v', '1', `${dir}/slow.jpg`]);
 
 const html = await buildHtml({ minify: true, pwa: false });
@@ -23,9 +23,13 @@ const server = Bun.serve({ port: 0, idleTimeout: 30, fetch: async (req) => {
   const cors = { 'access-control-allow-origin': '*', 'access-control-expose-headers': 'content-range, content-length' };
   // /h/: like Primal's, scripts may read the bytes but not Content-Range;
   // /n/: no CORS at all (a player may show it, a script can't read it)
-  if (path.startsWith('/v/') || path.startsWith('/h/') || path.startsWith('/n/')) {
+  // /r/: like Primal's R2 bucket — CORS headers only when the request has an
+  // Origin, cacheable for hours, and no Vary: a copy the browser cached from
+  // a plain load answers a later CORS load without them
+  if (path.startsWith('/v/') || path.startsWith('/h/') || path.startsWith('/n/') || path.startsWith('/r/')) {
     const f = Bun.file(dir + path.slice(2));
-    const head = path.startsWith('/v/') ? cors : path.startsWith('/h/') ? { 'access-control-allow-origin': '*' } : {};
+    const head = path.startsWith('/v/') ? cors : path.startsWith('/h/') ? { 'access-control-allow-origin': '*' }
+      : path.startsWith('/r/') ? { 'cache-control': 'max-age=14400', ...(req.headers.get('origin') ? { 'access-control-allow-origin': '*' } : {}) } : {};
     if (req.method === 'HEAD') return new Response(null, { headers: { ...head, 'content-type': 'video/mp4', 'content-length': String(f.size) } });
     const m = /bytes=(\d+)-(\d*)/.exec(req.headers.get('range') || '');
     if (m) {
@@ -58,6 +62,7 @@ const tagged = (i, content, url) => finalizeEvent({ kind: 1, created_at: now - 1
   tags: [['imeta', 'url ' + url, 'm video/mp4', 'dim 1080.0x1920.0', 'duration 2.0', 'bitrate 48000']] }, SK);
 all.push(tagged(151, 'size hidden ' + base + '/h/h4.mp4', base + '/h/h4.mp4'));
 all.push(tagged(152, 'no cors ' + base + '/n/n5.mp4', base + '/n/n5.mp4'));
+all.push(tagged(153, 'seen in the feed first ' + base + '/r/r6.mp4', base + '/r/r6.mp4'));
 
 const browser = await puppeteer.launch({ executablePath: process.env.CHROME || '/usr/bin/google-chrome', headless: 'new', args: ['--no-sandbox', '--autoplay-policy=no-user-gesture-required'] });
 const page = await browser.newPage();
@@ -124,24 +129,34 @@ try {
   await waitFor(() => window.__reqs.length > 0, 10000);
   await sleep(1500);
 
+  // the R2-style clip was played in the feed before: the browser's cache
+  // holds it without CORS headers
+  await page.evaluate(async (u) => {
+    await fetch(u, { mode: 'no-cors' }).then((r) => r.blob()).catch(() => {});
+    await new Promise((res) => { const v = document.createElement('video'); v.muted = true; v.preload = 'auto'; v.onloadeddata = v.onerror = res; v.src = u; setTimeout(res, 4000); });
+  }, base + '/r/r6.mp4');
+
   console.log('\n[a crawl straight into the media index]');
   const t0 = Date.now();
   await page.evaluate(() => { window.__reqs = []; document.querySelector('.media-mode[data-mode="videos"]').click(); });
-  check('all five clips are found, the deepest 150 posts down', await waitFor(() => document.querySelectorAll('.media-grid .media-tile.video').length === 5, 15000), String(await tiles()));
+  check('all six clips are found, the deepest 150 posts down', await waitFor(() => document.querySelectorAll('.media-grid .media-tile.video').length === 6, 15000), String(await tiles()));
   const took = Date.now() - t0;
   check('...without waiting on the slow picture along the way', took < 8000, took + ' ms');
   const reqs = await page.evaluate(() => window.__reqs);
   const steps = [...new Set(reqs.map((r) => r.until))]; // each step asks every relay
   check('...asking a hundred posts at a time, each step older than the last', reqs.length >= 1 && reqs.every((r) => r.limit === 100 && r.until)
     && steps.every((u, i) => !i || u < steps[i - 1]), JSON.stringify(steps));
-  check('tile frames are kept as pictures (all but the no-CORS host\'s)', await waitFor(async () => (await (await caches.open('coinos-video-thumbs-v1')).keys()).length === 4, 8000));
-  await waitFor(() => /h4\.mp4[^\]]*probed|probed[^\]]*h4/.test(localStorage.getItem('coinos-video-info') || '') && /n5\.mp4[^\]]*failed/.test(localStorage.getItem('coinos-video-info') || ''), 8000); // the write-behind
+  check('tile frames are kept as pictures (all but the no-CORS host\'s)', await waitFor(async () => (await (await caches.open('coinos-video-thumbs-v1')).keys()).length === 5, 12000),
+    String(await page.evaluate(async () => (await (await caches.open('coinos-video-thumbs-v1')).keys()).map((r) => decodeURIComponent(r.url).split('/').pop()).join(','))));
+  await waitFor(() => /h4\.mp4[^\]]*probed|probed[^\]]*h4/.test(localStorage.getItem('coinos-video-info') || '') && /n5\.mp4[^\]]*failedAt/.test(localStorage.getItem('coinos-video-info') || ''), 8000); // the write-behind
   const info = await page.evaluate(() => Object.fromEntries(JSON.parse(localStorage.getItem('coinos-video-info') || '[]').map(([u, d]) => [u.split('/').pop(), d])));
   check('a host hiding Content-Range gives its size to a HEAD', info['h4.mp4']?.probed && info['h4.mp4'].size > 1000 && info['h4.mp4'].size !== 12000, JSON.stringify(info['h4.mp4']));
+  check('a clip the browser cached from a plain load is still measured, and its frame kept', info['r6.mp4']?.probed === true
+    && await page.evaluate(async () => (await (await caches.open('coinos-video-thumbs-v1')).keys()).some((r) => /r6\.mp4/.test(decodeURIComponent(r.url)))), JSON.stringify(info['r6.mp4']));
   check('a host refusing the probe still gets a frame in its tile', await page.evaluate(() => {
     const v = [...document.querySelectorAll('.media-tile video')].find((x) => /n5/.test(x.getAttribute('data-src')));
     return !!v && v.readyState >= 2 && v.videoWidth > 0; }), JSON.stringify(info['n5.mp4']));
-  check('...and its failure is dated, to be asked again later', typeof info['n5.mp4']?.failed === 'number');
+  check('...and its failure is dated, to be asked again later', typeof info['n5.mp4']?.failedAt === 'number');
   await sleep(2000); // the index's write-behind
 
   console.log('\n[a reload]');
@@ -150,8 +165,8 @@ try {
   await page.evaluate(() => { window.__reqs = []; });
   const t1 = Date.now();
   await openFeed();
-  check('the grid paints from the index at once', await waitFor(() => document.querySelectorAll('.media-grid .media-tile.video').length === 5, 4000), (Date.now() - t1) + ' ms');
-  check('...its tiles pictures from the kept frames, no player needed', await waitFor(() => [...document.querySelectorAll('.media-grid .media-tile.video img')].filter((i) => i.src.startsWith('blob:')).length === 4, 4000));
+  check('the grid paints from the index at once', await waitFor(() => document.querySelectorAll('.media-grid .media-tile.video').length === 6, 4000), (Date.now() - t1) + ' ms');
+  check('...its tiles pictures from the kept frames, no player needed', await waitFor(() => [...document.querySelectorAll('.media-grid .media-tile.video img')].filter((i) => i.src.startsWith('blob:')).length === 5, 4000));
   await sleep(2500);
   const after = await page.evaluate(() => window.__reqs.filter((r) => r.limit === 100));
   const deepest = all.find((e) => /far down/.test(e.content)).created_at;

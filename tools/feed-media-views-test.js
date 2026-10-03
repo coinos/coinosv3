@@ -168,7 +168,7 @@ try {
   check('Videos shows a grid of the vertical clips, not the pager yet', await waitFor(() => document.querySelectorAll('.media-grid .media-tile.video').length === 3, 8000)
     && await page.evaluate(() => !document.querySelector('.media-pager')));
   check('every tile gets a thumbnail — the 50 MB one too, with its cost as a badge', await waitFor(() =>
-    [...document.querySelectorAll('.media-tile video')].filter((v) => v.getAttribute('src')).length === 3
+    [...document.querySelectorAll('.media-tile.video')].filter((t) => (t.querySelector('img')?.src || '').startsWith('blob:') || t.querySelector('video')?.getAttribute('src')).length === 3
     && [...document.querySelectorAll('.media-tile-badge')].some((x) => /50 MB/.test(x.textContent)), 8000));
   await shot('video-grid');
   await page.evaluate(() => document.querySelector('.media-grid .media-tile.video').click());

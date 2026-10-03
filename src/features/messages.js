@@ -5488,7 +5488,7 @@ export function messagesFeature(ctx) {
   // wait for a tap — unless the reader asked for large clips to play.
   const VIDEO_INFO_KEY = 'coinos-video-info', VIDEO_INFO_KEEP = 2000, VIDEO_PROBE_BYTES = 65536;
   const VIDEO_LARGE_KEY = 'coinos-video-large';
-  const videoInfo = new Map(); // url -> { size, w, h, image, faststart, ranges, probed, failed }
+  const videoInfo = new Map(); // url -> { size, w, h, image, faststart, ranges, moovEnd, probed, failedAt }
   try { for (const [u, d] of JSON.parse(localStorage.getItem(VIDEO_INFO_KEY) || '[]')) videoInfo.set(u, d); } catch {}
   let videoInfoFlush = null;
   const saveVideoInfo = () => {
@@ -5523,11 +5523,11 @@ export function messagesFeature(ctx) {
     const u32 = (i) => ((b[i] << 24) | (b[i + 1] << 16) | (b[i + 2] << 8) | b[i + 3]) >>> 0;
     const type = (i) => String.fromCharCode(b[i], b[i + 1], b[i + 2], b[i + 3]);
     if (b.length >= 4 && u32(0) === 0x1a45dfa3) return { faststart: true }; // WebM/Matroska streams from the start
-    let faststart, i = 0;
+    let faststart, moovEnd = 0, i = 0;
     while (i + 8 <= b.length) {
       let size = u32(i);
       const tp = type(i + 4);
-      if (tp === 'moov') { faststart = true; break; }
+      if (tp === 'moov') { faststart = true; moovEnd = i + size; break; }
       if (tp === 'mdat') { faststart = false; break; }
       if (size === 1) size = i + 16 <= b.length ? u32(i + 8) * 2 ** 32 + u32(i + 12) : 0;
       if (size < 8) break;
@@ -5541,19 +5541,19 @@ export function messagesFeature(ctx) {
       const tw = u32(end - 8) >>> 16, th = u32(end - 4) >>> 16;
       if (tw && th) { w = tw; h = th; }
     }
-    return { faststart, ...(w ? { w, h } : {}) };
+    return { faststart, ...(moovEnd ? { moovEnd } : {}), ...(w ? { w, h } : {}) };
   }
   const videoProbes = new Map();
   let videoProbing = 0;
   const videoProbeQueue = [];
+  const probeFailedLately = (d) => !!d && typeof d.failedAt === 'number' && Date.now() - d.failedAt < 3_600_000;
   function probeVideo(url, layout = false) {
     const have = videoInfo.get(url);
     // a post that states size and shape is taken at its word: no request at
     // all — unless the file's layout is wanted (a thumbnail)
     // a host that didn't answer is asked again after an hour (a phone on
     // a bad connection must not mark a clip unmeasurable for good)
-    const failedLately = have && typeof have.failed === 'number' && Date.now() - have.failed < 3_600_000;
-    if (have && (have.probed || failedLately || (!layout && have.size && have.w))) return Promise.resolve(have);
+    if (have && (have.probed || probeFailedLately(have) || (!layout && have.size && have.w))) return Promise.resolve(have);
     if (videoProbes.has(url)) return videoProbes.get(url);
     const task = new Promise((resolve) => videoProbeQueue.push({ url, resolve })).finally(() => videoProbes.delete(url));
     videoProbes.set(url, task);
@@ -5572,7 +5572,12 @@ export function messagesFeature(ctx) {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 10_000);
     try {
-      const r = await fetch(url, { headers: { Range: 'bytes=0-' + (VIDEO_PROBE_BYTES - 1) }, signal: ctrl.signal });
+      // Past the browser's cache (no-store), always: some hosts (Primal's R2
+      // bucket) send CORS headers only to a request that has an Origin, and
+      // say nothing of it in Vary — so the copy the cache kept from a
+      // player's plain load answers this request without them, and it fails.
+      // Any clip that had played in the feed was "unmeasurable" that way.
+      const r = await fetch(url, { headers: { Range: 'bytes=0-' + (VIDEO_PROBE_BYTES - 1) }, cache: 'no-store', signal: ctrl.signal });
       if (!r.ok) throw new Error('HTTP ' + r.status);
       const ranges = r.status === 206;
       const total = ranges ? +(/\/(\d+)\s*$/.exec(r.headers.get('content-range') || '') || [])[1] : +r.headers.get('content-length');
@@ -5590,13 +5595,13 @@ export function messagesFeature(ctx) {
       let o = 0;
       for (const p of parts) { if (o >= buf.length) break; buf.set(p.subarray(0, buf.length - o), o); o += p.length; }
       const head = readMp4Head(buf);
-      const d = { probed: true, ranges, faststart: head.faststart === true, failed: undefined };
+      const d = { probed: true, ranges, faststart: head.faststart === true, failedAt: undefined, ...(head.moovEnd ? { moovEnd: head.moovEnd } : {}) };
       if (total > 0) d.size = total;
       else {
         // a server that hides Content-Range from scripts (Primal's) still
         // says Content-Length to a HEAD, which any page may read
         try {
-          const hr = await fetch(url, { method: 'HEAD', signal: AbortSignal.timeout(5000) });
+          const hr = await fetch(url, { method: 'HEAD', cache: 'no-store', signal: AbortSignal.timeout(5000) });
           const n = +hr.headers.get('content-length');
           if (hr.ok && n > 0) d.size = n;
         } catch {}
@@ -5605,7 +5610,7 @@ export function messagesFeature(ctx) {
       if (head.w) rememberVideo(url, head.w, head.h);
       noteVideoInfo(url, d);
     } catch {
-      noteVideoInfo(url, { failed: Date.now() }); // a host that won't say (no CORS, down, slow): asked again in an hour
+      noteVideoInfo(url, { failedAt: Date.now() }); // a host that won't say (no CORS, down, slow): asked again in an hour
     } finally { clearTimeout(timer); }
     return videoInfo.get(url);
   }
@@ -9673,7 +9678,7 @@ export function messagesFeature(ctx) {
   // one (when the host allows the pixels to be read), stored small in the
   // Cache API, and painted as a plain picture from then on — in the grid,
   // as the pager's poster and the feed's.
-  const VIDEO_THUMB_CACHE = 'coinos-video-thumbs-v1';
+  const VIDEO_THUMB_CACHE = 'coinos-video-thumbs-v1', VIDEO_THUMB_MAX = 600;
   const videoThumbs = new Map(); // url -> object URL
   const thumbKey = (url) => 'https://video-thumb.invalid/?u=' + encodeURIComponent(url);
   async function warmVideoThumbs(evs) {
@@ -9690,18 +9695,80 @@ export function messagesFeature(ctx) {
     if (found && mediaMode !== 'all') scheduleRepaint();
   }
   function keepVideoThumb(v, url) {
-    if (videoThumbs.has(url) || !v.videoWidth) return;
+    if (videoThumbs.has(url)) return Promise.resolve(true);
+    if (!v.videoWidth) return Promise.resolve(false);
+    return new Promise((resolve) => {
+      try {
+        const w = Math.min(480, v.videoWidth), hh = Math.round(w * v.videoHeight / v.videoWidth); // sharp in a tile, fair as the pager's poster
+        const cv = document.createElement('canvas');
+        cv.width = w; cv.height = hh;
+        cv.getContext('2d').drawImage(v, 0, 0, w, hh);
+        cv.toBlob((blob) => {
+          if (!blob) { resolve(false); return; }
+          videoThumbs.set(url, URL.createObjectURL(blob));
+          if (typeof caches !== 'undefined') caches.open(VIDEO_THUMB_CACHE).then(async (s) => {
+            await s.put(thumbKey(url), new Response(blob, { headers: { 'content-type': 'image/jpeg' } }));
+            // oldest out first, a batch at a time
+            const keys = await s.keys();
+            if (keys.length > VIDEO_THUMB_MAX) for (const k of keys.slice(0, keys.length - VIDEO_THUMB_MAX + 50)) s.delete(k);
+          }).catch(() => {});
+          resolve(true);
+        }, 'image/jpeg', 0.75);
+      } catch { resolve(false); }
+    });
+  }
+  // A clip's first frame without a player on the clip itself: the opening
+  // of the file (its index and about a megabyte after) is fetched as bytes,
+  // past the browser's cache, and decoded from a blob — whose pixels are
+  // ours to read whatever the host's player-side CORS and whatever the
+  // cache holds (see runVideoProbe). For a file that leads with its index,
+  // from a host the probe could read; anything else keeps its player.
+  const FRAME_BYTES_AFTER = 1_000_000, FRAME_BYTES_MAX = 4_000_000;
+  const frameGrabs = new Map(), frameQueue = [], frameFailed = new Set();
+  let frameGrabbing = 0;
+  function grabFrame(url) {
+    if (videoThumbs.has(url)) return Promise.resolve(true);
+    const d = videoInfo.get(url) || {};
+    if (!d.probed || !d.faststart || !d.ranges || frameFailed.has(url) || (d.moovEnd || 0) + FRAME_BYTES_AFTER > FRAME_BYTES_MAX) return Promise.resolve(false);
+    if (frameGrabs.has(url)) return frameGrabs.get(url);
+    const task = new Promise((resolve) => frameQueue.push({ url, resolve })).finally(() => frameGrabs.delete(url));
+    frameGrabs.set(url, task);
+    pumpFrames();
+    return task;
+  }
+  function pumpFrames() {
+    while (frameGrabbing < 2 && frameQueue.length) {
+      const { url, resolve } = frameQueue.shift();
+      frameGrabbing++;
+      runFrameGrab(url).catch(() => false).then((ok) => { if (!ok) frameFailed.add(url); resolve(!!ok); })
+        .finally(() => { frameGrabbing--; pumpFrames(); });
+    }
+  }
+  async function runFrameGrab(url) {
+    const d = videoInfo.get(url) || {};
+    const last = (d.moovEnd || 200_000) + FRAME_BYTES_AFTER - 1;
+    const r = await fetch(url, { headers: { Range: 'bytes=0-' + last }, cache: 'no-store', signal: AbortSignal.timeout(20_000) });
+    if (r.status !== 206 && !(r.ok && d.size && d.size <= last + 1)) { try { r.body.cancel(); } catch {} return false; }
+    const blob = new Blob([await r.arrayBuffer()], { type: (r.headers.get('content-type') || '').startsWith('video/') ? r.headers.get('content-type') : 'video/mp4' });
+    const src = URL.createObjectURL(blob);
+    const v = document.createElement('video');
+    v.muted = true; v.playsInline = true; v.preload = 'auto';
     try {
-      const w = 270, hh = Math.round(w * v.videoHeight / v.videoWidth);
-      const cv = document.createElement('canvas');
-      cv.width = w; cv.height = hh;
-      cv.getContext('2d').drawImage(v, 0, 0, w, hh);
-      cv.toBlob((blob) => {
-        if (!blob) return;
-        videoThumbs.set(url, URL.createObjectURL(blob));
-        if (typeof caches !== 'undefined') caches.open(VIDEO_THUMB_CACHE).then((s) => s.put(thumbKey(url), new Response(blob, { headers: { 'content-type': 'image/jpeg' } }))).catch(() => {});
-      }, 'image/jpeg', 0.75);
-    } catch {} // a host that won't let its pixels be read: the tile keeps its player
+      const shown = await new Promise((resolve) => {
+        const timer = setTimeout(() => resolve(v.readyState >= 2), 6000);
+        const done = (ok) => { clearTimeout(timer); resolve(ok); };
+        v.onloadeddata = () => { try { v.currentTime = 0.1; } catch { done(true); } };
+        v.onseeked = () => done(true);
+        v.onerror = () => done(false);
+        v.src = src;
+      });
+      if (!shown) return false;
+      return await keepVideoThumb(v, url);
+    } finally {
+      v.onloadeddata = v.onseeked = v.onerror = null;
+      try { v.removeAttribute('src'); v.load(); } catch {}
+      URL.revokeObjectURL(src);
+    }
   }
 
   // Videos is for flipping through phone-shaped clips: only those known to
@@ -9713,7 +9780,7 @@ export function messagesFeature(ctx) {
     const k = d.w && d.h ? d : videoDims.get(url) || mediaReady.get(url);
     const w = k && (k.w || k.width), hh = k && (k.h || k.height);
     if (w && hh) return hh > w;
-    if (!d.failed && !(d.probed && (!d.ranges || videoUnknown.has(url)))) measureClip(url);
+    if (!probeFailedLately(d) && !(d.probed && (!d.ranges || videoUnknown.has(url)))) measureClip(url);
     return false;
   }
   const measuring = new Set();
@@ -9808,9 +9875,19 @@ export function messagesFeature(ctx) {
         // it; that one shows what it costs instead. A clip over budget wears
         // its cost as a badge either way.
         const url = v.getAttribute('data-src').replace(/#t=[\d.]+$/, '');
-        probeVideo(url, true).then((d) => {
+        probeVideo(url, true).then(async (d) => {
           if (!v.isConnected) return;
           const heavy = videoHeavy(url);
+          // the frame as a picture, kept for good, when the bytes can be had
+          if (await grabFrame(url)) {
+            if (!v.isConnected) return;
+            const img = document.createElement('img');
+            img.alt = ''; img.draggable = false; img.src = videoThumbs.get(url);
+            v.replaceWith(img);
+            if (heavy && d.size) img.after(h('span', { class: 'media-tile-badge' }, heavyLabel(url)));
+            return;
+          }
+          if (!v.isConnected) return;
           // unmeasured (the probe failed): try for a frame anyway, but give
           // up and let go after eight seconds, so an index-last file can't
           // stream whole into a tile
@@ -9824,17 +9901,9 @@ export function messagesFeature(ctx) {
             v.addEventListener('loadeddata', () => clearTimeout(cap), { once: true });
           }
           if (still) {
+            // (a plain load: shown, not kept — a player's pixels can only be
+            // read from a CORS load, and those fail on a cached plain copy)
             v.muted = true;
-            // readable pixels, so the frame can be kept; a host that refuses
-            // CORS gets a second, plain try (shown, not kept)
-            v.crossOrigin = 'anonymous';
-            const keep = () => { if (v.readyState >= 2) keepVideoThumb(v, url); };
-            v.addEventListener('seeked', keep, { once: true });
-            v.addEventListener('loadeddata', () => setTimeout(keep, 150), { once: true });
-            v.addEventListener('error', () => {
-              if (!v.hasAttribute('crossorigin')) return;
-              v.removeAttribute('crossorigin'); v.src = v.getAttribute('data-src');
-            }, { once: true });
             v.src = v.getAttribute('data-src');
             if (heavy && d.size) v.after(h('span', { class: 'media-tile-badge' }, heavyLabel(url)));
             return;
@@ -9917,16 +9986,6 @@ export function messagesFeature(ctx) {
           }) }, h('span', { class: 'i', html: I_ZAP }), h('span', { class: 'n' })))));
     slide._ev = ev;
     if (video) {
-      // readable pixels, so its frame can be kept; a host without CORS gets
-      // the same source again, plainly
-      media.crossOrigin = 'anonymous';
-      media.addEventListener('error', () => {
-        if (!media.hasAttribute('crossorigin') || !media.getAttribute('src')) return;
-        const src = media.getAttribute('src');
-        media.removeAttribute('crossorigin');
-        media.setAttribute('src', src);
-        if (pager && pager.cur === slide && !slide.querySelector('.vid-heavy')) media.play().catch(() => {});
-      });
       media.muted = !pagerLoud;
       media.addEventListener('click', () => {}); // a tap is the pager's (overlay), not the player's
     }
@@ -9976,14 +10035,18 @@ export function messagesFeature(ctx) {
         // its index or is served in ranges) — again on every return, since
         // a slide left behind lets go of its file
         slidePoster(slide);
-        const d = videoInfo.get(url) || {};
-        if (!videoThumbs.has(url) && (d.faststart || d.ranges || !d.probed)) {
-          if (!v.getAttribute('src')) {
-            v.preload = 'metadata';
-            v.addEventListener('loadeddata', () => setTimeout(() => keepVideoThumb(v, url), 150), { once: true });
-            v.setAttribute('src', url + '#t=0.1');
-          }
-        } else pagerRelease(slide);
+        if (videoThumbs.has(url)) pagerRelease(slide);
+        else grabFrame(url).then((kept) => {
+          if (!pager || !slide.isConnected) return;
+          if (kept) { slidePoster(slide); return; }
+          // no frame to keep (the host's bytes can't be read, or the index
+          // trails): the player shows its own first frame under the cover
+          const d = videoInfo.get(url) || {};
+          if (pager.cur !== slide || !slide.querySelector('.vid-heavy') || v.getAttribute('src')) return;
+          if (!(d.faststart || d.ranges || !d.probed)) return;
+          v.preload = 'metadata';
+          v.setAttribute('src', url + '#t=0.1');
+        });
         if (slide.querySelector('.vid-heavy')) return;
         slide.append(h('button', { class: 'vid-heavy', type: 'button', 'aria-label': t('videoTapToPlay'), onClick: (e) => {
           e.stopPropagation();
@@ -10007,8 +10070,6 @@ export function messagesFeature(ctx) {
     const v = slide.querySelector('video.mp-media');
     if (/#t=[\d.]+$/.test(v.getAttribute('src') || '')) v.setAttribute('src', v.getAttribute('data-src')); // the still's src: from the start now
     v.preload = 'auto';
-    const url = v.getAttribute('data-src');
-    if (!videoThumbs.has(url)) v.addEventListener('loadeddata', () => setTimeout(() => keepVideoThumb(v, url), 150), { once: true });
     pagerAttach(slide);
     v.muted = !pagerLoud;
     v.play().catch((err) => {

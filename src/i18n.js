@@ -974,6 +974,7 @@ const STR = {
     arkZapBtn: 'Zap',
     arkZapSentTitle: 'Zapped!',
     arkZapNoPostZap: 'Can’t zap this post: its author has no Lightning address or Ark address.',
+    arkZapLnDown: 'Can’t pay Lightning right now: Spending isn’t connected. Try again in a moment.',
     arkZapNoArkGift: 'They haven’t set up an Ark address yet. Send the zap as an Ark gift locked to their nostr key instead. They’ll get a DM with the claim link, and only they can open it.',
     arkZapGiftBtn: 'Send locked gift',
     arkZapGiftHint: 'Instant Ark gift only their nostr key can claim. You can revoke it from the gift card while unclaimed.',

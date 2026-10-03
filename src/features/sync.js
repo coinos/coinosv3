@@ -163,7 +163,15 @@ export function installSyncWallet(wallet, { outbox = syncOutbox() } = {}) {
     // broad profile relays — independent of whether cross-device sync is on.
     async nostrProfile(pkHex) {
       if (this.offline) return null;
-      return fetchNostrProfile(pkHex);
+      // Our relays prune: an old kind 0 (and the lightning address on it)
+      // may only survive on index relays or the person's own. Ask both ways
+      // at once; a lightning address from either wins.
+      const [near, deep] = await Promise.all([
+        fetchNostrProfile(pkHex).catch(() => null),
+        this.deepProfile ? this.deepProfile(pkHex).catch(() => null) : null,
+      ]);
+      const pays = (p) => p && (p.lud16 || p.lud06);
+      return pays(near) ? near : pays(deep) ? deep : near || deep;
     },
 
     // Relays to advertise in a zap request so we can later find the receipt:

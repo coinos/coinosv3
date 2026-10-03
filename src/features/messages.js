@@ -3430,6 +3430,21 @@ export function messagesFeature(ctx) {
     return pending;
   }
 
+  // A person's profile the way their profile page finds it: index relays and
+  // their own relays, not just ours. The zap path asks here — a lightning
+  // address on a kind 0 that our relays have long since pruned is still
+  // somebody's lightning address.
+  wallet.deepProfile = async (pk) => {
+    await fetchFullProfile(pk);
+    const m = fullProfiles.get(pk);
+    if (!m || typeof m !== 'object') return null;
+    const str = (v) => (typeof v === 'string' && v.trim() ? v.trim() : null);
+    return {
+      name: str(m.display_name) || str(m.name), picture: str(m.picture), about: str(m.about), nip05: str(m.nip05),
+      lud16: str(m.lud16), lud06: str(m.lud06),
+    };
+  };
+
   // Warm a profile PAGE (full kind-0 + latest notes + relay list) before
   // anyone taps it, so the page opens complete instead of behind spinners.
   // Queued with a small concurrency cap: likely tap-targets only, never a

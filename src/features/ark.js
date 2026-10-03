@@ -1724,7 +1724,8 @@ export function arkFeature(ctx) {
       // A post's author with no Lightning or Ark address can't be zapped:
       // a gift DM is for paying a person on purpose (Pay, the send form),
       // not something a tap on a post should send.
-      if (z.eventId) { bail(t('arkZapNoPostZap')); render(); return; }
+      // They do have a lightning address — it's paying it that isn't possible right now.
+      if (z.eventId) { bail(t(z.lnOk ? 'arkZapLnDown' : 'arkZapNoPostZap')); render(); return; }
       // 4. last resort: an ark gift locked to their nostr key, DMed to them.
       // To the payer it's just a zap.
       if (z.autoSat && zapGiftOk(z.autoSat)) {

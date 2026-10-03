@@ -29,6 +29,7 @@ import {
   packAddr, packNaddr, parsePackRef, parsePackAddr, parseEmojiSet,
 } from '../emoji.js';
 import { saveInbox } from '../dm-inbox.js';
+import { loadMediaIndex, saveMediaIndex, wipeMediaIndex } from '../media-cache.js';
 import { mergeFeedWindow } from '../feed-window.js';
 import { createThreadStore } from '../thread-cache.js';
 import { createFeedCache, FEED_CACHE_POSTS, FEED_SEED_POSTS } from '../feed-cache.js';
@@ -5485,7 +5486,7 @@ export function messagesFeature(ctx) {
   // the server won't serve ranges. Its track header gives the size on screen
   // too. Clips over the budget, above 1080p, or that we couldn't measure
   // wait for a tap — unless the reader asked for large clips to play.
-  const VIDEO_INFO_KEY = 'coinos-video-info', VIDEO_INFO_KEEP = 600, VIDEO_PROBE_BYTES = 65536;
+  const VIDEO_INFO_KEY = 'coinos-video-info', VIDEO_INFO_KEEP = 2000, VIDEO_PROBE_BYTES = 65536;
   const VIDEO_LARGE_KEY = 'coinos-video-large';
   const videoInfo = new Map(); // url -> { size, w, h, image, faststart, ranges, probed, failed }
   try { for (const [u, d] of JSON.parse(localStorage.getItem(VIDEO_INFO_KEY) || '[]')) videoInfo.set(u, d); } catch {}
@@ -6049,6 +6050,7 @@ export function messagesFeature(ctx) {
     let got = false;
     await queryStreamOn(relays, filter, async (ev) => {
       if (c.stopped) return;
+      if (merge && merge.sink) { if (qualifies(ev)) { merge.sink(ev); got = true; } return; } // the media crawl's: into the index, not the page
       sawBack(c, [ev]);
       if (qualifies(ev) && await mergeFeed([ev], merge, c)) got = true;
     }, maxWait);
@@ -6279,7 +6281,7 @@ export function messagesFeature(ctx) {
         // a grid holds only the posts with media: keep fetching while its
         // foot is near (within reason — a firehose has no end)
         const g = document.querySelector('.media-grid');
-        if (c.notes.length < 3000 && (!g || g.getBoundingClientRect().bottom < window.innerHeight * 3)) loadOlderFeed().catch(() => {});
+        if (!g || g.getBoundingClientRect().bottom < window.innerHeight * 3) crawlMedia(c).catch(() => {});
         return;
       }
       if (c.win && c.win.bottom) return; // rows below are held back by the window, not by paging
@@ -6421,7 +6423,7 @@ export function messagesFeature(ctx) {
     // Nothing is fetched until the clip is about to play (preload none): a
     // window of rows used to pull every clip's metadata, which for a file
     // with its index at the end can be most of the file.
-    const v = h('video', { src: url, class: 'note-video', controls: true, poster: (videoInfo.get(url) || {}).image || undefined,
+    const v = h('video', { src: url, class: 'note-video', controls: true, poster: videoThumbs.get(url) || (videoInfo.get(url) || {}).image || undefined,
       preload: 'none', playsinline: true, muted: loud ? undefined : true,
       style: stable ? videoBoxStyle(feedMedia(url)) : undefined,
       // learned now, used by the next paint of any row with this clip
@@ -9576,6 +9578,118 @@ export function messagesFeature(ctx) {
     }
     return null;
   };
+  // ---- the media index: each feed's pictures and clips, kept apart -------
+  // (src/media-cache.js) The grid reads from here, not from the feed's page
+  // of posts: a reload paints what was found before, at once, and the crawl
+  // for more picks up where it stopped instead of re-reading the relays.
+  const mediaIdx = new Map(); // key -> { key, images: Map, videos: Map, checked: Set, until, end, loaded }
+  const mediaIdxKey = (feedId) => (mePk() || 'visitor') + '|' + feedId;
+  const hasMediaOf = (ev, kind) => kind === 'videos' ? noteVideoUrls(ev.content).length > 0
+    : noteMediaUrls(ev.content).some((u) => !u.startsWith('https://i.ytimg.com/'));
+  function mediaIndex(feedId) {
+    const key = mediaIdxKey(feedId);
+    let r = mediaIdx.get(key);
+    if (r) return r;
+    r = { key, images: new Map(), videos: new Map(), checked: new Set(), until: 0, end: false, loaded: false };
+    mediaIdx.set(key, r);
+    loadMediaIndex(key).then(async (rec) => {
+      if (rec) {
+        for (const kind of ['images', 'videos']) for (const e of rec[kind] || []) if (!r[kind].has(e.id)) r[kind].set(e.id, e);
+        if (rec.until && (!r.until || rec.until < r.until)) r.until = rec.until;
+        // the bottom of a feed is looked for again after a day (a relay
+        // added, a follow back-filled)
+        if (rec.end && Date.now() - rec.end < 86_400_000) r.end = r.end || rec.end;
+      }
+      // kept frames first, so the first paint of the grid is pictures
+      await warmVideoThumbs([...r.videos.values()]);
+      r.loaded = true;
+      if (mediaMode !== 'all') scheduleRepaint();
+    });
+    return r;
+  }
+  function saveMediaIdx(r) {
+    clearTimeout(r.saveT);
+    r.saveT = setTimeout(() => {
+      const list = (m) => [...m.values()].sort((a, b) => b.created_at - a.created_at);
+      saveMediaIndex(r.key, { images: list(r.images), videos: list(r.videos), until: r.until, end: r.end });
+    }, 1500);
+  }
+  // file the posts that carry media; each post is looked at once
+  function indexMedia(r, evs) {
+    let n = 0;
+    for (const e of evs) {
+      if (r.checked.has(e.id)) continue;
+      r.checked.add(e.id);
+      if (!FEED_KINDS.includes(e.kind) || isReply(e)) continue;
+      for (const kind of ['images', 'videos']) if (!r[kind].has(e.id) && hasMediaOf(e, kind)) { r[kind].set(e.id, e); n++; }
+    }
+    if (n) saveMediaIdx(r);
+    return n;
+  }
+  // Older posts for the grid, read straight into the index: a hundred a
+  // time, no waiting on avatars, pictures and link cards (the grid shows
+  // none of that), and the feed's own page of posts left as it was.
+  let mediaCrawling = null;
+  function crawlMedia(c = feedNow()) {
+    const def = feedDef(c.id);
+    if (!def || !feedHasQuery(def)) return Promise.resolve();
+    if (def.curated) return loadOlderFeed(); // a curated feed pages its own way
+    const r = mediaIndex(c.id);
+    if (!r.loaded || r.end || mediaCrawling) return mediaCrawling || Promise.resolve();
+    mediaCrawling = (async () => {
+      scheduleRepaint();
+      const from = [r.until, c.notes.at(-1)?.created_at].filter(Boolean);
+      const until = (from.length ? Math.min(...from) : Math.floor(Date.now() / 1000) + 1) - 1;
+      let oldest = Infinity, saw = 0;
+      const sink = (ev) => {
+        saw++;
+        if (ev.created_at < oldest) oldest = ev.created_at;
+        noteForSpam(ev);
+        indexMedia(r, [ev]);
+      };
+      try { await feedPass({ until, limit: 100 }, { sink }, c); } catch {}
+      if (!saw) r.end = Date.now();
+      else r.until = Math.min(oldest, until);
+      saveMediaIdx(r);
+    })().finally(() => { mediaCrawling = null; scheduleRepaint(); });
+    return mediaCrawling;
+  }
+
+  // A clip's first frame, kept: drawn from the tile's player once it has
+  // one (when the host allows the pixels to be read), stored small in the
+  // Cache API, and painted as a plain picture from then on — in the grid,
+  // as the pager's poster and the feed's.
+  const VIDEO_THUMB_CACHE = 'coinos-video-thumbs-v1';
+  const videoThumbs = new Map(); // url -> object URL
+  const thumbKey = (url) => 'https://video-thumb.invalid/?u=' + encodeURIComponent(url);
+  async function warmVideoThumbs(evs) {
+    if (typeof caches === 'undefined') return;
+    let found = 0;
+    try {
+      const store = await caches.open(VIDEO_THUMB_CACHE);
+      for (const e of evs) for (const url of noteVideoUrls(e.content)) {
+        if (videoThumbs.has(url)) continue;
+        const res = await store.match(thumbKey(url));
+        if (res) { videoThumbs.set(url, URL.createObjectURL(await res.blob())); found++; }
+      }
+    } catch {}
+    if (found && mediaMode !== 'all') scheduleRepaint();
+  }
+  function keepVideoThumb(v, url) {
+    if (videoThumbs.has(url) || !v.videoWidth) return;
+    try {
+      const w = 270, hh = Math.round(w * v.videoHeight / v.videoWidth);
+      const cv = document.createElement('canvas');
+      cv.width = w; cv.height = hh;
+      cv.getContext('2d').drawImage(v, 0, 0, w, hh);
+      cv.toBlob((blob) => {
+        if (!blob) return;
+        videoThumbs.set(url, URL.createObjectURL(blob));
+        if (typeof caches !== 'undefined') caches.open(VIDEO_THUMB_CACHE).then((s) => s.put(thumbKey(url), new Response(blob, { headers: { 'content-type': 'image/jpeg' } }))).catch(() => {});
+      }, 'image/jpeg', 0.75);
+    } catch {} // a host that won't let its pixels be read: the tile keeps its player
+  }
+
   // Videos is for flipping through phone-shaped clips: only those known to
   // stand taller than they're wide. A clip of unknown shape is measured
   // (the header probe, or a player when the index sits at the end of a
@@ -9598,7 +9712,10 @@ export function messagesFeature(ctx) {
   }
   function mediaItems(c, kind) {
     const out = [], seen = new Set();
-    for (const ev of c.notes) {
+    const r = mediaIndex(c.id);
+    indexMedia(r, c.notes);
+    const evs = [...r[kind].values()].sort((a, b) => b.created_at - a.created_at);
+    for (const ev of evs) {
       if (hidden(ev)) continue;
       if (kind === 'videos') learnVideoMeta(ev);
       const urls = kind === 'videos' ? noteVideoUrls(ev.content).filter(verticalClip)
@@ -9636,7 +9753,8 @@ export function messagesFeature(ctx) {
   function mediaGrid(c) {
     const items = mediaItems(c, mediaMode);
     if (!items.length) {
-      return c.booting || c.status === 'loading' || c.loadingMore || !c.end
+      const r = mediaIndex(c.id);
+      return !r.loaded || mediaCrawling || (!r.end && feedHasQuery(feedDef(c.id)) && !feedDef(c.id)?.curated) || c.booting || c.status === 'loading' || c.loadingMore
         || (mediaMode === 'videos' && (videoProbes.size || videoProbeQueue.length))
         ? h('div', { class: 'row gap6', 'data-key': 'media-empty', style: 'justify-content:center;padding:12px 0' }, h('span', { class: 'spinner sm' }))
         : h('div', { class: 'small faint', 'data-key': 'media-empty', style: 'text-align:center;padding:12px 0' },
@@ -9645,7 +9763,7 @@ export function messagesFeature(ctx) {
     return h('div', { class: 'media-grid', 'data-key': 'media-grid:' + mediaMode },
       ...items.map((it) => {
         const k = mediaKey(it);
-        const poster = mediaMode === 'videos' ? posterOf(it.ev, it.url) || (videoInfo.get(it.url) || {}).image : null;
+        const poster = mediaMode === 'videos' ? videoThumbs.get(it.url) || posterOf(it.ev, it.url) || (videoInfo.get(it.url) || {}).image : null;
         return h('button', {
           class: 'media-tile' + (mediaMode === 'videos' ? ' video' : ''), type: 'button', 'data-key': 'tile:' + k,
           'aria-label': displayName(it.ev.pubkey), onClick: () => openMediaPager(mediaMode, k),
@@ -9681,7 +9799,18 @@ export function messagesFeature(ctx) {
           const heavy = videoHeavy(url);
           const still = d && (d.probed ? d.faststart || d.ranges : !heavy);
           if (still) {
-            v.muted = true; v.src = v.getAttribute('data-src');
+            v.muted = true;
+            // readable pixels, so the frame can be kept; a host that refuses
+            // CORS gets a second, plain try (shown, not kept)
+            v.crossOrigin = 'anonymous';
+            const keep = () => { if (v.readyState >= 2) keepVideoThumb(v, url); };
+            v.addEventListener('seeked', keep, { once: true });
+            v.addEventListener('loadeddata', () => setTimeout(keep, 150), { once: true });
+            v.addEventListener('error', () => {
+              if (!v.hasAttribute('crossorigin')) return;
+              v.removeAttribute('crossorigin'); v.src = v.getAttribute('data-src');
+            }, { once: true });
+            v.src = v.getAttribute('data-src');
             if (heavy && d.size) v.after(h('span', { class: 'media-tile-badge' }, heavyLabel(url)));
             return;
           }
@@ -9736,7 +9865,7 @@ export function messagesFeature(ctx) {
     const video = pager.kind === 'videos';
     const media = video
       ? h('video', { class: 'mp-media', 'data-src': url, loop: true, playsinline: true, preload: 'none',
-          poster: posterOf(ev, url) || (videoInfo.get(url) || {}).image || undefined })
+          poster: videoThumbs.get(url) || posterOf(ev, url) || (videoInfo.get(url) || {}).image || undefined })
       : h('img', { class: 'mp-media', 'data-src': url, alt: '', draggable: 'false' });
     const caption = mediaCaption(ev);
     const stop = (fn) => (e) => { e.stopPropagation(); fn(e); };
@@ -9873,7 +10002,7 @@ export function messagesFeature(ctx) {
         pagerCounts(e.target);
         // near the end: ask the feed for more, the pager picks them up
         const slides = scroller.children;
-        if ([...slides].indexOf(e.target) >= slides.length - 3) loadOlderFeed().catch(() => {});
+        if ([...slides].indexOf(e.target) >= slides.length - 3) crawlMedia().catch(() => {});
       }
     }, { root: scroller, threshold: [0.6] });
     growPager();
@@ -10024,9 +10153,10 @@ export function messagesFeature(ctx) {
         // posts on their way, or nothing older left to fetch. (Older pages
         // prepare offscreen, so the line is mostly seen by a reader who
         // outruns them.)
-        c.loadingMore
+        c.loadingMore || (mediaMode !== 'all' && mediaCrawling)
           ? h('div', { class: 'row gap6 feed-foot', style: 'justify-content:center;align-items:center;padding:10px 0' },
               h('span', { class: 'spinner sm' }), h('span', { class: 'small muted' }, t('feedLoadingMore')))
+          : mediaMode !== 'all' ? (mediaIndex(c.id).end ? h('div', { class: 'small faint feed-foot', style: 'text-align:center;padding:10px 0' }, t('feedEnd')) : null)
           : c.end && visible.length && !(c.win && c.win.bottom) && c.shown >= visible.length
             ? h('div', { class: 'small faint feed-foot', style: 'text-align:center;padding:10px 0' }, t('feedEnd'))
             : null,
@@ -11803,6 +11933,7 @@ export function messagesFeature(ctx) {
     id: 'messages',
     // group-chat state is device state in IndexedDB: it goes with the account
     wipeCache(bases) { import('../marmot-store.js').then((m) => { for (const b of bases) m.wipeMarmot(b); }).catch(() => {}); },
+    forgetAll() { wipeMediaIndex(); mediaIdx.clear(); try { caches.delete(VIDEO_THUMB_CACHE); } catch {} },
     nostrSettingsCards() { return [relaysCard(), followHistoryCard(), moderationCard(), videosCard()]; },
     // The app came back after being backgrounded. A phone freezes a hidden
     // tab: the relay sockets are cut and every post made in the meantime is

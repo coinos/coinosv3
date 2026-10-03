@@ -903,5 +903,10 @@
   "relaysSaved": "रिले सूचियाँ सहेजी गईं",
   "relaysSave": "सहेजें",
   "relaysSaving": "सहेजा जा रहा है…",
-  "relaysReload": "फिर से लोड करें"
+  "relaysReload": "फिर से लोड करें",
+  "mediaAll": "सभी",
+  "mediaImages": "तस्वीरें",
+  "mediaVideos": "वीडियो",
+  "mediaNoImages": "इस फ़ीड में अभी कोई तस्वीर नहीं।",
+  "mediaNoVideos": "इस फ़ीड में अभी कोई वीडियो नहीं।"
 }

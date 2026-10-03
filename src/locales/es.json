@@ -903,5 +903,10 @@
   "relaysSaved": "Listas de relés guardadas",
   "relaysSave": "Guardar",
   "relaysSaving": "Guardando…",
-  "relaysReload": "Recargar"
+  "relaysReload": "Recargar",
+  "mediaAll": "Todo",
+  "mediaImages": "Imágenes",
+  "mediaVideos": "Vídeos",
+  "mediaNoImages": "Aún no hay imágenes en este feed.",
+  "mediaNoVideos": "Aún no hay vídeos en este feed."
 }

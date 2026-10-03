@@ -903,5 +903,10 @@
   "relaysSaved": "中继列表已保存",
   "relaysSave": "保存",
   "relaysSaving": "正在保存…",
-  "relaysReload": "重新加载"
+  "relaysReload": "重新加载",
+  "mediaAll": "全部",
+  "mediaImages": "图片",
+  "mediaVideos": "视频",
+  "mediaNoImages": "此动态中还没有图片。",
+  "mediaNoVideos": "此动态中还没有视频。"
 }

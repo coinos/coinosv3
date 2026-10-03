@@ -239,5 +239,10 @@
   "relaysSaved": "ریلے فہرستیں محفوظ ہو گئیں",
   "relaysSave": "محفوظ کریں",
   "relaysSaving": "محفوظ ہو رہا ہے…",
-  "relaysReload": "دوبارہ لوڈ کریں"
+  "relaysReload": "دوبارہ لوڈ کریں",
+  "mediaAll": "سب",
+  "mediaImages": "تصاویر",
+  "mediaVideos": "ویڈیوز",
+  "mediaNoImages": "اس فیڈ میں ابھی کوئی تصویر نہیں۔",
+  "mediaNoVideos": "اس فیڈ میں ابھی کوئی ویڈیو نہیں۔"
 }

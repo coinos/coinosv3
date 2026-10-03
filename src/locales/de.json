@@ -903,5 +903,10 @@
   "relaysSaved": "Relay-Listen gespeichert",
   "relaysSave": "Speichern",
   "relaysSaving": "Speichern…",
-  "relaysReload": "Neu laden"
+  "relaysReload": "Neu laden",
+  "mediaAll": "Alle",
+  "mediaImages": "Bilder",
+  "mediaVideos": "Videos",
+  "mediaNoImages": "Noch keine Bilder in diesem Feed.",
+  "mediaNoVideos": "Noch keine Videos in diesem Feed."
 }

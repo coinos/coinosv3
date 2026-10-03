@@ -239,5 +239,10 @@
   "relaysSaved": "रिले याद्या जतन केल्या",
   "relaysSave": "जतन करा",
   "relaysSaving": "जतन होत आहे…",
-  "relaysReload": "पुन्हा लोड करा"
+  "relaysReload": "पुन्हा लोड करा",
+  "mediaAll": "सर्व",
+  "mediaImages": "चित्रे",
+  "mediaVideos": "व्हिडिओ",
+  "mediaNoImages": "या फीडमध्ये अजून चित्रे नाहीत.",
+  "mediaNoVideos": "या फीडमध्ये अजून व्हिडिओ नाहीत."
 }

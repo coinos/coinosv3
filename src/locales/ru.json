@@ -903,5 +903,10 @@
   "relaysSaved": "Списки реле сохранены",
   "relaysSave": "Сохранить",
   "relaysSaving": "Сохранение…",
-  "relaysReload": "Обновить"
+  "relaysReload": "Обновить",
+  "mediaAll": "Все",
+  "mediaImages": "Фото",
+  "mediaVideos": "Видео",
+  "mediaNoImages": "В этой ленте пока нет фото.",
+  "mediaNoVideos": "В этой ленте пока нет видео."
 }

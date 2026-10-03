@@ -6117,6 +6117,13 @@ export function messagesFeature(ctx) {
     feedAheadTimer = setTimeout(() => {
       feedAheadTimer = null;
       if (c !== feed || !ui.chatOpen || ui.msgView !== 'feed' || ui.profilePk || ui.noteThread) return;
+      if (mediaMode !== 'all') {
+        // a grid holds only the posts with media: keep fetching while its
+        // foot is near (within reason — a firehose has no end)
+        const g = document.querySelector('.media-grid');
+        if (c.notes.length < 3000 && (!g || g.getBoundingClientRect().bottom < window.innerHeight * 3)) loadOlderFeed().catch(() => {});
+        return;
+      }
       if (c.win && c.win.bottom) return; // rows below are held back by the window, not by paging
       const rows = document.querySelectorAll('.notes-feed > .row[data-key]');
       const last = rows[rows.length - 1];
@@ -9354,6 +9361,285 @@ export function messagesFeature(ctx) {
         render(); window.scrollTo({ top: 0 });
       }));
   }
+  // ---- media views: a feed's pictures as a grid, its videos to flip through --
+  // All / Images / Videos sits under the feed chips. Images lays the feed's
+  // pictures out as a grid; Videos opens straight into a full-screen pager,
+  // one clip per screen, the next a flick away. The pager shows nothing but
+  // the picture or clip until it's tapped: then the author, the post's words
+  // as a caption, and its likes and sats. The pager is a place (Back closes
+  // it), built outside the morph so a repaint never restarts a playing clip.
+  const MEDIA_MODE_KEY = 'coinos-feed-media';
+  let mediaMode = 'all';
+  try { const m = localStorage.getItem(MEDIA_MODE_KEY); if (m === 'images' || m === 'videos') mediaMode = m; } catch {}
+  const mediaKey = (it) => it.ev.id + '|' + it.url;
+  // the picture an imeta tag names for a clip (NIP-92 `image`), if any
+  const posterOf = (ev, url) => {
+    for (const x of ev.tags || []) {
+      if (x[0] !== 'imeta' || !x.includes('url ' + url)) continue;
+      const img = x.find((p) => typeof p === 'string' && p.startsWith('image '));
+      if (img) return img.slice(6);
+    }
+    return null;
+  };
+  function mediaItems(c, kind) {
+    const out = [], seen = new Set();
+    for (const ev of c.notes) {
+      if (hidden(ev)) continue;
+      const urls = kind === 'videos' ? noteVideoUrls(ev.content)
+        : noteMediaUrls(ev.content).filter((u) => !u.startsWith('https://i.ytimg.com/'));
+      for (const url of urls) {
+        const it = { ev, url };
+        if (seen.has(mediaKey(it))) continue;
+        seen.add(mediaKey(it));
+        out.push(it);
+      }
+    }
+    return out;
+  }
+  // The words of the post, without the links to the media it carries.
+  function mediaCaption(ev) {
+    let s = String(ev.content || '');
+    s = s.replace(new RegExp(MD_LINK, 'gi'), (m) => (MD_PARTS.exec(m)?.[1] ? '' : m));
+    for (const u of [...noteMediaUrls(ev.content), ...noteVideoUrls(ev.content)]) s = s.split(u).join('');
+    return plainExcerpt(s);
+  }
+  function setMediaMode(m) {
+    mediaMode = m;
+    try { localStorage.setItem(MEDIA_MODE_KEY, m); } catch {}
+    if (m === 'videos') {
+      const items = mediaItems(feedNow(), 'videos');
+      if (items.length) { openMediaPager('videos', mediaKey(items[0])); return; }
+    }
+    render();
+    try { window.scrollTo({ top: 0 }); } catch {}
+  }
+  function mediaModes() {
+    const b = (m, label) => h('button', {
+      class: 'feed-chip media-mode' + (mediaMode === m ? ' on' : ''), type: 'button', 'data-mode': m,
+      onClick: () => setMediaMode(m),
+    }, label);
+    return h('div', { class: 'row media-modes', 'data-key': 'media-modes' },
+      b('all', t('mediaAll')), b('images', t('mediaImages')), b('videos', t('mediaVideos')));
+  }
+  function mediaGrid(c) {
+    const items = mediaItems(c, mediaMode);
+    if (!items.length) {
+      return c.booting || c.status === 'loading' || c.loadingMore || !c.end
+        ? h('div', { class: 'row gap6', 'data-key': 'media-empty', style: 'justify-content:center;padding:12px 0' }, h('span', { class: 'spinner sm' }))
+        : h('div', { class: 'small faint', 'data-key': 'media-empty', style: 'text-align:center;padding:12px 0' },
+            t(mediaMode === 'videos' ? 'mediaNoVideos' : 'mediaNoImages'));
+    }
+    return h('div', { class: 'media-grid', 'data-key': 'media-grid:' + mediaMode },
+      ...items.map((it) => {
+        const k = mediaKey(it);
+        const poster = mediaMode === 'videos' ? posterOf(it.ev, it.url) : null;
+        return h('button', {
+          class: 'media-tile' + (mediaMode === 'videos' ? ' video' : ''), type: 'button', 'data-key': 'tile:' + k,
+          'aria-label': displayName(it.ev.pubkey), onClick: () => openMediaPager(mediaMode, k),
+        },
+          mediaMode === 'images' || poster
+            ? h('img', { src: poster || mediaSrc(it.url), loading: 'lazy', alt: '', draggable: 'false',
+                onError: (e) => { const b = e.target.closest('.media-tile'); if (b) b.classList.add('broken'); } })
+            // no still to show: the clip's first frame, fetched once the tile is near
+            : h('video', { 'data-src': it.url + '#t=0.1', muted: true, playsinline: true, preload: 'metadata' }),
+          mediaMode === 'videos' ? h('span', { class: 'media-tile-play', 'aria-hidden': 'true' }, '▶') : null);
+      }));
+  }
+  // Video tiles get their src once they come near the screen; the tile is
+  // then left alone by the morph, which would otherwise strip the src.
+  let tileObs = null;
+  function watchMediaTiles() {
+    if (typeof IntersectionObserver === 'undefined') return;
+    tileObs = tileObs || new IntersectionObserver((entries) => {
+      for (const e of entries) {
+        if (!e.isIntersecting) continue;
+        const v = e.target;
+        tileObs.unobserve(v);
+        v.muted = true;
+        v.src = v.getAttribute('data-src');
+        const tile = v.closest('.media-tile');
+        if (tile) tile._skipMorph = true;
+      }
+    }, { rootMargin: '400px 0px' });
+    for (const v of document.querySelectorAll('.media-tile video[data-src]:not([data-obs])')) {
+      v.setAttribute('data-obs', '1');
+      tileObs.observe(v);
+    }
+  }
+
+  function openMediaPager(kind, start) {
+    ui.mediaPager = { kind, start, feed: curFeedId };
+    render();
+  }
+  const closeMediaPager = () => ctx.goBack(() => { ui.mediaPager = null; });
+  let pager = null; // the live pager: { el, scroller, kind, keys, cur, loud, io, near, tick }
+  let pagerLoud = true; // sound on, unless the browser said no without a tap
+  function syncMediaPager() {
+    const want = ui.mediaPager && ui.chatOpen && ui.msgView === 'feed' && !ui.profilePk && !ui.noteThread ? ui.mediaPager : null;
+    if (!want) { if (pager) dropPager(); return; }
+    if (pager && pager.kind !== want.kind) dropPager();
+    if (!pager) buildPager(want);
+    else growPager();
+  }
+  function dropPager() {
+    const p = pager;
+    pager = null;
+    try { p.io.disconnect(); p.near.disconnect(); } catch {}
+    clearInterval(p.tick);
+    for (const v of p.el.querySelectorAll('video')) { try { v.pause(); v.removeAttribute('src'); v.load(); } catch {} }
+    p.el.remove();
+    document.documentElement.classList.remove('no-scroll');
+  }
+  function pagerCounts(slide) {
+    const ev = slide && slide._ev;
+    if (!ev) return;
+    const s = noteCountSnapshot(ev.id);
+    const zp = pendingOf(ev.id);
+    const sats = s.sats + (zp ? zp.sats : 0);
+    const like = slide.querySelector('.mp-like'), zap = slide.querySelector('.mp-zap');
+    like.classList.toggle('on', !!myReactOn(ev.id));
+    like.querySelector('.i').innerHTML = I_HEART(!!myReactOn(ev.id));
+    like.querySelector('.n').textContent = s.likes ? String(s.likes) : '';
+    zap.classList.toggle('on', sats > 0);
+    zap.querySelector('.n').textContent = sats ? fmtSats(sats) : '';
+  }
+  function pagerSlide(it) {
+    const { ev, url } = it;
+    const video = pager.kind === 'videos';
+    const media = video
+      ? h('video', { class: 'mp-media', 'data-src': url, loop: true, playsinline: true, preload: 'auto', poster: posterOf(ev, url) || undefined })
+      : h('img', { class: 'mp-media', 'data-src': url, alt: '', draggable: 'false' });
+    const caption = mediaCaption(ev);
+    const stop = (fn) => (e) => { e.stopPropagation(); fn(e); };
+    const slide = h('div', { class: 'mp-slide', 'data-k': mediaKey(it) },
+      media,
+      h('div', { class: 'mp-meta' },
+        h('div', { class: 'mp-left' },
+          h('button', { class: 'mp-author', type: 'button', onClick: stop(() => { ui.mediaPager = null; openProfile(ev.pubkey); }) },
+            avatar(ev.pubkey, 'chat-avatar mini', false), h('span', {}, displayName(ev.pubkey))),
+          caption ? h('div', { class: 'mp-caption', onClick: stop((e) => e.currentTarget.classList.toggle('open')) }, caption) : null),
+        h('div', { class: 'mp-counts' },
+          h('button', { class: 'mp-like', type: 'button', 'aria-label': t('postLike'), onClick: stop(() => {
+            if (signinAsk()) { ui.mediaPager = null; render(); return; }
+            (myReactOn(ev.id) ? unreact(ev) : reactTo(ev, '❤️')).catch(() => {}).finally(() => pagerCounts(slide));
+            setTimeout(() => pagerCounts(slide), 50);
+          }) }, h('span', { class: 'i', html: I_HEART(false) }), h('span', { class: 'n' })),
+          h('button', { class: 'mp-zap', type: 'button', 'aria-label': t('zapTitle'), onClick: stop((e) => {
+            if (signinAsk()) { ui.mediaPager = null; render(); return; }
+            // the first zap ever asks for an amount on a page of its own
+            if (!(ctx.zapDefaultSat && ctx.zapDefaultSat())) ui.mediaPager = null;
+            zapNote(ev.pubkey, ev, e.currentTarget.getBoundingClientRect());
+            recheckZap(ev.id);
+            setTimeout(() => pagerCounts(slide), 50);
+          }) }, h('span', { class: 'i', html: I_ZAP }), h('span', { class: 'n' })))));
+    slide._ev = ev;
+    if (video) {
+      media.muted = !pagerLoud;
+      media.addEventListener('click', () => {}); // a tap is the pager's (overlay), not the player's
+    }
+    return slide;
+  }
+  function pagerAttach(slide) {
+    const m = slide.querySelector('.mp-media');
+    if (m && !m.getAttribute('src')) m.setAttribute('src', m.getAttribute('data-src'));
+  }
+  function pagerRelease(slide) {
+    const m = slide.querySelector('video.mp-media');
+    if (m && m.getAttribute('src')) { try { m.pause(); m.removeAttribute('src'); m.load(); } catch {} }
+  }
+  function playSlide(slide) {
+    const v = slide.querySelector('video.mp-media');
+    if (!v) return;
+    pagerAttach(slide);
+    v.muted = !pagerLoud;
+    v.play().catch((err) => {
+      // sound needs a tap the browser counted: play quietly, the button says so
+      if (err && err.name === 'NotAllowedError' && !v.muted) {
+        pagerLoud = false; v.muted = true;
+        pager?.el.classList.add('quiet');
+        v.play().catch(() => {});
+      }
+    });
+  }
+  function pagerSound(on) {
+    pagerLoud = on;
+    if (!pager) return;
+    pager.el.classList.toggle('quiet', !on);
+    for (const v of pager.el.querySelectorAll('video.mp-media')) v.muted = !on;
+    const cur = pager.cur && pager.cur.querySelector('video.mp-media');
+    if (cur && cur.paused) cur.play().catch(() => {});
+  }
+  function buildPager(want) {
+    const video = want.kind === 'videos';
+    const scroller = h('div', { class: 'mp-scroll' });
+    const el = h('div', { class: 'media-pager' + (video ? ' videos' : '') + (pagerLoud ? '' : ' quiet'), role: 'dialog', 'aria-modal': 'true' },
+      scroller,
+      h('div', { class: 'mp-top' },
+        h('button', { class: 'mp-x', type: 'button', 'aria-label': t('close'), onClick: (e) => { e.stopPropagation(); closeMediaPager(); } }, '×'),
+        video ? h('button', { class: 'mp-sound', type: 'button', onClick: (e) => { e.stopPropagation(); pagerSound(!pagerLoud); } },
+          h('span', { class: 'on' }, '\u{1F50A}'), h('span', { class: 'off' }, '\u{1F507} ' + t('videoUnmute'))) : null));
+    // a tap shows (or hides) who posted it and what they said
+    el.addEventListener('click', (e) => {
+      if (e.target.closest('button, a, .mp-caption')) return;
+      el.classList.toggle('show');
+      if (el.classList.contains('show')) pagerCounts(pager && pager.cur);
+    });
+    pager = { el, scroller, kind: want.kind, keys: new Set(), cur: null, feed: want.feed };
+    pager.near = new IntersectionObserver((entries) => {
+      for (const e of entries) {
+        if (e.isIntersecting) { pagerAttach(e.target); watchZaps([e.target._ev.id]); }
+        else pagerRelease(e.target);
+      }
+    }, { root: scroller, rootMargin: '150% 0px' });
+    pager.io = new IntersectionObserver((entries) => {
+      for (const e of entries) {
+        if (!e.isIntersecting || e.intersectionRatio < 0.6 || !pager) continue;
+        if (pager.cur && pager.cur !== e.target) { const v = pager.cur.querySelector('video.mp-media'); if (v) v.pause(); }
+        pager.cur = e.target;
+        playSlide(e.target);
+        pagerCounts(e.target);
+        // near the end: ask the feed for more, the pager picks them up
+        const slides = scroller.children;
+        if ([...slides].indexOf(e.target) >= slides.length - 3) loadOlderFeed().catch(() => {});
+      }
+    }, { root: scroller, threshold: [0.6] });
+    growPager();
+    document.body.append(el);
+    document.documentElement.classList.add('no-scroll');
+    const first = [...scroller.children].find((s) => s.getAttribute('data-k') === want.start) || scroller.firstChild;
+    if (first) scroller.scrollTop = first.offsetTop;
+    // new posts land in the feed while the pager is open; counts move
+    pager.tick = setInterval(() => { if (pager) { growPager(); if (el.classList.contains('show')) pagerCounts(pager.cur); } }, 1500);
+  }
+  // Slides for feed items the pager doesn't have yet, appended (never
+  // inserted above the one on screen).
+  function growPager() {
+    if (!pager) return;
+    const c = feedNow();
+    for (const it of mediaItems(c, pager.kind)) {
+      const k = mediaKey(it);
+      if (pager.keys.has(k)) continue;
+      pager.keys.add(k);
+      const s = pagerSlide(it);
+      pager.scroller.append(s);
+      pager.near.observe(s);
+      pager.io.observe(s);
+    }
+  }
+  if (typeof window !== 'undefined') {
+    window.addEventListener('keydown', (e) => {
+      if (!pager || e.defaultPrevented) return;
+      if (e.key === 'Escape') { e.preventDefault(); closeMediaPager(); return; }
+      const step = e.key === 'ArrowDown' || e.key === 'j' || e.key === 'PageDown' ? 1 : e.key === 'ArrowUp' || e.key === 'k' || e.key === 'PageUp' ? -1 : 0;
+      if (step) { e.preventDefault(); pager.scroller.scrollBy({ top: step * pager.scroller.clientHeight, behavior: 'smooth' }); return; }
+      if (e.key === ' ' && pager.cur) {
+        const v = pager.cur.querySelector('video.mp-media');
+        if (v) { e.preventDefault(); if (v.paused) v.play().catch(() => {}); else v.pause(); }
+      }
+    });
+    window.addEventListener('popstate', () => setTimeout(syncMediaPager, 0));
+  }
+
   function feedView() {
     syncFollowSets().catch(() => {}); // throttled inside
     syncReports().catch(() => {}); // likewise
@@ -9364,6 +9650,7 @@ export function messagesFeature(ctx) {
     c.opened = true;
     const def = feedDef();
     const visitor = isVisitor();
+    queueMicrotask(() => { syncMediaPager(); if (mediaMode !== 'all') watchMediaTiles(); });
     const authors = feedAuthors(def);
     const hasQuery = feedHasQuery(def);
     prepareFeedAhead(c);
@@ -9424,6 +9711,7 @@ export function messagesFeature(ctx) {
           ),
         ui.feedRelayEdit && ui.feedRelayEdit.id === def.id ? relayPanel(def) : null,
         visitor ? null : feedChips(),
+        mediaModes(),
         // floating bottom right, wherever the reader is in the feed: the
         // composer opens at the top and takes the focus
         visitor || ui.profCompose != null ? null : h('button', {
@@ -9454,6 +9742,7 @@ export function messagesFeature(ctx) {
             ? h('div', { class: 'row gap6', style: 'justify-content:center;padding:12px 0' }, h('span', { class: 'spinner sm' }))
             : !visible.length
               ? h('div', { class: 'small faint', style: 'text-align:center;padding:12px 0' }, t('feedEmpty'))
+              : mediaMode !== 'all' ? mediaGrid(c)
               : h('div', { class: 'card col notes-feed', style: 'gap:0', 'data-booting': c.booting ? '1' : undefined }, ...rows),
         // The foot of the feed says what is happening down there: older
         // posts on their way, or nothing older left to fetch. (Older pages

@@ -239,5 +239,10 @@
   "relaysSaved": "Đã lưu danh sách relay",
   "relaysSave": "Lưu",
   "relaysSaving": "Đang lưu…",
-  "relaysReload": "Tải lại"
+  "relaysReload": "Tải lại",
+  "mediaAll": "Tất cả",
+  "mediaImages": "Ảnh",
+  "mediaVideos": "Video",
+  "mediaNoImages": "Bảng tin này chưa có ảnh.",
+  "mediaNoVideos": "Bảng tin này chưa có video."
 }

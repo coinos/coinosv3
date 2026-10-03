@@ -239,5 +239,10 @@
   "relaysSaved": "Daftar relay disimpan",
   "relaysSave": "Simpan",
   "relaysSaving": "Menyimpan…",
-  "relaysReload": "Muat ulang"
+  "relaysReload": "Muat ulang",
+  "mediaAll": "Semua",
+  "mediaImages": "Gambar",
+  "mediaVideos": "Video",
+  "mediaNoImages": "Belum ada gambar di feed ini.",
+  "mediaNoVideos": "Belum ada video di feed ini."
 }

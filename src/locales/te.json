@@ -237,5 +237,10 @@
   "relaysSaved": "రిలే జాబితాలు సేవ్ అయ్యాయి",
   "relaysSave": "సేవ్",
   "relaysSaving": "సేవ్ అవుతోంది…",
-  "relaysReload": "మళ్లీ లోడ్"
+  "relaysReload": "మళ్లీ లోడ్",
+  "mediaAll": "అన్నీ",
+  "mediaImages": "చిత్రాలు",
+  "mediaVideos": "వీడియోలు",
+  "mediaNoImages": "ఈ ఫీడ్‌లో ఇంకా చిత్రాలు లేవు.",
+  "mediaNoVideos": "ఈ ఫీడ్‌లో ఇంకా వీడియోలు లేవు."
 }

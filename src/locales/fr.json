@@ -903,5 +903,10 @@
   "relaysSaved": "Listes de relais enregistrées",
   "relaysSave": "Enregistrer",
   "relaysSaving": "Enregistrement…",
-  "relaysReload": "Recharger"
+  "relaysReload": "Recharger",
+  "mediaAll": "Tout",
+  "mediaImages": "Images",
+  "mediaVideos": "Vidéos",
+  "mediaNoImages": "Pas encore d’images dans ce fil.",
+  "mediaNoVideos": "Pas encore de vidéos dans ce fil."
 }

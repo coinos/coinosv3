@@ -902,5 +902,10 @@
   "relaysSaved": "Röle listeleri kaydedildi",
   "relaysSave": "Kaydet",
   "relaysSaving": "Kaydediliyor…",
-  "relaysReload": "Yenile"
+  "relaysReload": "Yenile",
+  "mediaAll": "Tümü",
+  "mediaImages": "Görseller",
+  "mediaVideos": "Videolar",
+  "mediaNoImages": "Bu akışta henüz görsel yok.",
+  "mediaNoVideos": "Bu akışta henüz video yok."
 }

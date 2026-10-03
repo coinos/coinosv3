@@ -903,5 +903,10 @@
   "relaysSaved": "リレーリストを保存しました",
   "relaysSave": "保存",
   "relaysSaving": "保存中…",
-  "relaysReload": "再読み込み"
+  "relaysReload": "再読み込み",
+  "mediaAll": "すべて",
+  "mediaImages": "画像",
+  "mediaVideos": "動画",
+  "mediaNoImages": "このフィードにはまだ画像がありません。",
+  "mediaNoVideos": "このフィードにはまだ動画がありません。"
 }

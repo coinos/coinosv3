@@ -239,5 +239,10 @@
   "relaysSaved": "ரிலே பட்டியல்கள் சேமிக்கப்பட்டன",
   "relaysSave": "சேமி",
   "relaysSaving": "சேமிக்கிறது…",
-  "relaysReload": "மீண்டும் ஏற்று"
+  "relaysReload": "மீண்டும் ஏற்று",
+  "mediaAll": "அனைத்தும்",
+  "mediaImages": "படங்கள்",
+  "mediaVideos": "வீடியோக்கள்",
+  "mediaNoImages": "இந்த ஊட்டத்தில் இன்னும் படங்கள் இல்லை.",
+  "mediaNoVideos": "இந்த ஊட்டத்தில் இன்னும் வீடியோக்கள் இல்லை."
 }

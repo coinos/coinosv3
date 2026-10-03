@@ -817,7 +817,7 @@ function renderInner() {
   const bottomNav = navPage && !lockAsk && !_bootDeciding ? featureHook('bottomNav') : null;
   morphChildren(root, [screen, footer(), ...(bottomNav ? [bottomNav] : []), ...(ui.lightbox ? [imageViewer()] : [])]);
   promoteLazySrc(root); // sources on the nodes that actually made it into the page
-  try { document.documentElement.classList.toggle('no-scroll', !!ui.lightbox); } catch {}
+  try { document.documentElement.classList.toggle('no-scroll', !!(ui.lightbox || ui.mediaPager)); } catch {}
   if (fpath) {
     const el = nodeAtPath(fpath);
     if (el && el !== a && /^(INPUT|SELECT|TEXTAREA|COINOS-TEXT)$/.test(el.tagName)) {
@@ -871,7 +871,7 @@ wallet.subscribe(scheduleRender);
 // lightbox: a full-screen photo is a place too — the phone's Back must close
 // it, not pop the screen under it (which once walked a viewer straight back
 // to the start page, so the photo's × then looked like a logout).
-const NAV_FIELDS = ['screen', 'tab', 'txDetail', 'arkMoveDetail', 'arkReconDetail', 'arkExitDetail', 'giftDetail', 'bump', 'giftMode', 'claimStep', 'chatOpen', 'msgView', 'feedId', 'pubProf', 'arkCoinsPage', 'arkExitPage', 'msgCommunity', 'msgPeer', 'profilePk', 'profEdit', 'profEditFilled', 'profOverThread', 'settingsPage', 'nameEditOpen', 'noteThread', 'userSearch', 'zapSetup', 'hatShop', 'lightbox', 'feedEdit', 'settingsView'];
+const NAV_FIELDS = ['screen', 'tab', 'txDetail', 'arkMoveDetail', 'arkReconDetail', 'arkExitDetail', 'giftDetail', 'bump', 'giftMode', 'claimStep', 'chatOpen', 'msgView', 'feedId', 'pubProf', 'arkCoinsPage', 'arkExitPage', 'msgCommunity', 'msgPeer', 'profilePk', 'profEdit', 'profEditFilled', 'profOverThread', 'settingsPage', 'nameEditOpen', 'noteThread', 'userSearch', 'zapSetup', 'hatShop', 'lightbox', 'mediaPager', 'feedEdit', 'settingsView'];
 function navSnapshot() {
   const s = {};
   for (const f of NAV_FIELDS) s[f] = ui[f] ?? null;
@@ -976,6 +976,7 @@ function restoreNavFromHistory(renderNow = true) {
     if (['unlock', 'vault'].includes(nav.screen) && activeAccount()) nav.screen = 'wallet';
     for (const f of NAV_FIELDS) if (f in nav) ui[f] = (f === 'profEdit' || f === 'feedEdit') && nav[f] ? structuredClone(nav[f]) : nav[f];
     ui.lightbox = null; nav.lightbox = null; // an object URL doesn't survive a reload
+    ui.mediaPager = null; nav.mediaPager = null; // nor does the feed under a media pager, not yet
     navStack = [nav];
     navIndex = 0;
     // A reload is a continuation of the same page, not a navigation. Do not

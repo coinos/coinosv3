@@ -239,5 +239,10 @@
   "relaysSaved": "Orodha za relei zimehifadhiwa",
   "relaysSave": "Hifadhi",
   "relaysSaving": "Inahifadhi…",
-  "relaysReload": "Pakia upya"
+  "relaysReload": "Pakia upya",
+  "mediaAll": "Zote",
+  "mediaImages": "Picha",
+  "mediaVideos": "Video",
+  "mediaNoImages": "Bado hakuna picha kwenye mlisho huu.",
+  "mediaNoVideos": "Bado hakuna video kwenye mlisho huu."
 }

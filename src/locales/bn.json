@@ -903,5 +903,10 @@
   "relaysSaved": "রিলে তালিকা সংরক্ষিত",
   "relaysSave": "সংরক্ষণ",
   "relaysSaving": "সংরক্ষণ হচ্ছে…",
-  "relaysReload": "আবার লোড"
+  "relaysReload": "আবার লোড",
+  "mediaAll": "সব",
+  "mediaImages": "ছবি",
+  "mediaVideos": "ভিডিও",
+  "mediaNoImages": "এই ফিডে এখনও কোনো ছবি নেই।",
+  "mediaNoVideos": "এই ফিডে এখনও কোনো ভিডিও নেই।"
 }

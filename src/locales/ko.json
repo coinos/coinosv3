@@ -902,5 +902,10 @@
   "relaysSaved": "릴레이 목록 저장됨",
   "relaysSave": "저장",
   "relaysSaving": "저장 중…",
-  "relaysReload": "새로고침"
+  "relaysReload": "새로고침",
+  "mediaAll": "전체",
+  "mediaImages": "이미지",
+  "mediaVideos": "동영상",
+  "mediaNoImages": "이 피드에는 아직 이미지가 없습니다.",
+  "mediaNoVideos": "이 피드에는 아직 동영상이 없습니다."
 }

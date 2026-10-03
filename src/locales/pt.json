@@ -903,5 +903,10 @@
   "relaysSaved": "Listas de relays salvas",
   "relaysSave": "Salvar",
   "relaysSaving": "Salvando…",
-  "relaysReload": "Recarregar"
+  "relaysReload": "Recarregar",
+  "mediaAll": "Tudo",
+  "mediaImages": "Imagens",
+  "mediaVideos": "Vídeos",
+  "mediaNoImages": "Ainda não há imagens neste feed.",
+  "mediaNoVideos": "Ainda não há vídeos neste feed."
 }

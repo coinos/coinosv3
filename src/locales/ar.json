@@ -903,5 +903,10 @@
   "relaysSaved": "حُفظت قوائم المرحّلات",
   "relaysSave": "حفظ",
   "relaysSaving": "جارٍ الحفظ…",
-  "relaysReload": "إعادة تحميل"
+  "relaysReload": "إعادة تحميل",
+  "mediaAll": "الكل",
+  "mediaImages": "الصور",
+  "mediaVideos": "الفيديوهات",
+  "mediaNoImages": "لا صور في هذه الخلاصة بعد.",
+  "mediaNoVideos": "لا فيديوهات في هذه الخلاصة بعد."
 }

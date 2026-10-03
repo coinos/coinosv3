@@ -393,7 +393,7 @@ textarea.send-dest::placeholder { font-family: var(--sans); }
 .toast {
   position: fixed; left: 50%; bottom: 26px; transform: translateX(-50%);
   background: var(--toast-bg); color: var(--toast-fg); padding: 10px 16px; border-radius: 10px;
-  font-size: 14px; box-shadow: var(--shadow); z-index: 50; opacity: 0; pointer-events: none;
+  font-size: 14px; box-shadow: var(--shadow); z-index: 300; opacity: 0; pointer-events: none;
   transition: opacity .2s, transform .2s;
 }
 .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
@@ -1366,3 +1366,80 @@ body::after {
 .social-count b { color: var(--ink); font-weight: 650; }
 .social-count:hover { background: none; color: var(--ink); }
 .social-count.on { color: var(--ink); border-bottom-color: var(--accent); }
+
+/* ---- feed media views: All / Images / Videos, the grid, the pager ---- */
+.media-modes { gap: 6px; }
+.media-modes .feed-chip { padding: 4px 12px; font-size: 13px; }
+.media-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 3px; border-radius: 12px; overflow: hidden; }
+.media-tile {
+  position: relative; display: block; aspect-ratio: 1; padding: 0; margin: 0; border: 0; border-radius: 0;
+  background: var(--surface2); overflow: hidden; cursor: pointer;
+}
+.media-tile.video { aspect-ratio: 9 / 16; }
+.media-tile img, .media-tile video { width: 100%; height: 100%; object-fit: cover; display: block; pointer-events: none; }
+.media-tile.broken { display: none; }
+.media-tile-play {
+  position: absolute; right: 6px; bottom: 6px; color: #fff; font-size: 13px; line-height: 1;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, .7); pointer-events: none;
+}
+.media-pager {
+  position: fixed; inset: 0; z-index: 200; background: #000; color: #fff;
+  animation: lightbox-in .12s ease-out;
+}
+.mp-scroll {
+  position: absolute; inset: 0; overflow-y: auto; overscroll-behavior: contain;
+  scroll-snap-type: y mandatory; scrollbar-width: none;
+}
+.mp-scroll::-webkit-scrollbar { display: none; }
+.mp-slide {
+  position: relative; height: 100vh; height: 100dvh; width: 100%;
+  scroll-snap-align: start; scroll-snap-stop: always;
+  display: flex; align-items: center; justify-content: center; overflow: hidden;
+}
+.mp-media { max-width: 100%; max-height: 100%; width: 100%; height: 100%; object-fit: contain; display: block; user-select: none; -webkit-user-select: none; }
+/* nothing but the picture until a tap */
+.mp-meta, .mp-top { opacity: 0; pointer-events: none; transition: opacity .18s; }
+.media-pager.show .mp-meta, .media-pager.show .mp-top { opacity: 1; pointer-events: auto; }
+.mp-meta {
+  position: absolute; left: 0; right: 0; bottom: 0; display: flex; align-items: flex-end; gap: 12px;
+  padding: 48px 14px max(16px, env(safe-area-inset-bottom));
+  background: linear-gradient(to top, rgba(0, 0, 0, .72), rgba(0, 0, 0, 0));
+}
+.mp-left { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.mp-author {
+  display: inline-flex; align-items: center; gap: 8px; align-self: flex-start; max-width: 100%;
+  padding: 0; margin: 0; border: 0; background: none; color: #fff; font-weight: 600; font-size: 15px; cursor: pointer;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, .6);
+}
+.mp-author span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mp-caption {
+  font-size: 14px; line-height: 1.35; color: rgba(255, 255, 255, .92); text-shadow: 0 1px 3px rgba(0, 0, 0, .6);
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; cursor: pointer; overflow-wrap: anywhere;
+}
+.mp-caption.open { -webkit-line-clamp: unset; max-height: 40vh; overflow-y: auto; }
+.mp-counts { display: flex; flex-direction: column; align-items: center; gap: 14px; flex: 0 0 auto; }
+.mp-counts button {
+  display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 0; margin: 0; border: 0;
+  background: none; color: #fff; font-size: 13px; cursor: pointer; text-shadow: 0 1px 3px rgba(0, 0, 0, .6);
+}
+.mp-counts .i { font-size: 24px; line-height: 1; display: flex; }
+.mp-counts .i svg { width: 28px; height: 28px; filter: drop-shadow(0 1px 2px rgba(0, 0, 0, .6)); }
+.mp-like.on { color: #ff4d6d; }
+.mp-zap.on .i { color: #f7b500; }
+.mp-top {
+  position: absolute; top: max(10px, env(safe-area-inset-top)); left: 10px; right: 10px;
+  display: flex; justify-content: space-between; align-items: center;
+}
+.mp-x, .mp-sound {
+  height: 40px; min-width: 40px; padding: 0 12px; font-size: 22px; line-height: 1; border-radius: 999px; border: 0;
+  color: #fff; background: rgba(255, 255, 255, .16);
+}
+.mp-sound { font-size: 15px; }
+.mp-sound .off { display: none; }
+.media-pager.quiet .mp-sound .on { display: none; }
+.media-pager.quiet .mp-sound .off { display: inline; }
+/* muted against our will: the button stays up so the way to sound is plain */
+.media-pager.quiet .mp-top { opacity: 1; }
+.media-pager.quiet .mp-top .mp-x { opacity: 0; pointer-events: none; }
+.media-pager.quiet .mp-top .mp-sound { pointer-events: auto; }
+.media-pager.quiet.show .mp-top .mp-x { opacity: 1; pointer-events: auto; }

@@ -9939,6 +9939,7 @@ export function messagesFeature(ctx) {
     const slides = [...pager.scroller.children];
     const i = slides.indexOf(slide);
     slides.forEach((s, j) => {
+      if (Math.abs(j - i) <= 2) slidePoster(s);
       if (j === i) return;
       const v = s.querySelector('video.mp-media');
       if (j === i + 1) {
@@ -9961,7 +9962,16 @@ export function messagesFeature(ctx) {
       if (!pager || pager.cur !== slide) return;
       if (videoHeavy(url)) {
         if (slide.querySelector('.vid-heavy')) return;
-        pagerRelease(slide);
+        // under the cover, a picture of what it is: the kept frame, else the
+        // first frame itself (only the start of the file, when it leads with
+        // its index or is served in ranges)
+        slidePoster(slide);
+        const d = videoInfo.get(url) || {};
+        if (!videoThumbs.has(url) && (d.faststart || d.ranges || !d.probed)) {
+          v.preload = 'metadata';
+          v.addEventListener('loadeddata', () => setTimeout(() => keepVideoThumb(v, url), 150), { once: true });
+          v.setAttribute('src', url + '#t=0.1');
+        } else pagerRelease(slide);
         slide.append(h('button', { class: 'vid-heavy', type: 'button', 'aria-label': t('videoTapToPlay'), onClick: (e) => {
           e.stopPropagation();
           tappedClips.add(url);
@@ -9973,8 +9983,16 @@ export function messagesFeature(ctx) {
       startSlide(slide);
     });
   }
+  // the kept frame as the poster, looked up as the slide comes near (it may
+  // have been kept after the slide was built)
+  function slidePoster(slide) {
+    const v = slide.querySelector('video.mp-media');
+    const thumb = v && videoThumbs.get(v.getAttribute('data-src'));
+    if (thumb && v.getAttribute('poster') !== thumb) v.setAttribute('poster', thumb);
+  }
   function startSlide(slide) {
     const v = slide.querySelector('video.mp-media');
+    if (/#t=[\d.]+$/.test(v.getAttribute('src') || '')) v.setAttribute('src', v.getAttribute('data-src')); // the still's src: from the start now
     v.preload = 'auto';
     pagerAttach(slide);
     v.muted = !pagerLoud;

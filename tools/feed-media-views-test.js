@@ -198,7 +198,10 @@ try {
   st = await pagerState();
   check('the 50 MB clip waits for a tap, saying what it costs', st.src === 'c.mp4' && await page.evaluate(() => {
     const s = document.querySelectorAll('.mp-slide')[2]; const b = s.querySelector('.vid-heavy');
-    return !!b && /50 MB/.test(b.textContent) && !s.querySelector('video').getAttribute('src'); }), JSON.stringify(st));
+    return !!b && /50 MB/.test(b.textContent) && !/^[^#]*$/.test(s.querySelector('video').getAttribute('src') || '#'); }), JSON.stringify(st));
+  check('...over a picture of it (the kept frame, or the first frame itself)', await waitFor(() => {
+    const v = document.querySelectorAll('.mp-slide')[2].querySelector('video');
+    return (v.getAttribute('poster') || '').startsWith('blob:') || (/#t=/.test(v.getAttribute('src') || '') && v.readyState >= 2); }, 5000));
   await shot('heavy');
   await page.evaluate(() => document.querySelectorAll('.mp-slide')[2].querySelector('.vid-heavy').click());
   check('a tap plays it', await waitFor(() => { const v = document.querySelectorAll('.media-pager video')[2]; return !v.paused && v.currentTime > 0; }, 6000));

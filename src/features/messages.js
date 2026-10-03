@@ -1237,6 +1237,7 @@ export function messagesFeature(ctx) {
     if (dmStarted) for (const u of liveRelayList(DM_RELAYS)) urls.add(u);
     for (const room of rooms.values()) if (room.subscribed) for (const u of liveRelayList(room.relays)) urls.add(u);
     if (wn) for (const u of liveRelayList(wn.relaysInUse())) urls.add(u);
+    if (wn && wn.starved()) subsDead = true; // a group's relay came back after being skipped
     const dead = [...urls].filter((u) => !relayAlive(u));
     if (!dead.length && !subsDead) { rebuildBackoff = 15_000; return; }
     const now = Date.now();
@@ -2978,7 +2979,7 @@ export function messagesFeature(ctx) {
       let relays = null;
       try { relays = JSON.parse(localStorage.getItem('coinos-group-relays') || 'null'); } catch {}
       const c = m.marmotClient({
-        scope: wallet._cacheKey() + ':' + pk, pubkey: pk, identity, on: onWn,
+        scope: wallet._cacheKey() + ':' + pk, pubkey: pk, identity, on: onWn, subClosed: noteSubClosed,
         ...(Array.isArray(relays) && relays.length ? { relays } : {}),
       });
       wn = c;

@@ -65,6 +65,15 @@ const browser = await puppeteer.launch({ executablePath: '/usr/bin/google-chrome
 const page = await browser.newPage();
 await page.setViewport({ width: 1100, height: 850 });
 page.on('pageerror', (e) => { console.log('   page error:', e.message); ok = false; });
+// DEBUG=1 turns on the app's debug switch and echoes the group-chat lines
+if (process.env.DEBUG) {
+  await page.evaluateOnNewDocument(() => localStorage.setItem('coinos-debug', '1'));
+  page.on('console', async (m) => {
+    if (!/^marmot/.test(m.text())) return;
+    const args = await Promise.all(m.args().map((a) => a.evaluate((v) => (v instanceof Error ? v.message : typeof v === 'string' ? v : JSON.stringify(v))).catch(() => '?')));
+    console.log('   [page]', args.join(' ').slice(0, 300));
+  });
+}
 // every relay is the local relay
 if (!SITE) await page.evaluateOnNewDocument((relay) => {
   const Real = window.WebSocket;
@@ -115,6 +124,9 @@ try {
   await page.waitForSelector('textarea');
   await page.type('textarea', mnemonic);
   await click('button', 'Open wallet');
+  // a mainnet wallet is first offered a username: not now
+  await until(async () => /receive|not now/i.test(await bodyText()), 20000);
+  for (let i = 0; i < 3 && await click('button', 'Not now'); i++) await sleep(600);
   await waitText('receive', 15000);
 
   console.log('\n[invitable without doing anything]');
@@ -132,7 +144,18 @@ try {
   await click('button', 'Join');
   check('the group opens', !!await waitText('2 members'));
   wn(['messages', 'send', gid, 'hello from white noise'], alice);
-  check('their message arrives', !!await waitText('hello from white noise'));
+  const arrived = !!await waitText('hello from white noise');
+  check('their message arrives', arrived);
+  if (!arrived && process.env.DEBUG) {
+    const chat = (wn(['chats', 'list'], alice).chats || []).find((c) => c.group_id === gid) || {};
+    const r = chat.nostr_routing || {};
+    console.log('   wn routing', JSON.stringify(r.relays), 'last', JSON.stringify(chat.last_message || {}).slice(0, 200));
+    console.log('   wn messages', JSON.stringify(wn(['messages', 'list', gid, '--limit', '5'], alice)).slice(0, 400));
+    for (const url of r.relays || []) {
+      const evs = await new Promise((res) => { const ws = new WebSocket(url), out = []; ws.onopen = () => ws.send(JSON.stringify(['REQ', 'q', { kinds: [445], '#h': [r.nostr_group_id_hex] }])); ws.onmessage = (m) => { const d = JSON.parse(m.data); if (d[0] === 'EVENT') out.push(d[2]); else res(out); }; setTimeout(() => res(out), 4000); });
+      console.log('   ', url, 'holds', evs.length, 'group events', evs.map((e) => e.created_at).join(','));
+    }
+  }
   await say('hello from coinos');
   check('ours reaches wn', !!await until(() => JSON.stringify(wn(['messages', 'list', gid, '--limit', '20'], alice)).includes('hello from coinos')));
   await page.screenshot({ path: shot('marmot-group.png') });

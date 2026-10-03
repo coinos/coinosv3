@@ -9,7 +9,7 @@
 
 import * as M from './marmot.js';
 import { marmotStore } from './marmot-store.js';
-import { subscribeOn, queryOn, publishOn, fetchInboxRelays, PROFILE_RELAYS, finalizeEvent } from './nostr.js';
+import { subscribeOn, queryOn, publishOn, fetchInboxRelays, liveRelayList, PROFILE_RELAYS, finalizeEvent } from './nostr.js';
 import { wrapDM } from './dm.js';
 import { dlog } from './debug.js';
 
@@ -24,13 +24,13 @@ const REACH_TTL = 10 * 60_000;
 const now = () => Math.floor(Date.now() / 1000);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-export function marmotClient({ scope, pubkey, identity, on, relays = GROUP_RELAYS }) {
+export function marmotClient({ scope, pubkey, identity, on, relays = GROUP_RELAYS, subClosed }) {
   const store = marmotStore(scope);
   const groups = new Map();   // mls group id (hex) -> record
   const subs = new Map();     // route id -> { unsub, gid }
   const reach = new Map();    // pubkey -> { at, p }
   const inbox = new Map();    // gid -> queued 445 events
-  let dev = null, stopped = false, loaded = null, kpBusy = null;
+  let dev = null, stopped = false, loaded = null, kpBusy = null, rebuilding = false;
   const dirty = new Set();
   let flushTimer = 0, rotateTimer = 0;
 
@@ -139,12 +139,16 @@ export function marmotClient({ scope, pubkey, identity, on, relays = GROUP_RELAY
     if (stopped || g.removed) return;
     for (const r of M.routes(g)) {
       if (subs.has(r.id)) continue;
-      const unsub = subscribeOn(r.relays, { kinds: [M.KIND.GROUP], '#h': [r.id], since: M.since(g), limit: 500 }, (ev) => queue(g.id, ev));
-      subs.set(r.id, { unsub, gid: g.id });
+      // a relay that drops the subscription is the caller's watchdog's business:
+      // a group that misses a commit is stuck until it hears it
+      const unsub = subscribeOn(r.relays, { kinds: [M.KIND.GROUP], '#h': [r.id], since: M.since(g), limit: 500 }, (ev) => queue(g.id, ev),
+        subClosed ? { onclose: () => { if (!rebuilding && !stopped) subClosed(); } } : {});
+      subs.set(r.id, { unsub, gid: g.id, relays: r.relays, live: liveRelayList(r.relays).length });
     }
   }
   function unwatch(gid) {
-    for (const [id, s] of subs) if (s.gid === gid) { try { s.unsub(); } catch {} subs.delete(id); }
+    rebuilding = true;
+    try { for (const [id, s] of subs) if (s.gid === gid) { try { s.unsub(); } catch {} subs.delete(id); } } finally { rebuilding = false; }
   }
 
   // Relays replay history newest-first and commits only apply oldest-first:
@@ -343,13 +347,15 @@ export function marmotClient({ scope, pubkey, identity, on, relays = GROUP_RELAY
   }
 
   function resubscribe() {
-    for (const s of subs.values()) { try { s.unsub(); } catch {} }
+    rebuilding = true; // our own closes are not a relay giving up on us
+    try { for (const s of subs.values()) { try { s.unsub(); } catch {} } } finally { rebuilding = false; }
     subs.clear();
     for (const g of groups.values()) watch(g);
   }
 
   function stop() {
     stopped = true;
+    rebuilding = true;
     clearTimeout(rotateTimer);
     for (const s of subs.values()) { try { s.unsub(); } catch {} }
     subs.clear();
@@ -364,6 +370,9 @@ export function marmotClient({ scope, pubkey, identity, on, relays = GROUP_RELAY
     peer: (g) => M.directPeer(g),
     accounts: (g) => M.accounts(g.tip),
     isAdmin: (g) => M.isAdmin(g),
+    // A relay that was being skipped as dead when a group subscribed is
+    // back: that subscription is listening on fewer relays than it could.
+    starved: () => [...subs.values()].some((s) => liveRelayList(s.relays).length > s.live),
     // has this device ever been given its standing (a signed proof)?
     isSetUp: () => !!dev,
     relaysInUse: () => [...new Set([...groups.values()].filter((g) => !g.removed).flatMap(routeRelays))],

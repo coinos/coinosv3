@@ -1460,3 +1460,7 @@ body::after {
   position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
   color: var(--muted); font-size: 12px; font-weight: 600; background: var(--surface2);
 }
+.media-tile-badge {
+  position: absolute; left: 6px; bottom: 6px; padding: 1px 6px; border-radius: 6px;
+  background: rgba(0, 0, 0, .6); color: #fff; font-size: 11px; font-weight: 600; pointer-events: none;
+}

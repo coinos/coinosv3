@@ -5543,10 +5543,11 @@ export function messagesFeature(ctx) {
   const videoProbes = new Map();
   let videoProbing = 0;
   const videoProbeQueue = [];
-  function probeVideo(url) {
+  function probeVideo(url, layout = false) {
     const have = videoInfo.get(url);
-    // a post that states size and shape is taken at its word: no request at all
-    if (have && (have.probed || have.failed || (have.size && have.w))) return Promise.resolve(have);
+    // a post that states size and shape is taken at its word: no request at
+    // all — unless the file's layout is wanted (a thumbnail)
+    if (have && (have.probed || have.failed || (!layout && have.size && have.w))) return Promise.resolve(have);
     if (videoProbes.has(url)) return videoProbes.get(url);
     const task = new Promise((resolve) => videoProbeQueue.push({ url, resolve })).finally(() => videoProbes.delete(url));
     videoProbes.set(url, task);
@@ -9564,7 +9565,6 @@ export function messagesFeature(ctx) {
   // it), built outside the morph so a repaint never restarts a playing clip.
   const MEDIA_MODE_KEY = 'coinos-feed-media';
   let mediaMode = 'all';
-  let videosAutoOpen = false;
   try { const m = localStorage.getItem(MEDIA_MODE_KEY); if (m === 'images' || m === 'videos') mediaMode = m; } catch {}
   const mediaKey = (it) => it.ev.id + '|' + it.url;
   // the picture an imeta tag names for a clip (NIP-92 `image`), if any
@@ -9622,12 +9622,6 @@ export function messagesFeature(ctx) {
   function setMediaMode(m) {
     mediaMode = m;
     try { localStorage.setItem(MEDIA_MODE_KEY, m); } catch {}
-    videosAutoOpen = false;
-    if (m === 'videos') {
-      const items = mediaItems(feedNow(), 'videos');
-      if (items.length) { openMediaPager('videos', mediaKey(items[0])); return; }
-      videosAutoOpen = true; // the first vertical clip found opens the pager
-    }
     render();
     try { window.scrollTo({ top: 0 }); } catch {}
   }
@@ -9676,13 +9670,21 @@ export function messagesFeature(ctx) {
         tileObs.unobserve(v);
         const tile = v.closest('.media-tile');
         if (tile) tile._skipMorph = true;
-        // a first frame only from a clip that starts quickly and is within
-        // budget: a player asked for a still of an index-last file fetches
-        // most of it; the rest show what they'd cost instead
+        // A first frame costs the start of the file when the index leads or
+        // the server serves ranges — whatever the clip's size. Only an
+        // index-last file without ranges would have to come down whole for
+        // it; that one shows what it costs instead. A clip over budget wears
+        // its cost as a badge either way.
         const url = v.getAttribute('data-src').replace(/#t=[\d.]+$/, '');
-        probeVideo(url).then((d) => {
+        probeVideo(url, true).then((d) => {
           if (!v.isConnected) return;
-          if (d && d.faststart !== false && (d.faststart || d.size) && !videoHeavy(url)) { v.muted = true; v.src = v.getAttribute('data-src'); return; }
+          const heavy = videoHeavy(url);
+          const still = d && (d.probed ? d.faststart || d.ranges : !heavy);
+          if (still) {
+            v.muted = true; v.src = v.getAttribute('data-src');
+            if (heavy && d.size) v.after(h('span', { class: 'media-tile-badge' }, heavyLabel(url)));
+            return;
+          }
           v.replaceWith(h('span', { class: 'media-tile-cost' }, d && d.size ? heavyLabel(url) : ''));
         });
       }
@@ -9922,10 +9924,6 @@ export function messagesFeature(ctx) {
     const def = feedDef();
     const visitor = isVisitor();
     queueMicrotask(() => {
-      if (videosAutoOpen && mediaMode === 'videos' && !ui.mediaPager) {
-        const items = mediaItems(feedNow(), 'videos');
-        if (items.length) { videosAutoOpen = false; openMediaPager('videos', mediaKey(items[0])); return; }
-      }
       syncMediaPager();
       if (mediaMode !== 'all') watchMediaTiles();
     });

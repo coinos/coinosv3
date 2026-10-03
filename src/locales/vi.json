@@ -251,5 +251,11 @@
   "videoLargeHelp": "Video trên {mb} MB hoặc cao hơn 1080p sẽ chờ bạn chạm, để bảng tin không ngốn dữ liệu. Giới hạn thấp hơn khi kết nối chậm hoặc tiết kiệm dữ liệu.",
   "arkLnRenewing": "Chưa gửi gì cả. {sats} sats đang được gia hạn và không thể chi tiêu cho đến khi việc gia hạn được xác nhận trên mạng Bitcoin: thường khoảng mười phút, đôi khi một giờ hoặc hơn. Hãy thử lại sau.",
   "arkLnShort": "Không đủ số dư: khoản thanh toán này cần {need} sats gồm cả phí, và hiện có {have}.",
-  "arkCoinsRenewLock": "Coin đang gia hạn không thể chi tiêu cho đến khi giao dịch của vòng được xác nhận trên mạng Bitcoin: thường khoảng mười phút, đôi khi một giờ hoặc hơn. Gia hạn mọi coin nghĩa là trong lúc đó không còn gì để thanh toán."
+  "arkRenewConfirmTitle": "Gia hạn các coin này?",
+  "arkRenewConfirmBody": "Ví của bạn tự gia hạn coin, miễn phí, khi chúng sắp hết hạn. Gia hạn ngay bây giờ là tùy chọn.",
+  "arkRenewConfirmFee": "Phí gia hạn",
+  "arkRenewConfirmLeft": "Còn lại để chi tiêu trong lúc đó",
+  "arkRenewConfirmAll": "Đây là toàn bộ số dư Chi tiêu của bạn. Bạn sẽ không thể thanh toán hay gửi từ Chi tiêu cho đến khi việc gia hạn được xác nhận.",
+  "arkRenewConfirmWait": "Coin đang gia hạn không thể chi tiêu cho đến khi giao dịch của vòng được xác nhận trên mạng Bitcoin: thường khoảng mười phút, đôi khi một giờ hoặc hơn. Việc gia hạn đã bắt đầu thì không thể hủy.",
+  "arkRenewViewTx": "Xem giao dịch của vòng"
 }

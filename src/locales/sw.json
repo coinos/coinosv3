@@ -251,5 +251,11 @@
   "videoLargeHelp": "Video zaidi ya MB {mb} au juu ya 1080p husubiri uguse, ili mlisho usimalize data yako. Kikomo ni cha chini kwenye muunganisho wa polepole au wa kuokoa data.",
   "arkLnRenewing": "Hakuna kilichotumwa. Sats {sats} zinahuishwa na haziwezi kutumika hadi uhuishaji uthibitishwe kwenye mtandao wa Bitcoin: kwa kawaida kama dakika kumi, wakati mwingine saa moja au zaidi. Jaribu tena baadaye.",
   "arkLnShort": "Salio halitoshi: malipo haya yanahitaji sats {need} pamoja na ada, na zilizopo ni {have}.",
-  "arkCoinsRenewLock": "Sarafu zinazohuishwa haziwezi kutumika hadi muamala wa raundi uthibitishwe kwenye mtandao wa Bitcoin: kwa kawaida kama dakika kumi, wakati mwingine saa moja au zaidi. Kuhuisha sarafu zote hakuachi chochote cha kulipia kwa muda huo."
+  "arkRenewConfirmTitle": "Huisha sarafu hizi?",
+  "arkRenewConfirmBody": "Pochi yako huhuisha sarafu yenyewe, bila malipo, zinapokaribia kuisha muda. Kuhuisha sasa ni hiari.",
+  "arkRenewConfirmFee": "Ada ya kuhuisha",
+  "arkRenewConfirmLeft": "Kinachobaki kutumia kwa sasa",
+  "arkRenewConfirmAll": "Hili ni salio lako lote la Matumizi. Hutaweza kulipa wala kutuma kutoka Matumizi hadi uhuishaji uthibitishwe.",
+  "arkRenewConfirmWait": "Sarafu zinazohuishwa haziwezi kutumika hadi muamala wa raundi uthibitishwe kwenye mtandao wa Bitcoin: kwa kawaida kama dakika kumi, wakati mwingine saa moja au zaidi. Uhuishaji ukishaanza hauwezi kughairiwa.",
+  "arkRenewViewTx": "Tazama muamala wa raundi"
 }

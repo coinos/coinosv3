@@ -914,5 +914,11 @@
   "videoLargeHelp": "{mb} MB’den büyük veya 1080p’nin üzerindeki videolar, akış verini tüketmesin diye dokunmanı bekler. Yavaş ya da veri tasarruflu bağlantıda sınır daha düşüktür.",
   "arkLnRenewing": "Hiçbir şey gönderilmedi. {sats} sats yenileniyor ve yenileme Bitcoin ağında onaylanana kadar harcanamaz: genellikle on dakika kadar, bazen bir saat veya daha fazla. Sonra tekrar dene.",
   "arkLnShort": "Yeterli bakiye yok: bu ödeme ücretiyle birlikte {need} sats gerektiriyor, kullanılabilir olan {have}.",
-  "arkCoinsRenewLock": "Yenilenen coinler, turun işlemi Bitcoin ağında onaylanana kadar harcanamaz: genellikle on dakika kadar, bazen bir saat veya daha fazla. Tüm coinleri yenilemek, bu sürede ödeme yapacak bir şey bırakmaz."
+  "arkRenewConfirmTitle": "Bu coinler yenilensin mi?",
+  "arkRenewConfirmBody": "Cüzdanın, süresi dolmak üzere olan coinleri kendiliğinden ve ücretsiz yeniler. Şimdi yenilemek isteğe bağlıdır.",
+  "arkRenewConfirmFee": "Yenileme ücreti",
+  "arkRenewConfirmLeft": "Bu sırada harcanabilir kalan",
+  "arkRenewConfirmAll": "Bu, Harcama bakiyenin tamamı. Yenileme onaylanana kadar Harcama’dan ödeme yapamaz veya gönderemezsin.",
+  "arkRenewConfirmWait": "Yenilenen coinler, turun işlemi Bitcoin ağında onaylanana kadar harcanamaz: genellikle on dakika kadar, bazen bir saat veya daha fazla. Başlayan bir yenileme iptal edilemez.",
+  "arkRenewViewTx": "Turun işlemini görüntüle"
 }

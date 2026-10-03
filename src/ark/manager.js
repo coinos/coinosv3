@@ -2143,6 +2143,9 @@ export class ArkManager {
       }
       if (status.status === 0 || !status.fundingTx) return; // round pending; retry on next sync
       const fundingTx = parseTx(status.fundingTx);
+      // The round has run: its transaction is on the network from here on,
+      // and is what the wait is for — kept so the wallet can link to it.
+      if (action.fundingTxid !== fundingTx.txid) { action.fundingTxid = fundingTx.txid; this._save(); }
       const confirmed = await this.chain.getTxStatus(fundingTx.txid);
       if (!confirmed?.confirmed) return; // wait for funding confirmations
       action.fundingTxHex = hex.encode(status.fundingTx);
@@ -2185,7 +2188,7 @@ export class ArkManager {
       // inputIds let the history skip "spent elsewhere" rows for coins this
       // renewal consumed — reconciled before the claim, they'd otherwise
       // stand as spends that the renewed coin silently contradicts.
-      this._movement({ type: 'refresh', amountSat: action.outAmountSat, feeSat: action.feeSat || 0, manual: !!action.manual, status: 'complete', unlockHash: action.unlockHash, inputIds: [...(action.inputIds || [])], detail: `${inputRecs.length} in -> ${newVtxos.length} out${action.feeSat ? ` · fee ${action.feeSat} sat` : ''}` });
+      this._movement({ type: 'refresh', amountSat: action.outAmountSat, feeSat: action.feeSat || 0, manual: !!action.manual, status: 'complete', txid: fundingTx.txid, unlockHash: action.unlockHash, inputIds: [...(action.inputIds || [])], detail: `${inputRecs.length} in -> ${newVtxos.length} out${action.feeSat ? ` · fee ${action.feeSat} sat` : ''}` });
       this._save();
     }
   }

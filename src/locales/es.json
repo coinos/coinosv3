@@ -915,5 +915,11 @@
   "videoLargeHelp": "Los vídeos de más de {mb} MB o por encima de 1080p esperan a que los toques, para que el feed no se coma tus datos. El límite es menor con una conexión lenta o en ahorro de datos.",
   "arkLnRenewing": "No se envió nada. {sats} sats se están renovando y no pueden gastarse hasta que la renovación se confirme en la red Bitcoin: normalmente unos diez minutos, a veces una hora o más. Inténtalo entonces.",
   "arkLnShort": "No hay suficiente en Gastos: este pago necesita {need} sats con su comisión, y hay {have} disponibles.",
-  "arkCoinsRenewLock": "Las monedas en renovación no pueden gastarse hasta que la transacción de la ronda se confirme en la red Bitcoin: normalmente unos diez minutos, a veces una hora o más. Renovar todas las monedas no deja nada con que pagar mientras tanto."
+  "arkRenewConfirmTitle": "¿Renovar estas monedas?",
+  "arkRenewConfirmBody": "Tu billetera renueva las monedas sola y gratis cuando están cerca de expirar. Renovar ahora es opcional.",
+  "arkRenewConfirmFee": "Comisión de renovación",
+  "arkRenewConfirmLeft": "Queda para gastar mientras tanto",
+  "arkRenewConfirmAll": "Es todo tu saldo de Gastos. No podrás pagar ni enviar desde Gastos hasta que la renovación se confirme.",
+  "arkRenewConfirmWait": "Las monedas en renovación no pueden gastarse hasta que la transacción de la ronda se confirme en la red Bitcoin: normalmente unos diez minutos, a veces una hora o más. Una renovación iniciada no se puede cancelar.",
+  "arkRenewViewTx": "Ver la transacción de la ronda"
 }

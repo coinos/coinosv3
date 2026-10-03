@@ -915,5 +915,11 @@
   "videoLargeHelp": "超过 {mb} MB 或高于 1080p 的视频会等你点按再播放，以免动态耗尽流量。在慢速或省流量连接下，上限更低。",
   "arkLnRenewing": "没有发送任何款项。{sats} sats 正在续期，在续期于比特币网络确认之前无法使用：通常约十分钟，有时一小时或更久。请到时再试。",
   "arkLnShort": "余额不足：这笔付款连同手续费需要 {need} sats，可用 {have} sats。",
-  "arkCoinsRenewLock": "续期中的币在该轮交易于比特币网络确认之前无法使用：通常约十分钟，有时一小时或更久。把所有币都续期，期间就没有可用于付款的余额。"
+  "arkRenewConfirmTitle": "续期这些币吗？",
+  "arkRenewConfirmBody": "钱包会在币快到期时自动免费续期。现在续期是可选的。",
+  "arkRenewConfirmFee": "续期手续费",
+  "arkRenewConfirmLeft": "期间可用余额",
+  "arkRenewConfirmAll": "这是你全部的消费余额。在续期确认之前，你无法从消费余额付款或转账。",
+  "arkRenewConfirmWait": "续期中的币在该轮交易于比特币网络确认之前无法使用：通常约十分钟，有时一小时或更久。续期一旦开始便无法取消。",
+  "arkRenewViewTx": "查看该轮交易"
 }

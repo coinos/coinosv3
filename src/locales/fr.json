@@ -915,5 +915,11 @@
   "videoLargeHelp": "Les vidéos de plus de {mb} Mo ou au-delà de 1080p attendent un toucher, pour que le fil ne dévore pas vos données. La limite est plus basse sur une connexion lente ou en économie de données.",
   "arkLnRenewing": "Rien n’a été envoyé. {sats} sats sont en cours de renouvellement et ne peuvent pas être dépensés avant que le renouvellement soit confirmé sur le réseau Bitcoin : en général une dizaine de minutes, parfois une heure ou plus. Réessayez ensuite.",
   "arkLnShort": "Solde insuffisant : ce paiement demande {need} sats avec ses frais, et {have} sont disponibles.",
-  "arkCoinsRenewLock": "Les pièces en cours de renouvellement ne peuvent pas être dépensées avant que la transaction du tour soit confirmée sur le réseau Bitcoin : en général une dizaine de minutes, parfois une heure ou plus. Tout renouveler ne laisse rien pour payer entre-temps."
+  "arkRenewConfirmTitle": "Renouveler ces pièces ?",
+  "arkRenewConfirmBody": "Votre portefeuille renouvelle les pièces tout seul, gratuitement, quand elles approchent de l’expiration. Renouveler maintenant est facultatif.",
+  "arkRenewConfirmFee": "Frais de renouvellement",
+  "arkRenewConfirmLeft": "Reste à dépenser entre-temps",
+  "arkRenewConfirmAll": "C’est tout votre solde Dépenses. Vous ne pourrez ni payer ni envoyer depuis Dépenses avant la confirmation du renouvellement.",
+  "arkRenewConfirmWait": "Les pièces en cours de renouvellement ne peuvent pas être dépensées avant que la transaction du tour soit confirmée sur le réseau Bitcoin : en général une dizaine de minutes, parfois une heure ou plus. Un renouvellement lancé ne peut pas être annulé.",
+  "arkRenewViewTx": "Voir la transaction du tour"
 }

@@ -915,5 +915,11 @@
   "videoLargeHelp": "Videos über {mb} MB oder über 1080p warten auf einen Tipp, damit der Feed nicht dein Datenvolumen frisst. Bei langsamer Verbindung oder Datensparmodus ist die Grenze niedriger.",
   "arkLnRenewing": "Es wurde nichts gesendet. {sats} Sats werden gerade erneuert und können erst ausgegeben werden, wenn die Erneuerung im Bitcoin-Netzwerk bestätigt ist: meist etwa zehn Minuten, manchmal eine Stunde oder länger. Versuche es dann erneut.",
   "arkLnShort": "Nicht genug im Ausgabenkonto: Diese Zahlung braucht mit Gebühr {need} Sats, verfügbar sind {have}.",
-  "arkCoinsRenewLock": "Coins in Erneuerung können erst ausgegeben werden, wenn die Transaktion der Runde im Bitcoin-Netzwerk bestätigt ist: meist etwa zehn Minuten, manchmal eine Stunde oder länger. Wer alle Coins erneuert, kann in der Zwischenzeit nichts bezahlen."
+  "arkRenewConfirmTitle": "Diese Coins erneuern?",
+  "arkRenewConfirmBody": "Deine Wallet erneuert Coins von selbst und kostenlos, wenn sie bald ablaufen. Jetzt zu erneuern ist freiwillig.",
+  "arkRenewConfirmFee": "Erneuerungsgebühr",
+  "arkRenewConfirmLeft": "In der Zwischenzeit verfügbar",
+  "arkRenewConfirmAll": "Das ist dein gesamtes Ausgabenguthaben. Du kannst daraus nichts bezahlen oder senden, bis die Erneuerung bestätigt ist.",
+  "arkRenewConfirmWait": "Coins in Erneuerung können erst ausgegeben werden, wenn die Transaktion der Runde im Bitcoin-Netzwerk bestätigt ist: meist etwa zehn Minuten, manchmal eine Stunde oder länger. Eine begonnene Erneuerung lässt sich nicht abbrechen.",
+  "arkRenewViewTx": "Transaktion der Runde ansehen"
 }

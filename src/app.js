@@ -3015,7 +3015,7 @@ function goHome() {
       if (['screen', 'tab', 'msgView', 'msgCommunity', 'msgPeer', 'feedId'].includes(f)) continue;
       ui[f] = ['chatOpen', 'giftMode', 'profEditFilled', 'profOverThread'].includes(f) ? false : null;
     }
-    ui.arkCoinsSel = null; ui.pos = null; ui.feedEdit = null; ui.feedMenu = null;
+    ui.arkCoinsSel = null; ui.arkRenewConfirm = null; ui.pos = null; ui.feedEdit = null; ui.feedMenu = null;
     ui.tab = wallet.offline ? 'settings' : 'history';
     ui.draft = null;
     ui.sendResult = null;

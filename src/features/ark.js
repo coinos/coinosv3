@@ -2215,8 +2215,8 @@ export function arkFeature(ctx) {
     const pendingCoins = ((st && st.vtxos) || []).filter((v) => v.state === 'pending' && inRound.has(v.id));
     const tip = (mgr && mgr._tipH) || 0;
     const back = embedded
-      ? () => { ui.arkCoinsSel = null; ctx.goHome(); }
-      : () => ctx.goBack(() => { ui.arkCoinsPage = null; ui.arkCoinsSel = null; }); // the page is a history entry now
+      ? () => { ui.arkCoinsSel = null; ui.arkRenewConfirm = null; ctx.goHome(); }
+      : () => ctx.goBack(() => { ui.arkCoinsPage = null; ui.arkCoinsSel = null; ui.arkRenewConfirm = null; }); // the page is a history entry now
     if (!spend.length && !pendingCoins.length) {
       if (embedded) return h('div', { class: 'card col', style: 'gap:6px' }, h('h3', { style: 'margin:0' }, t('arkCoinsTitle')), h('p', { class: 'small muted', style: 'margin:0' }, t('arkCoinsNone')));
       ui.arkCoinsPage = null; return null; // nothing left to manage
@@ -2296,8 +2296,33 @@ export function arkFeature(ctx) {
       mgr.refresh(selCoins.map((v) => v.id), { manual: true }).catch((e) => toast(e.message));
       toast(t('arkDepthRenewed'));
       ui.arkCoinsSel = null;
+      ui.arkRenewConfirm = null;
       render(); // the page stays: the coins show as renewing
     };
+    // "Renew" asks once, with the numbers on the table: the coins it takes
+    // can't be spent until the round's transaction confirms, it can't be
+    // called back, and by default it takes every coin. (A user renewed their
+    // whole balance right after being paid and couldn't pay for an hour.)
+    if (ui.arkRenewConfirm && selCoins.length) {
+      const selSat = selCoins.reduce((n, v) => n + v.amountSat, 0);
+      const leftSat = spend.reduce((n, v) => n + v.amountSat, 0) - selSat;
+      const row = (k, v, cls = '') => h('div', { class: 'row between' }, h('span', { class: 'small muted' }, k), h('span', { class: 'small' + (cls ? ' ' + cls : '') }, v));
+      return h('div', { class: 'col ark-renew-confirm', style: 'gap:16px' },
+        h('div', { class: 'card col', style: 'gap:10px' },
+          h('h3', { style: 'margin:0' }, t('arkRenewConfirmTitle')),
+          h('p', { class: 'small muted', style: 'margin:0' }, t('arkRenewConfirmBody')),
+          h('div', { class: 'col', style: 'gap:4px' },
+            row(t('arkExitConfirmCoins'), String(selCoins.length)),
+            row(t('arkExitConfirmAmount'), fmtSats(selSat) + ' sats'),
+            row(t('arkRenewConfirmFee'), selFee > 0 ? fmtSats(selFee) + ' sats' : t('arkDepthFree')),
+            row(t('arkRenewConfirmLeft'), fmtSats(leftSat) + ' sats', leftSat ? '' : 'err')),
+          leftSat ? null : h('div', { class: 'notice err small' }, t('arkRenewConfirmAll')),
+          h('p', { class: 'small muted', style: 'margin:0' }, t('arkRenewConfirmWait')),
+          h('button', { class: 'btn-primary btn-block ark-renew-go', disabled: !!ui.arkBusy || !mgr, onClick: renew },
+            selFee > 0 ? t('arkCoinsRenewNowFee', { fee: fmtSats(selFee) + ' sats' }) : t('arkDepthRenewBtn'))),
+        h('button', { class: 'btn-ghost btn-block', onClick: () => { ui.arkRenewConfirm = null; render(); } }, t('cancel')));
+    }
+    if (ui.arkRenewConfirm) ui.arkRenewConfirm = null; // nothing selected any more
     const stageOf = (a) => a.step === 'issued' ? t('arkRenewStageFinishing') : a.step === 'submitted' ? t('arkRenewStageRound') : t('arkRenewStageQueued');
     const renewingCard = renewing.length ? h('div', { class: 'card col', style: 'gap:8px' },
       h('div', { class: 'row gap6', style: 'align-items:center' },
@@ -2305,6 +2330,13 @@ export function arkFeature(ctx) {
       ...renewing.map((a) => h('div', { class: 'col', style: 'gap:2px' },
         h('div', { class: 'small' }, t('arkRenewingLine', { amount: fmtSats(a.inAmountSat || (a.outAmountSat + (a.feeSat || 0))), fee: a.feeSat ? t('arkRenewingFee', { fee: fmtSats(a.feeSat) }) : '' })),
         h('div', { class: 'small muted' }, stageOf(a)),
+        // the round's transaction, once the round has run: the thing the
+        // wait is for, there to be looked at
+        a.fundingTxid ? (() => {
+          const url = wallet.api.explorerTx(a.fundingTxid);
+          return h('a', { class: 'linklike small ark-renew-tx', href: url, target: '_blank', rel: 'noopener',
+            onClick: (e) => { e.preventDefault(); openExternal(url); } }, t('arkRenewViewTx'));
+        })() : null,
         // a check that failed is retried on the next sync; the reason is a
         // server string nobody should have to read
         a.lastError ? h('div', { class: 'small faint' }, t('arkRenewStageRetry')) : null))) : null;
@@ -2415,20 +2447,17 @@ export function arkFeature(ctx) {
           ...schedule.map((r) => h('div', { class: 'row between' },
             h('span', { class: 'small muted' }, r.label),
             h('span', { class: 'small' + (r.free ? ' faint' : '') }, r.cost)))) : null,
-        !spend.length ? null : h('button', { class: 'btn-primary btn-block', disabled: !!ui.arkBusy || !selCoins.length || !mgr, onClick: renew },
+        !spend.length ? null : h('button', { class: 'btn-primary btn-block ark-renew-ask', disabled: !!ui.arkBusy || !selCoins.length || !mgr, onClick: () => { ui.arkRenewConfirm = true; render(); try { window.scrollTo({ top: 0 }); } catch {} } },
           !selCoins.length ? t('arkCoinsRenewNone')
             : selCoins.length < spend.length
               ? t('arkCoinsRenewSome', { n: selCoins.length, fee: selFee > 0 ? fmtSats(selFee) + ' sats' : t('arkDepthFree') })
-              : selFee > 0 ? t('arkCoinsRenewNowFee', { fee: fmtSats(selFee) + ' sats' }) : t('arkDepthRenewBtn')),
-        // said before the tap: a renewal takes its coins out of reach until
-        // the round's transaction confirms, and by default it takes them all
-        !spend.length ? null : h('div', { class: 'notice info small ark-renew-lock' }, t('arkCoinsRenewLock'))),
+              : selFee > 0 ? t('arkCoinsRenewNowFee', { fee: fmtSats(selFee) + ' sats' }) : t('arkDepthRenewBtn'))),
       h('div', { class: 'card col', style: 'gap:8px' },
         h('h4', { style: 'margin:0' }, t('arkCoinsCoopTitle')),
         h('p', { class: 'small muted', style: 'margin:0' }, t('arkCoopDesc')),
         h('button', { class: 'btn-primary btn-block', disabled: !!ui.arkBusy || !spendableSat || wallet.watchOnly, onClick: () => {
           const address = wallet.freshReceive().address;
-          ui.arkCoinsPage = null; ui.arkCoinsSel = null; ui.arkExitPage = null; ui.arkExitConfirm = null;
+          ui.arkCoinsPage = null; ui.arkCoinsSel = null; ui.arkExitPage = null; ui.arkExitConfirm = null; ui.arkRenewConfirm = null;
           ui.arkOffboarded = null; ui.arkError = '';
           ctx.showSend({ fresh: true });
           ui.arkOffboardSend = { address, amount: String(spendableSat), fromCoins: true };

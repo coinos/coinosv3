@@ -5509,7 +5509,9 @@ export function messagesFeature(ctx) {
       const have = videoInfo.get(f.url) || {};
       const d = {};
       if (!have.size && +f.size > 0) d.size = +f.size;
-      const m = /^(\d+)x(\d+)$/.exec(f.dim || '');
+      // no size, but a bitrate (bits/s) and a duration (Primal posts these): near enough
+      else if (!have.size && +f.bitrate > 0 && +f.duration > 0) d.size = Math.round(+f.bitrate * +f.duration / 8);
+      const m = /^(\d+)(?:\.0+)?x(\d+)(?:\.0+)?$/.exec(f.dim || '');
       if (!have.w && m) { d.w = +m[1]; d.h = +m[2]; }
       if (!have.image && /^https?:\/\//.test(f.image || '')) d.image = f.image;
       if (Object.keys(d).length) noteVideoInfo(f.url, d);
@@ -5548,7 +5550,10 @@ export function messagesFeature(ctx) {
     const have = videoInfo.get(url);
     // a post that states size and shape is taken at its word: no request at
     // all — unless the file's layout is wanted (a thumbnail)
-    if (have && (have.probed || have.failed || (!layout && have.size && have.w))) return Promise.resolve(have);
+    // a host that didn't answer is asked again after an hour (a phone on
+    // a bad connection must not mark a clip unmeasurable for good)
+    const failedLately = have && typeof have.failed === 'number' && Date.now() - have.failed < 3_600_000;
+    if (have && (have.probed || failedLately || (!layout && have.size && have.w))) return Promise.resolve(have);
     if (videoProbes.has(url)) return videoProbes.get(url);
     const task = new Promise((resolve) => videoProbeQueue.push({ url, resolve })).finally(() => videoProbes.delete(url));
     videoProbes.set(url, task);
@@ -5565,7 +5570,7 @@ export function messagesFeature(ctx) {
   }
   async function runVideoProbe(url) {
     const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 6000);
+    const timer = setTimeout(() => ctrl.abort(), 10_000);
     try {
       const r = await fetch(url, { headers: { Range: 'bytes=0-' + (VIDEO_PROBE_BYTES - 1) }, signal: ctrl.signal });
       if (!r.ok) throw new Error('HTTP ' + r.status);
@@ -5585,13 +5590,22 @@ export function messagesFeature(ctx) {
       let o = 0;
       for (const p of parts) { if (o >= buf.length) break; buf.set(p.subarray(0, buf.length - o), o); o += p.length; }
       const head = readMp4Head(buf);
-      const d = { probed: true, ranges, faststart: head.faststart === true };
+      const d = { probed: true, ranges, faststart: head.faststart === true, failed: undefined };
       if (total > 0) d.size = total;
+      else {
+        // a server that hides Content-Range from scripts (Primal's) still
+        // says Content-Length to a HEAD, which any page may read
+        try {
+          const hr = await fetch(url, { method: 'HEAD', signal: AbortSignal.timeout(5000) });
+          const n = +hr.headers.get('content-length');
+          if (hr.ok && n > 0) d.size = n;
+        } catch {}
+      }
       if (head.w && !(videoInfo.get(url) || {}).w) { d.w = head.w; d.h = head.h; }
       if (head.w) rememberVideo(url, head.w, head.h);
       noteVideoInfo(url, d);
     } catch {
-      noteVideoInfo(url, { failed: true }); // a host that won't say (no CORS, down): asked again next session only
+      noteVideoInfo(url, { failed: Date.now() }); // a host that won't say (no CORS, down, slow): asked again in an hour
     } finally { clearTimeout(timer); }
     return videoInfo.get(url);
   }
@@ -9797,7 +9811,18 @@ export function messagesFeature(ctx) {
         probeVideo(url, true).then((d) => {
           if (!v.isConnected) return;
           const heavy = videoHeavy(url);
-          const still = d && (d.probed ? d.faststart || d.ranges : !heavy);
+          // unmeasured (the probe failed): try for a frame anyway, but give
+          // up and let go after eight seconds, so an index-last file can't
+          // stream whole into a tile
+          const still = d && (d.probed ? d.faststart || d.ranges : true);
+          if (still && !(d && d.probed)) {
+            const cap = setTimeout(() => {
+              if (v.readyState >= 2 || !v.isConnected) return;
+              try { v.removeAttribute('src'); v.load(); } catch {}
+              v.replaceWith(h('span', { class: 'media-tile-cost' }, ''));
+            }, 8000);
+            v.addEventListener('loadeddata', () => clearTimeout(cap), { once: true });
+          }
           if (still) {
             v.muted = true;
             // readable pixels, so the frame can be kept; a host that refuses

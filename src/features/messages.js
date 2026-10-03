@@ -15,7 +15,7 @@
 import {
   subscribeOn, publishOn, queryOn, queryStreamOn, fetchInboxRelays, relayAlive, liveRelayList, resetRelay,
   npubOf, neventOf, parseNostrPubkey, parseNostrRef, generateSecretKey, getPublicKey, finalizeEvent, nip44,
-  PROFILE_RELAYS, openWrapsOffthread, unwrapDMsOffthread, verifyEventsAsync,
+  PROFILE_RELAYS, openWrapsOffthread, unwrapDMsOffthread, verifyEventsAsync, setSyncConfig, DEFAULT_SYNC_RELAYS,
 } from '../nostr.js';
 import {
   channelKey, channelStream, channelEpoch, channelIsPrivate, controlKey, guestbookKey, openWrap, wrapRumor, rumorWithId,
@@ -7611,6 +7611,190 @@ export function messagesFeature(ctx) {
             : h('div', { class: 'small faint' }, t('followHistNone')));
   }
 
+  // ---- relay management: your NIP-65 list and your DM inbox (NIP-17) -------
+  // Both are replaceable events other clients write too, so the card only
+  // ever edits a copy it looked for far and wide first (the follow list was
+  // once overwritten from a two-relay lookup), and checks again just before
+  // publishing that nobody saved a newer one meanwhile.
+  const RELAY_LOOKUP = () => [...new Set([...PROFILE_RELAYS, ...PROFILE_INDEX_RELAYS, ...DM_RELAYS,
+    ...PROFILE_ARCHIVE_RELAYS, ...FOLLOW_HISTORY_RELAYS])];
+  async function fetchOwnRelayLists(me) {
+    const evs = await queryOn(RELAY_LOOKUP(), { kinds: [10002, 10050], authors: [me] }, 6000).catch(() => []);
+    const newest = (k) => (evs || []).filter((e) => e.pubkey === me && e.kind === k).sort((a, b) => b.created_at - a.created_at)[0] || null;
+    return { r: newest(10002), dm: newest(10050) };
+  }
+  const rowsOf10002 = (e) => {
+    const out = new Map();
+    for (const x of (e && e.tags) || []) {
+      if (x[0] !== 'r') continue;
+      const url = normRelay(x[1]);
+      if (!url) continue;
+      const row = out.get(url) || { url, read: false, write: false };
+      if (!x[2] || x[2] === 'read') row.read = true;
+      if (!x[2] || x[2] === 'write') row.write = true;
+      out.set(url, row);
+    }
+    return [...out.values()];
+  };
+  const urlsOf10050 = (e) => [...new Set(((e && e.tags) || []).filter((x) => x[0] === 'relay').map((x) => normRelay(x[1])).filter(Boolean))];
+  const tagsOfRows = (rows) => rows.filter((r) => r.read || r.write)
+    .map((r) => (r.read && r.write ? ['r', r.url] : ['r', r.url, r.read ? 'read' : 'write']));
+  const sameTags = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+
+  // How long a relay takes to open a socket, measured once per card visit.
+  function probeRelayLatency(url) {
+    const rm = ui.relayMgr;
+    if (!rm || rm.probe[url]) return;
+    rm.probe[url] = { state: 'wait' };
+    const done = (state, ms) => {
+      if (rm.probe[url].state !== 'wait') return;
+      rm.probe[url] = { state, ms };
+      try { ws.close(); } catch {}
+      if (ui.relayMgr === rm) render();
+    };
+    const t0 = performance.now();
+    let ws;
+    try { ws = new WebSocket(url); } catch { done('bad'); return; }
+    ws.onopen = () => done('ok', Math.round(performance.now() - t0));
+    ws.onerror = () => done('bad');
+    setTimeout(() => done('bad'), 6000);
+  }
+
+  function loadRelayMgr(me, inRender = false) {
+    const rm = ui.relayMgr = { me, loading: true, probe: {}, add: '', addDm: '' };
+    if (!inRender) render();
+    fetchOwnRelayLists(me).then((base) => {
+      if (ui.relayMgr !== rm) return;
+      rm.base = base;
+      rm.rows = base.r ? rowsOf10002(base.r) : PROFILE_RELAYS.map((url) => ({ url, read: true, write: true }));
+      rm.dm = base.dm ? urlsOf10050(base.dm) : [...DM_RELAYS];
+      rm.loading = false;
+      render();
+    });
+  }
+
+  async function saveRelayMgr() {
+    const rm = ui.relayMgr;
+    if (!rm || rm.saving || rm.loading) return;
+    const tags = tagsOfRows(rm.rows);
+    const dmTags = rm.dm.map((u) => ['relay', u]);
+    if (!tags.some((x) => !x[2] || x[2] === 'write') || !tags.some((x) => !x[2] || x[2] === 'read')) { toast(t('relaysNeedBoth')); return; }
+    if (!dmTags.length) { toast(t('relaysNeedDm')); return; }
+    const rChanged = !rm.base.r || !sameTags(tags, tagsOfRows(rowsOf10002(rm.base.r)));
+    const dmChanged = !rm.base.dm || !sameTags(rm.dm, urlsOf10050(rm.base.dm));
+    if (!rChanged && !dmChanged) { toast(t('relaysUnchanged')); return; }
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) { toast(t('msgSendFailed')); return; }
+    rm.saving = true;
+    render();
+    try {
+      const id = await requireIdentity();
+      if (id.pubkey !== rm.me) throw new Error(t('relaysWrongIdentity'));
+      // someone else's client may have saved since this card loaded
+      const now = await fetchOwnRelayLists(rm.me);
+      const newer = (a, b) => a && (!b || a.created_at > b.created_at);
+      if ((rChanged && newer(now.r, rm.base.r)) || (dmChanged && newer(now.dm, rm.base.dm))) {
+        toast(t('relaysChangedElsewhere'));
+        loadRelayMgr(rm.me);
+        return;
+      }
+      const sign = (partial) => (id.signer instanceof Uint8Array ? finalizeEvent(partial, id.signer) : id.signer.signEvent(partial));
+      const stamp = (old) => Math.max(Math.floor(Date.now() / 1000), old ? old.created_at + 1 : 0);
+      const writes = tags.filter((x) => !x[2] || x[2] === 'write').map((x) => x[1]);
+      // the new list goes to the relays it names, the old ones (so they drop
+      // the stale copy) and the indexers other clients look lists up on
+      const everywhere = [...new Set([...PROFILE_RELAYS, ...PROFILE_INDEX_RELAYS,
+        ...rowsOf10002(rm.base.r).map((r) => r.url), ...tags.map((x) => x[1])])];
+      if (rChanged) {
+        const evt = await sign({ kind: 10002, content: '', created_at: stamp(rm.base.r), tags });
+        if (!(await publishOn(everywhere, evt))) throw new Error(t('msgSendFailed'));
+        rm.base.r = evt;
+        relayListCache.set(rm.me, Promise.resolve(writes.slice(0, 4)));
+        relayListsNow().set(rm.me, { r: writes, t: Date.now() });
+        saveRelayLists();
+        // wallet sync rides the same write relays (adoptSyncRelays)
+        setSyncConfig({ enabled: true, relays: [...new Set([...writes.slice(0, 4), ...DEFAULT_SYNC_RELAYS])].slice(0, 5) });
+      }
+      if (dmChanged) {
+        const evt = await sign({ kind: 10050, content: '', created_at: stamp(rm.base.dm), tags: dmTags });
+        const to = [...new Set([...everywhere, ...urlsOf10050(rm.base.dm), ...rm.dm, ...DM_RELAYS])];
+        if (!(await publishOn(to, evt))) throw new Error(t('msgSendFailed'));
+        rm.base.dm = evt;
+        resubscribeStreams(); // read the inbox from the new list now
+      }
+      toast(t('relaysSaved'));
+    } catch (e) {
+      if (!(e instanceof NoIdentity)) toast(e.message || String(e));
+    } finally {
+      rm.saving = false;
+      render();
+    }
+  }
+
+  function relaysCard() {
+    const me = mePk();
+    if (!me) return null;
+    if (!ui.relayMgr || ui.relayMgr.me !== me) loadRelayMgr(me, true);
+    const rm = ui.relayMgr;
+    const head = [h('h3', {}, t('relaysTitle')), h('p', { class: 'small muted', style: 'margin:0' }, t('relaysDesc'))];
+    if (rm.loading) {
+      return h('div', { class: 'card col relays-card', style: 'gap:10px' }, ...head,
+        h('div', { class: 'row', style: 'justify-content:center;padding:6px' }, h('span', { class: 'spinner sm' })));
+    }
+    const dot = (url) => {
+      probeRelayLatency(url);
+      const p = rm.probe[url] || {};
+      const color = p.state === 'ok' ? 'var(--green,#2e9d5b)' : p.state === 'bad' ? 'var(--red,#c0392b)' : 'var(--line)';
+      return h('span', { title: p.state === 'ok' ? p.ms + ' ms' : p.state === 'bad' ? t('relaysDown') : '',
+        style: `flex:0 0 auto;width:8px;height:8px;border-radius:50%;background:${color}` });
+    };
+    const status = (url) => {
+      const p = rm.probe[url] || {};
+      // a green dot says it's up (the ms are its tooltip); only trouble is spelled out
+      return p.state === 'bad' ? h('span', { class: 'small faint', style: 'white-space:nowrap' }, t('relaysDown')) : null;
+    };
+    const name = (url) => h('span', { class: 'grow mono', style: 'min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px' },
+      url.replace(/^wss:\/\//, ''));
+    const x = (onClick) => h('button', { class: 'linklike', type: 'button', 'aria-label': t('remove'), style: 'padding:0 4px', onClick }, '×');
+    const flag = (row, k, label) => h('button', {
+      class: 'feed-chip' + (row[k] ? ' on' : ''), type: 'button', style: 'padding:3px 9px;font-size:12px',
+      onClick: () => { row[k] = !row[k]; if (!row.read && !row.write) row[k === 'read' ? 'write' : 'read'] = true; render(); },
+    }, label);
+    const adder = (key, cls, onAdd) => {
+      const go = (ev) => {
+        const url = normRelay(rm[key]);
+        if (!url || !/^[a-z0-9.-]+(:\d+)?$/i.test(new URL(url).host)) { if (rm[key].trim()) toast(t('relaysBadUrl')); return; }
+        rm[key] = '';
+        const box = ev && ev.currentTarget && ev.currentTarget.parentNode.querySelector('input');
+        if (box) box.value = '';
+        onAdd(url);
+        render();
+      };
+      return h('div', { class: 'row gap6' },
+        h('input', { type: 'text', class: 'grow ' + cls, placeholder: 'wss://relay.example.com', value: rm[key],
+          autocapitalize: 'none', autocomplete: 'off', spellcheck: 'false',
+          onInput: (ev) => { rm[key] = ev.target.value; },
+          onKeydown: (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); go(ev); } } }),
+        h('button', { class: 'btn-sm', type: 'button', onClick: go }, t('modAdd')));
+    };
+    return h('div', { class: 'card col relays-card', style: 'gap:10px' }, ...head,
+      h('div', { class: 'small muted' }, t('relaysPublic')),
+      rm.base.r ? null : h('div', { class: 'small faint' }, t('relaysNoneYet')),
+      h('div', { class: 'col', style: 'gap:8px' }, ...rm.rows.map((row) => h('div', { class: 'row gap6 relay-row', style: 'align-items:center' },
+        dot(row.url), name(row.url), status(row.url),
+        flag(row, 'read', t('relaysRead')), flag(row, 'write', t('relaysWrite')),
+        x(() => { rm.rows = rm.rows.filter((r) => r !== row); render(); })))),
+      adder('add', 'relay-add', (url) => { if (!rm.rows.some((r) => r.url === url)) rm.rows.push({ url, read: true, write: true }); }),
+      h('div', { class: 'small muted', style: 'margin-top:6px' }, t('relaysInbox')),
+      rm.base.dm ? null : h('div', { class: 'small faint' }, t('relaysNoneYet')),
+      h('div', { class: 'col', style: 'gap:8px' }, ...rm.dm.map((url) => h('div', { class: 'row gap6 relay-dm-row', style: 'align-items:center' },
+        dot(url), name(url), status(url),
+        x(() => { rm.dm = rm.dm.filter((u) => u !== url); render(); })))),
+      adder('addDm', 'relay-dm-add', (url) => { if (!rm.dm.includes(url)) rm.dm.push(url); }),
+      h('div', { class: 'row gap6', style: 'margin-top:4px' },
+        h('button', { class: 'grow relays-save', disabled: rm.saving, onClick: () => saveRelayMgr() }, rm.saving ? t('relaysSaving') : t('relaysSave')),
+        h('button', { class: 'btn-ghost', disabled: rm.saving, onClick: () => loadRelayMgr(me) }, t('relaysReload'))));
+  }
+
   function moderationCard() {
     const m = mutesNow();
     const e = ui.modEdit || (ui.modEdit = { word: '' });
@@ -11054,7 +11238,7 @@ export function messagesFeature(ctx) {
     id: 'messages',
     // group-chat state is device state in IndexedDB: it goes with the account
     wipeCache(bases) { import('../marmot-store.js').then((m) => { for (const b of bases) m.wipeMarmot(b); }).catch(() => {}); },
-    nostrSettingsCards() { return [followHistoryCard(), moderationCard()]; },
+    nostrSettingsCards() { return [relaysCard(), followHistoryCard(), moderationCard()]; },
     // The app came back after being backgrounded. A phone freezes a hidden
     // tab: the relay sockets are cut and every post made in the meantime is
     // simply missing, which is why the feed used to sit there looking stale

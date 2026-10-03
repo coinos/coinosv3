@@ -43,6 +43,7 @@ import { t, getLang } from '../i18n.js';
 import { inLanguage, isMachinePost } from '../lang-guess.js';
 import { animateZap, warmZapSound } from '../zap-animation.js';
 import { SIGNER_SILENT } from '../dm.js';
+import { dlog } from '../debug.js';
 
 // The coinos community's join material lives in ../community.js — shared
 // with the public read-only chat page so the two can never drift.
@@ -355,6 +356,7 @@ export function messagesFeature(ctx) {
     for (const room of rooms.values())
       for (const [id, msgs] of room.byChannel)
         bump(chRead(id), newestFrom(msgs.values(), (m) => !my.includes(m.author)));
+    for (const g of wnGroups()) bump(wnRead(g.id), wnNewest(g));
     if (changed) { bumpMsgRev(); save(s); try { wallet.saveCache(); } catch {} }
     render();
   }
@@ -362,6 +364,7 @@ export function messagesFeature(ctx) {
   const anyUnread = () => {
     for (const [pk, msgs] of threads) if (dmUnread(pk, msgs)) return true;
     for (const room of rooms.values()) if (roomUnread(room)) return true;
+    for (const g of wnGroups()) if (wnUnread(g)) return true;
     return false;
   };
 
@@ -428,6 +431,8 @@ export function messagesFeature(ctx) {
     for (const room of rooms.values())
       for (const [id, msgs] of room.byChannel)
         if (newestFrom(msgs.values(), (m) => !my.includes(m.author)) > Math.max(seen, s.read[chRead(id)] || 0)) n++;
+    for (const g of wnGroups())
+      if (!g.fresh && wnNewest(g) > Math.max(seen, s.read[wnRead(g.id)] || 0)) n++;
     return n;
   }
   const communityById = (cid) => communities().find((c) => c.community_id === cid);
@@ -1198,6 +1203,7 @@ export function messagesFeature(ctx) {
     } finally { tearingDown = false; }
     if (wasDm) startDMs();
     for (const room of wanted) subscribeRoom(room);
+    if (wn) wn.resubscribe();
   }
 
   // ---- subscription watchdog ------------------------------------------------
@@ -1230,6 +1236,7 @@ export function messagesFeature(ctx) {
     const urls = new Set();
     if (dmStarted) for (const u of liveRelayList(DM_RELAYS)) urls.add(u);
     for (const room of rooms.values()) if (room.subscribed) for (const u of liveRelayList(room.relays)) urls.add(u);
+    if (wn) for (const u of liveRelayList(wn.relaysInUse())) urls.add(u);
     const dead = [...urls].filter((u) => !relayAlive(u));
     if (!dead.length && !subsDead) { rebuildBackoff = 15_000; return; }
     const now = Date.now();
@@ -2612,9 +2619,9 @@ export function messagesFeature(ctx) {
 
   const threadOf = (peer) => threads.get(peer) || threads.set(peer, new Map()).get(peer);
 
-  function noteDM(peer, rumor, mine) {
+  function noteDM(peer, rumor, mine, wnId) {
     if (!peer || !rumor.id) return;
-    threadOf(peer).set(rumor.id, { rumor, mine });
+    threadOf(peer).set(rumor.id, wnId ? { rumor, mine, wn: wnId } : { rumor, mine });
     bumpMsgRev();
     scheduleRepaint();
   }
@@ -2707,6 +2714,9 @@ export function messagesFeature(ctx) {
             pendingDirect.set(got.rumor.id, { bundle: b, from: got.author, rid: got.rumor.id });
           scheduleRepaint();
         } catch {}
+      } else if (got.rumor.kind === 444 && !isMe(got.author)) {
+        // a White Noise invitation: the group itself says who is asking
+        whiteNoise().then((c) => c && c.welcome(got.rumor)).catch(() => {});
       }
       return true;
     }
@@ -2852,6 +2862,8 @@ export function messagesFeature(ctx) {
     const id = await identity();
     if (!id) { noIdToast(); return; }
     if (!(id.signer instanceof Uint8Array) && !id.signer.encryptTo) { toast(t('msgSignerNoDm')); return; }
+    const road = await wnRoute(peer).catch(() => null);
+    if (road) return sendWnDirect(peer, road, text);
     // Same optimistic shape as channel sends: the rumor is synchronous and on
     // screen at once. Wrapping the same rumor keeps the id, so the sent-copy
     // echo folds into this entry instead of duplicating it.
@@ -2895,6 +2907,8 @@ export function messagesFeature(ctx) {
     if (!id) { noIdToast(); return; }
     if (!(id.signer instanceof Uint8Array) && !id.signer.encryptTo) { toast(t('msgSignerNoDm')); return; }
     ui.msgSheet = null;
+    // a reaction travels with the message it answers
+    if (m.wn) { const g = wn && wn.groups.get(m.wn); if (g) sendWnReaction(g, m, emoji); return; }
     const rumor = makeDMReaction(id.pubkey, peer, m.rumor.id, emoji, reactEmojiTags(emoji));
     const r = dmReacts.get(m.rumor.id) || dmReacts.set(m.rumor.id, new Map()).get(m.rumor.id);
     const prev = r.get(id.pubkey);
@@ -2927,7 +2941,7 @@ export function messagesFeature(ctx) {
       .slice(0, 30);
     s.dms = {};
     for (const [peer, list] of byRecent)
-      s.dms[peer] = list.filter((m) => !m.pending).slice(-CACHE_MAX)
+      s.dms[peer] = list.filter((m) => !m.pending && !m.wn).slice(-CACHE_MAX)
         .map((m) => {
           const row = { id: m.rumor.id, from: m.rumor.pubkey, text: m.rumor.content, t: m.rumor.created_at };
           // a message's custom emoji ride along, or they'd be text after a reload
@@ -2936,6 +2950,275 @@ export function messagesFeature(ctx) {
           return row;
         });
     save(s);
+  }
+
+  // ---- White Noise (Marmot) -----------------------------------------------
+  // The third way a conversation can travel, and the one nobody should have
+  // to choose: MLS groups over nostr, the protocol the White Noise app
+  // speaks. A two-person group with no name IS a direct message — it lands
+  // in the same thread as that person's NIP-17 messages, and a reply goes
+  // back the way their last message came. Groups with a name or more people
+  // get rows of their own, beside the DMs. The MLS code is a chunk of its
+  // own (marmot-client.js), fetched once a wallet is open.
+
+  let wn = null;        // the client for the identity we speak as
+  let wnReadied = false; // asked (once a session) to make us invitable
+  let wnLoading = null; // { pk, p } while it loads
+  const wnReactOf = new Map(); // reaction event id -> { target, pk }: what a later delete undoes
+
+  function whiteNoise() {
+    const pk = identityPk();
+    if (!pk || !wallet._cacheKey) return Promise.resolve(null);
+    if (wn && wn.pubkey === pk) return Promise.resolve(wn);
+    if (wnLoading && wnLoading.pk === pk) return wnLoading.p;
+    if (wn) { try { wn.stop(); } catch {} wn = null; }
+    const p = import('../marmot-client.js').then(async (m) => {
+      if (identityPk() !== pk) return null; // the identity changed while the chunk loaded
+      // the relays new groups are founded on can be pointed elsewhere (dev and tests)
+      let relays = null;
+      try { relays = JSON.parse(localStorage.getItem('coinos-group-relays') || 'null'); } catch {}
+      const c = m.marmotClient({
+        scope: wallet._cacheKey() + ':' + pk, pubkey: pk, identity, on: onWn,
+        ...(Array.isArray(relays) && relays.length ? { relays } : {}),
+      });
+      wn = c;
+      wnLoading = null;
+      await c.start();
+      return c;
+    }).catch((e) => { console.warn('chat: group chats unavailable', e); wnLoading = null; return null; });
+    wnLoading = { pk, p };
+    return p;
+  }
+
+  // One delivered event of a direct group, into that person's thread.
+  function wnIntoThread(g, peer, m) {
+    const th = threadOf(peer);
+    const target = (m.tags.find((x) => x[0] === 'e') || [])[1];
+    if (m.kind === 9) {
+      if (!th.has(m.id) || th.get(m.id).pending) th.set(m.id, { rumor: m, mine: isMe(m.pubkey), wn: g.id });
+    } else if (m.kind === 7 && target) {
+      const key = target + '|' + m.pubkey, at = m.created_at * 1000;
+      if (at >= (dmReactAt.get(key) || 0)) {
+        dmReactAt.set(key, at);
+        (dmReacts.get(target) || dmReacts.set(target, new Map()).get(target)).set(m.pubkey, m.content);
+        wnReactOf.set(m.id, { target, pk: m.pubkey });
+      }
+    } else if (m.kind === 5) {
+      // only the author takes a message (or a reaction) back
+      for (const [, id] of m.tags.filter((x) => x[0] === 'e')) {
+        const hit = th.get(id);
+        if (hit && hit.rumor.pubkey === m.pubkey) th.delete(id);
+        const r = wnReactOf.get(id);
+        if (r && r.pk === m.pubkey) dmReacts.get(r.target)?.delete(r.pk);
+      }
+    } else if (m.kind === 1009 && target) {
+      const hit = th.get(target);
+      if (hit && hit.rumor.pubkey === m.pubkey) th.set(target, { ...hit, rumor: { ...hit.rumor, content: m.content }, edited: true });
+    }
+  }
+
+  function wnReplay() {
+    if (!wn) return;
+    for (const g of wn.groups.values()) {
+      const peer = wn.peer(g);
+      if (!peer) continue;
+      if (g.fresh) wn.accept(g); // a direct message needs no invitation card
+      for (const m of g.log) wnIntoThread(g, peer, m);
+    }
+  }
+
+  function onWn(type, g, data) {
+    if (!wn) return;
+    if (type === 'message') {
+      const peer = wn.peer(g);
+      if (peer) wnIntoThread(g, peer, data);
+      try { noteEmoji(data); } catch {}
+    } else if (type === 'loaded' || type === 'joined') wnReplay();
+    else if (type === 'withdrawn') for (const th of threads.values()) for (const id of data) th.delete(id);
+    wnFolds.delete(g && g.id);
+    bumpMsgRev();
+    scheduleRepaint();
+  }
+
+  // The live direct group with this person (the newest, if a chat was remade).
+  function wnDirect(peer) {
+    if (!wn) return null;
+    let best = null;
+    for (const g of wn.groups.values())
+      if (!g.removed && !g.leaving && wn.peer(g) === peer && (!best || g.at > best.at)) best = g;
+    return best;
+  }
+
+  // Which way a message to this person travels: a group record, 'new' (found
+  // a direct group first), or null for NIP-17. A reply goes back the way
+  // their last message came. A first message goes by White Noise only to
+  // someone whose KeyPackage was published by another app: a coinos wallet
+  // reads NIP-17 on every device it has, where an MLS group reaches just the
+  // one device whose KeyPackage was picked.
+  async function wnRoute(peer) {
+    const c = await whiteNoise();
+    if (!c) return null;
+    await c.load();
+    const g = wnDirect(peer);
+    let theirs = null;
+    for (const m of threads.get(peer)?.values() || [])
+      if (!m.mine && (!theirs || m.rumor.created_at > theirs.rumor.created_at)) theirs = m;
+    if (g) return theirs && !theirs.wn ? null : g;
+    if (theirs) return null;
+    const cand = await Promise.race([c.lookup(peer), new Promise((r) => setTimeout(() => r(null), 3500))]);
+    return cand && cand.client !== 'coinos' ? 'new' : null;
+  }
+
+  async function sendWnDirect(peer, road, text) {
+    const c = wn;
+    const replyTo = ui.msgReplyTo && threadOf(peer).has(ui.msgReplyTo) ? ui.msgReplyTo : null;
+    ui.msgReplyTo = null;
+    ui.emojiAc = null;
+    const inner = c.event(9, text, [...(replyTo ? [['e', replyTo]] : []), ...outboundEmojiTags(text, emojiUrl)]);
+    const entry = { rumor: inner, mine: true, pending: true, wn: true };
+    threadOf(peer).set(inner.id, entry);
+    clearDraft('dm:' + peer);
+    ui.msgStick = true;
+    render();
+    try {
+      const g = road === 'new' ? await c.create({ members: [peer] }) : road;
+      entry.wn = g.id;
+      if (!(await c.send(g, inner))) throw new Error(t('msgSendFailed'));
+      delete entry.pending;
+      render();
+    } catch (e) {
+      threadOf(peer).delete(inner.id);
+      toast(e.message === 'no signer' ? t('msgNoIdentity') : (e.message || String(e)));
+      render();
+    }
+  }
+
+  async function sendWnReaction(g, m, emoji) {
+    const inner = wn.event(7, emoji, [['e', m.rumor.id], ['p', m.rumor.pubkey], ['k', String(m.rumor.kind)], ...reactEmojiTags(emoji)]);
+    const ok = await wn.send(g, inner).catch(() => false);
+    if (!ok) { toast(t('msgSendFailed')); return; }
+    onWn('message', g, inner);
+  }
+
+  // ---- groups ----
+
+  const wnRead = (id) => 'wn:' + id;
+  // groups with a screen of their own (a direct group lives in its DM thread)
+  const wnGroups = () => (wn ? [...wn.groups.values()].filter((g) => !wn.peer(g)) : []);
+
+  function wnTitle(g) {
+    const v = wn.view(g);
+    if (v.name) return v.name;
+    const others = wn.accounts(g).filter((pk) => !isMe(pk));
+    return others.length ? others.slice(0, 3).map(displayName).join(', ') : t('msgGroupUnnamed');
+  }
+
+  // A group's log folded for the screen: chat and system rows in time order
+  // (edits applied, deletions gone) and who reacted with what.
+  const wnFolds = new Map(); // gid -> { n, last, rows, reacts }
+  function wnFold(g) {
+    const memo = wnFolds.get(g.id), last = g.log.length ? g.log[g.log.length - 1].id : '';
+    if (memo && memo.n === g.log.length && memo.last === last) return memo;
+    const byId = new Map(), reacts = new Map(), reactOf = new Map();
+    const sorted = [...g.log].sort((a, b) => a.created_at - b.created_at);
+    for (const m of sorted) if (m.kind === 9 || m.kind === 1210) byId.set(m.id, { rumor: m, mine: isMe(m.pubkey), wn: g.id });
+    for (const m of sorted) {
+      const target = (m.tags.find((x) => x[0] === 'e') || [])[1];
+      if (m.kind === 7 && target) {
+        (reacts.get(target) || reacts.set(target, new Map()).get(target)).set(m.pubkey, m.content);
+        reactOf.set(m.id, { target, pk: m.pubkey });
+      } else if (m.kind === 5) {
+        for (const [, id] of m.tags.filter((x) => x[0] === 'e')) {
+          const hit = byId.get(id);
+          if (hit && hit.rumor.pubkey === m.pubkey && hit.rumor.kind === 9) byId.delete(id);
+          const r = reactOf.get(id);
+          if (r && r.pk === m.pubkey) reacts.get(r.target)?.delete(r.pk);
+        }
+      } else if (m.kind === 1009 && target) {
+        const hit = byId.get(target);
+        if (hit && hit.rumor.pubkey === m.pubkey) byId.set(target, { ...hit, rumor: { ...hit.rumor, content: m.content }, edited: true });
+      }
+    }
+    const fold = { n: g.log.length, last, rows: [...byId.values()], reacts };
+    wnFolds.set(g.id, fold);
+    return fold;
+  }
+  const wnChat = (g) => wnFold(g).rows.filter((m) => m.rumor.kind === 9);
+  const wnNewest = (g) => newestFrom(wnChat(g), (m) => !m.mine);
+  const wnUnread = (g) => !g.fresh && wnNewest(g) > (st().read[wnRead(g.id)] || 0);
+
+  // "Ana added Ben", from a locally derived kind-1210 row
+  function wnSystemText(m) {
+    let c;
+    try { c = JSON.parse(m.content); } catch { return ''; }
+    const d = c.data || {};
+    const a = d.actor ? displayName(d.actor) : '', b = d.subject ? displayName(d.subject) : '';
+    switch (c.system_type) {
+      case 'member_added': return d.actor && d.actor !== d.subject ? t('msgSysAdded', { a, b }) : t('msgSysJoined', { b });
+      case 'member_removed': return t('msgSysRemoved', { a, b });
+      case 'member_left': return t('msgSysLeft', { b });
+      case 'admin_added': return t('msgSysAdminAdded', { b });
+      case 'admin_removed': return t('msgSysAdminRemoved', { b });
+      case 'group_renamed': return t('msgSysRenamed', { a, name: d.name || '' });
+      case 'group_disbanded': return t('msgSysDisbanded', { a });
+      default: return c.text || '';
+    }
+  }
+
+  // People being gathered for a group (the New group panel, or Add person):
+  // each is checked for a KeyPackage as they are picked.
+  const wnReach = new Map(); // pk -> 'checking' | 'ok' | 'no'
+  function wnCheck(pk) {
+    if (wnReach.get(pk) === 'ok' || wnReach.get(pk) === 'checking') return;
+    wnReach.set(pk, 'checking');
+    whiteNoise().then((c) => (c ? c.lookup(pk) : null)).then((cand) => { wnReach.set(pk, cand ? 'ok' : 'no'); scheduleRepaint(); })
+      .catch(() => { wnReach.set(pk, 'no'); scheduleRepaint(); });
+  }
+  const wnFail = (e) => {
+    if (e && e.missing) toast(t('msgGroupSomeCant', { names: e.missing.map(displayName).join(', ') }));
+    else if (e && e.message === 'no signer') toast(t('msgNoIdentity'));
+    else toast(t('msgGroupFailed'));
+    dlog('chat: group', e);
+  };
+
+  async function wnCreateGroup() {
+    const members = (ui.msgGroupPicks || []).filter((pk) => !isMe(pk));
+    if (!members.length) { toast(t('msgGroupNeedPeople')); return; }
+    if (ui.msgBusy) return;
+    ui.msgBusy = true; render();
+    try {
+      const c = await whiteNoise();
+      if (!c) throw new Error('no signer');
+      // a group with no name is still a group once it has a third person;
+      // with two it would be a direct chat, so it takes a name
+      const name = (ui.msgGroupName || '').trim() || (members.length === 1 ? t('msgGroupUnnamed') : '');
+      const g = await c.create({ name, members });
+      ui.msgGroupPicks = []; ui.msgGroupName = ''; ui.msgGroupTo = ''; ui.msgHomePanel = null;
+      dmSearcher.clear();
+      ui.msgView = 'grp'; ui.msgPeer = g.id; ui.msgStick = true;
+    } catch (e) { wnFail(e); } finally { ui.msgBusy = false; render(); }
+  }
+
+  async function wnSend(g) {
+    const text = draftFor('wn:' + g.id).trim();
+    if (!text || !wn) return;
+    const replyTo = ui.msgReplyTo && wnFold(g).rows.some((m) => m.rumor.id === ui.msgReplyTo) ? ui.msgReplyTo : null;
+    ui.msgReplyTo = null;
+    ui.emojiAc = null;
+    const inner = wn.event(9, text, [...(replyTo ? [['e', replyTo]] : []), ...outboundEmojiTags(text, emojiUrl)]);
+    clearDraft('wn:' + g.id);
+    ui.msgStick = true;
+    // the engine logs our own event as it encrypts it, so it is on screen at once
+    const sent = wn.send(g, inner).catch(() => false);
+    wnFolds.delete(g.id);
+    render();
+    if (!(await sent)) { wnFolds.delete(g.id); toast(t('msgSendFailed')); render(); }
+  }
+
+  async function wnAct(fn) {
+    if (ui.msgBusy) return;
+    ui.msgBusy = true; render();
+    try { await fn(); } catch (e) { wnFail(e); } finally { ui.msgBusy = false; render(); }
   }
 
   // ---- views --------------------------------------------------------------
@@ -6369,6 +6652,7 @@ export function messagesFeature(ctx) {
     const id = await identity();
     if (!id) { noIdToast(); return; }
     if (!(id.signer instanceof Uint8Array) && !id.signer.encryptTo) { toast(t('msgSignerNoDm')); return; }
+    if (await wnRoute(peer).catch(() => null)) { toast(t('msgGroupNoFiles')); return; }
     ui.msgUploading = true; render();
     try {
       const enc = await encryptFile(file);
@@ -9409,6 +9693,22 @@ export function messagesFeature(ctx) {
     if (Date.now() - listsSyncedAt > 60_000) syncLists({ force: true }).catch(() => {});
     for (const jm of communities()) ensureRoom(jm);
 
+    // Group chats ride along: the client loads with the wallet, and standing
+    // on this screen is what makes us invitable (a KeyPackage on the relays).
+    whiteNoise().then(async (c) => {
+      if (!c || wnReadied) return;
+      wnReadied = true;
+      await c.load();
+      // A login signer has to sign the device's proof once, and may ask its
+      // owner. Unprompted, that question is put at most once a week.
+      if (!c.isSetUp() && hook('nostrLoginIdentity')) {
+        const s = st();
+        if (Date.now() - (s.wnAsked || 0) < 7 * 86400_000) return;
+        s.wnAsked = Date.now();
+        save(s);
+      }
+      c.ready().catch(() => {});
+    }).catch(() => {});
     for (const peer of threads.keys()) profileOf(peer); // names and faces, in one batch
     const dmRows = [...threads.entries()]
       .map(([peer, m]) => {
@@ -9428,6 +9728,7 @@ export function messagesFeature(ctx) {
       for (const room of rooms.values())
         for (const msgs of room.byChannel.values())
           newest = Math.max(newest, newestFrom(msgs.values(), (m) => !my.includes(m.author)));
+      for (const g of wnGroups()) newest = Math.max(newest, wnNewest(g));
       markRead(HOME_READ, newest);
     }
 
@@ -9448,6 +9749,7 @@ export function messagesFeature(ctx) {
 
     if (pendingLink && pendingLink.where !== 'communities') kids.push(linkInviteCard());
     for (const [rid, inv] of pendingDirect) kids.push(directInviteCard(rid, inv));
+    for (const g of wnGroups()) if (g.fresh && !g.removed) kids.push(wnInviteCard(g));
 
     // offer push once — it covers messages AND payments
     if (typeof Notification !== 'undefined' && Notification.permission === 'default' && !st().pushDismissed)
@@ -9472,7 +9774,10 @@ export function messagesFeature(ctx) {
     // ---- DMs
     kids.push(h('div', { class: 'row between', style: 'align-items:baseline' },
       h('h3', { style: 'margin:0' }, t('msgDmsTitle')),
-      h('button', { class: 'btn-sm', onClick: () => { ui.msgHomePanel = ui.msgHomePanel === 'newdm' ? null : 'newdm'; if (ui.msgHomePanel === 'newdm') warmSearch(); render(); } }, t('msgNewDm'))));
+      h('div', { class: 'row gap6' },
+        h('button', { class: 'btn-sm', onClick: () => { dmSearcher.clear(); ui.msgHomePanel = ui.msgHomePanel === 'newgroup' ? null : 'newgroup'; if (ui.msgHomePanel === 'newgroup') warmSearch(); render(); } }, t('msgNewGroup')),
+        h('button', { class: 'btn-sm', onClick: () => { dmSearcher.clear(); ui.msgHomePanel = ui.msgHomePanel === 'newdm' ? null : 'newdm'; if (ui.msgHomePanel === 'newdm') warmSearch(); render(); } }, t('msgNewDm')))));
+    if (ui.msgHomePanel === 'newgroup') kids.push(wnNewGroupPanel());
     if (ui.msgHomePanel === 'newdm') {
       const openThread = (pk) => {
         dmSearcher.clear();
@@ -9507,10 +9812,15 @@ export function messagesFeature(ctx) {
     // A long DM history must not bury the communities below it: past four,
     // the rest waits behind "show all". Communities get the same cap.
     const LIST_PREVIEW = 4;
-    const shownDms = ui.msgAllDms ? dmRows : dmRows.slice(0, LIST_PREVIEW);
+    // one list, newest first: a group chat is a conversation like any other
+    const chatRows = [
+      ...dmRows.map((x) => ({ at: x.last.rumor.created_at, dm: x })),
+      ...wnGroups().filter((g) => !g.fresh).map((g) => ({ at: (wnFold(g).rows.at(-1) || {}).rumor?.created_at || g.at, g })),
+    ].sort((a, b) => b.at - a.at);
+    const shownDms = ui.msgAllDms ? chatRows : chatRows.slice(0, LIST_PREVIEW);
     kids.push(
-      dmRows.length
-        ? h('div', { class: 'list' }, shownDms.map(({ peer, last, unread }) =>
+      chatRows.length
+        ? h('div', { class: 'list' }, shownDms.map((row) => row.g ? wnGroupRow(row.g) : (({ peer, last, unread }) =>
             h('div', {
               class: 'item chat-thread-row' + (unread ? ' unread' : ''),
               onClick: () => { ui.msgView = 'dm'; ui.msgPeer = peer; ui.msgStick = true; render(); },
@@ -9522,12 +9832,12 @@ export function messagesFeature(ctx) {
                 h('span', { class: 'chat-time thread-when' }, timeLabel(last.rumor.created_at * 1000))),
               h('div', { class: 'muted small chat-preview' }, (last.mine ? t('msgYouPrefix') + ' ' : '') + (last.rumor.kind === 15 ? '📎 ' + t('msgPhoto') : last.rumor.content))),
             // the row's own dot, centred and inset like the communities' below
-            unread ? h('i', { class: 'thread-dot' }) : null)))
+            unread ? h('i', { class: 'thread-dot' }) : null))(row.dm)))
         : h('div', { class: 'muted small' }, t('msgNoDms')));
-    if (shownDms.length < dmRows.length)
+    if (shownDms.length < chatRows.length)
       kids.push(h('button', { class: 'linklike small', onClick: () => { ui.msgAllDms = true; render(); } },
-        t('msgShowAllDms', { n: dmRows.length })));
-    else if (ui.msgAllDms && dmRows.length > LIST_PREVIEW)
+        t('msgShowAllDms', { n: chatRows.length })));
+    else if (ui.msgAllDms && chatRows.length > LIST_PREVIEW)
       kids.push(h('button', { class: 'linklike small', onClick: () => { ui.msgAllDms = false; render(); } },
         t('msgShowFewerDms')));
 
@@ -9901,6 +10211,264 @@ export function messagesFeature(ctx) {
       null);
   }
 
+  // ---- group chats (White Noise) --------------------------------------------
+
+  function wnGroupRow(g) {
+    const name = wnTitle(g);
+    const last = wnChat(g).at(-1);
+    const unread = wnUnread(g);
+    for (const pk of wn.accounts(g).slice(0, 12)) profileOf(pk);
+    return h('div', {
+      class: 'item chat-thread-row' + (unread ? ' unread' : ''),
+      onClick: () => { ui.msgView = 'grp'; ui.msgPeer = g.id; ui.msgStick = true; ui.msgMembers = false; render(); },
+    },
+    h('div', { class: 'chat-avatar fallback' }, name.slice(0, 2)),
+    h('div', { class: 'col grow', style: 'min-width:0;gap:1px' },
+      h('div', { class: 'row between' },
+        h('span', { class: 'chat-name' }, name),
+        last ? h('span', { class: 'chat-time thread-when' }, timeLabel(last.rumor.created_at * 1000)) : null),
+      h('div', { class: 'muted small chat-preview' },
+        g.removed ? t('msgGroupGone')
+          : last ? (last.mine ? t('msgYouPrefix') : displayName(last.rumor.pubkey) + ':') + ' ' + (last.rumor.content || '📎 ' + t('msgGroupAttachment'))
+          : t('msgMembers', { n: wn.accounts(g).length }))),
+    unread ? h('i', { class: 'thread-dot' }) : null);
+  }
+
+  function wnInviteCard(g) {
+    return h('div', { class: 'notice info col', style: 'gap:8px' },
+      h('div', {}, t('msgGroupInvite', { name: displayName(g.inviter), group: wnTitle(g) })),
+      h('div', { class: 'row gap6' },
+        h('button', {
+          class: 'btn-primary btn-sm',
+          onClick: () => { wn.accept(g); ui.msgView = 'grp'; ui.msgPeer = g.id; ui.msgStick = true; render(); },
+        }, t('msgJoin')),
+        h('button', {
+          class: 'btn-ghost btn-sm', disabled: ui.msgBusy,
+          onClick: () => wnAct(() => wn.leave(g)),
+        }, t('msgGroupDecline'))));
+  }
+
+  // Search, tap, and the person becomes a chip that says whether they can be
+  // reached. Shared by New group and a group's Add person.
+  function wnPeoplePicker(picks, onPick, onDrop) {
+    for (const pk of picks) { profileOf(pk); wnCheck(pk); }
+    const add = (pk) => { if (!isMe(pk) && !picks.includes(pk)) onPick(pk); dmSearcher.clear(); ui.msgGroupTo = ''; render(); };
+    return [
+      picks.length ? h('div', { class: 'row gap6', style: 'flex-wrap:wrap' }, picks.map((pk) => {
+        const state = wnReach.get(pk);
+        return h('span', { class: 'chat-react' + (state === 'no' ? ' muted' : ' on'), title: state === 'no' ? t('msgGroupCantJoin') : '' },
+          displayName(pk),
+          state === 'checking' ? ' · ' + t('msgGroupChecking') : state === 'no' ? ' · ' + t('msgGroupCantJoin') : '',
+          ' ', h('button', { class: 'linklike', 'aria-label': t('msgGroupRemove'), onClick: () => { onDrop(pk); render(); } }, '×'));
+      })) : null,
+      h('input', {
+        type: 'text', placeholder: t('msgGroupPeople'), value: ui.msgGroupTo || '',
+        onInput: (e) => { ui.msgGroupTo = e.target.value; dmSearcher.update(e.target.value); },
+        onKeydown: (e) => { if (e.key === 'Enter') { const pk = parseNostrPubkey(ui.msgGroupTo); if (pk) add(pk); } },
+      }),
+      dmSearch.rows === null ? null
+        : dmSearch.busy ? h('div', { class: 'row gap6', style: 'align-items:center;padding:4px 0' },
+            h('span', { class: 'spinner sm' }), h('span', { class: 'small muted' }, t('msgSearching')))
+        : dmSearch.rows.length
+          ? h('div', { class: 'list' }, resultRows(h, dmSearch.rows, (r) => add(r.pk), (pk, node) => hook('wrapAvatar', pk, node)))
+          : h('div', { class: 'small muted' }, t('msgNoMatches')),
+    ];
+  }
+
+  function wnNewGroupPanel() {
+    const picks = ui.msgGroupPicks || (ui.msgGroupPicks = []);
+    const ready = picks.length && picks.every((pk) => wnReach.get(pk) === 'ok');
+    return h('div', { class: 'col gap6' },
+      h('input', {
+        type: 'text', placeholder: t('msgGroupName'), maxlength: '64',
+        value: ui.msgGroupName || '', onInput: (e) => { ui.msgGroupName = e.target.value; },
+      }),
+      ...wnPeoplePicker(picks, (pk) => picks.push(pk), (pk) => picks.splice(picks.indexOf(pk), 1)),
+      h('div', { class: 'row' },
+        h('button', { class: 'btn-primary btn-sm', disabled: !ready || ui.msgBusy, onClick: wnCreateGroup },
+          ui.msgBusy ? h('span', { class: 'spinner sm' }) : t('msgGroupCreate'))));
+  }
+
+  function wnMemberPanel(g, admin) {
+    const v = wn.view(g);
+    const accounts = wn.accounts(g);
+    const picks = ui.msgGroupAdd || (ui.msgGroupAdd = []);
+    return h('div', { class: 'col chat-members' },
+      h('div', { class: 'muted small', style: 'padding:8px 12px 2px' }, t('msgGroupInfo')),
+      ...accounts.map((pk) => h('div', { class: 'item chat-thread-row', onClick: () => openProfile(pk) },
+        avatar(pk),
+        h('div', { class: 'row gap6 grow', style: 'align-items:center;min-width:0' },
+          h('span', { class: 'chat-name' }, displayName(pk)),
+          v.admins.includes(pk) ? h('span', { class: 'chat-badge' }, t('msgAdmin')) : null),
+        admin && !isMe(pk)
+          ? h('button', {
+              class: 'btn-ghost btn-sm', disabled: ui.msgBusy,
+              onClick: (e) => { e.stopPropagation(); wnAct(() => wn.kick(g, pk)); },
+            }, t('msgGroupRemove'))
+          : null)),
+      admin ? h('div', { class: 'col gap6 chat-invite' },
+        ...wnPeoplePicker(picks, (pk) => picks.push(pk), (pk) => picks.splice(picks.indexOf(pk), 1)),
+        picks.length ? h('div', { class: 'row' }, h('button', {
+          class: 'btn-primary btn-sm', disabled: ui.msgBusy || !picks.every((pk) => wnReach.get(pk) === 'ok'),
+          onClick: () => wnAct(async () => { await wn.add(g, [...picks]); ui.msgGroupAdd = []; }),
+        }, ui.msgBusy ? h('span', { class: 'spinner sm' }) : t('msgAddPerson'))) : null,
+        h('div', { class: 'row gap6' },
+          h('input', {
+            class: 'grow', type: 'text', placeholder: t('msgGroupName'), maxlength: '64',
+            value: ui.msgGroupNewName ?? v.name, onInput: (e) => { ui.msgGroupNewName = e.target.value; },
+          }),
+          h('button', {
+            class: 'btn-sm', disabled: ui.msgBusy,
+            onClick: () => {
+              const name = (ui.msgGroupNewName ?? v.name).trim();
+              if (name && name !== v.name) wnAct(async () => { await wn.rename(g, name); ui.msgGroupNewName = null; });
+            },
+          }, t('msgGroupRename')))) : null);
+  }
+
+  function wnSheet(g) {
+    const fold = wnFold(g);
+    const m = fold.rows.find((x) => x.rumor.id === ui.msgSheet);
+    if (!m) { ui.msgSheet = null; return null; }
+    const reacts = fold.reacts.get(m.rumor.id);
+    const myReact = reacts && myPubkeys().map((pk) => reacts.get(pk)).find(Boolean);
+    const close = () => { ui.msgSheet = null; ui.emojiPick = null; render(); };
+    const item = (icon, label, onClick) => h('button', { class: 'msg-sheet-item', onClick },
+      h('span', { class: 'msg-sheet-ico' }, icon), label);
+    return h('div', {
+      class: 'confirm-pop-backdrop',
+      onClick: (e) => { if (e.target === e.currentTarget) close(); },
+    },
+      h('div', { class: 'card col msg-sheet' },
+        g.removed ? null : reactRow(myReact, (e2) => { close(); sendWnReaction(g, m, e2); }),
+        ui.emojiPick || g.removed ? null : item('↩', t('msgReply'), () => {
+          ui.msgReplyTo = m.rumor.id;
+          close();
+          setTimeout(() => document.getElementById('msg-draft')?.focus(), 50);
+        }),
+        ui.emojiPick ? null : item('⧉', t('copy'), async () => {
+          try { await navigator.clipboard.writeText(m.rumor.content); toast(t('copied')); } catch {}
+          close();
+        }),
+        !ui.emojiPick && m.mine && !g.removed ? item('×', t('msgDelete'), async () => {
+          close();
+          const del = wn.event(5, '', [['e', m.rumor.id], ['k', '9']]);
+          if (await wn.send(g, del).catch(() => false)) onWn('message', g, del);
+        }) : null));
+  }
+
+  function wnView() {
+    const g = wn && wn.groups.get(ui.msgPeer);
+    if (!g) {
+      // the groups are still loading (a reload straight into this screen)
+      if (!wn || wnLoading) { whiteNoise().then(() => scheduleRepaint()); return h('div', { class: 'card col chat-card chat-page' }, h('span', { class: 'spinner' })); }
+      ui.msgView = 'home';
+      return homeView();
+    }
+    const fold = wnFold(g);
+    const v = wn.view(g);
+    const my = myPubkeys();
+    const accounts = wn.accounts(g);
+    const admin = wn.isAdmin(g) && !g.removed && !g.leaving;
+    const live = !g.removed && !g.leaving;
+    for (const pk of accounts) profileOf(pk);
+    markRead(wnRead(g.id), wnNewest(g));
+    stickToBottom();
+    const byId = new Map(fold.rows.map((m) => [m.rumor.id, m]));
+    const back = () => { ui.msgView = 'home'; ui.msgReplyTo = null; ui.msgSheet = null; ui.msgMembers = false; ui.msgLeaveArm = false; ui.msgGroupAdd = []; ui.msgGroupNewName = null; dmSearcher.clear(false); render(); };
+    let lastAuthor = null, lastT = 0;
+    const rows = fold.rows.map((m) => {
+      if (m.rumor.kind === 1210) {
+        lastAuthor = null;
+        return h('div', { class: 'muted small', style: 'text-align:center;padding:6px 0' }, wnSystemText(m.rumor));
+      }
+      const tms = m.rumor.created_at * 1000;
+      const grouped = m.rumor.pubkey === lastAuthor && tms - lastT < 5 * 60_000;
+      lastAuthor = m.rumor.pubkey; lastT = tms;
+      const em = emojiTagMap(m.rumor.tags);
+      const reacts = fold.reacts.get(m.rumor.id);
+      const counts = new Map();
+      if (reacts) for (const emoji of reacts.values()) counts.set(emoji, (counts.get(emoji) || 0) + 1);
+      const myReact = reacts && my.map((pk) => reacts.get(pk)).find(Boolean);
+      const replyId = (m.rumor.tags.find((x) => x[0] === 'e') || [])[1];
+      const src = replyId && byId.get(replyId);
+      const body = m.rumor.content
+        ? noteBody(m.rumor.content, 0, em)
+        : [h('span', { class: 'muted' }, '📎 ' + t('msgGroupAttachment'))];
+      return h('div', { class: 'chat-row' + (m.mine ? ' mine' : '') + (grouped ? ' grouped' : '') },
+        grouped ? h('div', { class: 'chat-avatar spacer' }) : avatar(m.rumor.pubkey),
+        h('div', { class: 'chat-body' },
+          grouped ? null : h('div', { class: 'chat-meta' },
+            h('span', { class: 'chat-name clickable', onClick: () => openProfile(m.rumor.pubkey) },
+              displayName(m.rumor.pubkey),
+              v.admins.includes(m.rumor.pubkey) ? h('span', { class: 'chat-badge' }, t('msgAdmin')) : null),
+            h('span', { class: 'chat-time' }, timeLabel(tms))),
+          h('div', {
+            class: 'chat-bubble clickable' + (emojiJumbo(m.rumor.content, em) ? ' jumbo' : ''),
+            onClick: (e) => {
+              if (e.target.closest && e.target.closest('a, button, img:not(.cemoji)')) return;
+              const sel = window.getSelection && window.getSelection();
+              if (sel && String(sel).length) return;
+              ui.msgSheet = ui.msgSheet === m.rumor.id ? null : m.rumor.id;
+              render();
+            },
+          },
+            src ? h('div', { class: 'chat-quote' },
+              h('span', { class: 'chat-quote-name' }, displayName(src.rumor.pubkey)),
+              h('span', { class: 'chat-quote-text' }, ...snippetNodes(src.rumor))) : null,
+            ...body,
+            m.edited ? h('span', { class: 'chat-edited' }, ' ', t('msgEdited')) : null,
+            counts.size ? h('div', { class: 'chat-reacts' },
+              [...counts.entries()].map(([emoji, n]) => h('span', {
+                class: 'chat-react clickable' + (emoji === myReact ? ' on' : ''),
+                onClick: (e) => { e.stopPropagation(); if (live) sendWnReaction(g, m, emoji); },
+              }, reactNode(emoji), n > 1 ? ' ' + n : ''))) : null)));
+    });
+    const reply = ui.msgReplyTo && byId.get(ui.msgReplyTo);
+    if (ui.msgReplyTo && !reply) ui.msgReplyTo = null;
+    return h('div', { class: 'card col chat-card chat-page' },
+      h('div', { class: 'row between chat-head' },
+        h('div', { class: 'row gap6', style: 'align-items:center;min-width:0' },
+          backBtn(back),
+          h('div', {
+            class: 'col clickable', style: 'gap:2px;min-width:0',
+            onClick: () => { ui.msgMembers = !ui.msgMembers; dmSearcher.clear(false); render(); },
+          },
+            h('div', { class: 'chat-title' }, wnTitle(g)),
+            h('div', { class: 'muted small' }, g.removed ? t('msgGroupGone') : t('msgMembers', { n: accounts.length })))),
+        h('div', { class: 'row gap6', style: 'align-items:center' },
+          admin ? h('button', {
+            class: 'btn-sm', onClick: () => { ui.msgMembers = !ui.msgMembers; dmSearcher.clear(false); render(); },
+          }, t('msgAddPerson')) : null,
+          // the door out: one tap arms it, the second leaves (same as a community)
+          h('button', {
+            class: 'btn-sm' + (ui.msgLeaveArm ? ' btn-danger' : ''), title: t('msgGroupLeave'), 'aria-label': t('msgGroupLeave'), disabled: ui.msgBusy,
+            onClick: () => {
+              if (!ui.msgLeaveArm) { ui.msgLeaveArm = true; render(); return; }
+              ui.msgLeaveArm = false;
+              wnAct(async () => { await wn.leave(g); ui.msgView = 'home'; });
+            },
+            html: ui.msgLeaveArm ? null : '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg>',
+          }, ui.msgLeaveArm ? t('msgLeaveConfirmShort') : null))),
+      ui.msgMembers ? wnMemberPanel(g, admin) : null,
+      h('div', {
+        class: 'chat-log',
+        onScroll: (e) => {
+          const el = e.target;
+          ui.msgStick = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
+        },
+      }, ...(rows.length ? rows : [h('div', { class: 'muted small', style: 'text-align:center;padding:24px 0' }, t('msgNoDmsYet'))])),
+      reply ? h('div', { class: 'reply-bar' },
+        h('div', { class: 'col grow', style: 'gap:1px;min-width:0' },
+          h('span', { class: 'small', style: 'font-weight:650' }, '↩ ', displayName(reply.rumor.pubkey)),
+          h('span', { class: 'small muted chat-quote-text' }, ...snippetNodes(reply.rumor))),
+        h('button', { class: 'chat-del', style: 'position:static;display:flex;flex-shrink:0', onClick: () => { ui.msgReplyTo = null; render(); } }, '×')) : null,
+      live
+        ? composer(t('msgDmPlaceholder'), () => wnSend(g), null, 'wn:' + g.id, null)
+        : h('div', { class: 'muted small', style: 'text-align:center;padding:12px' }, t('msgGroupGone')),
+      ui.msgSheet ? wnSheet(g) : null);
+  }
+
   // ---- dm thread ----------------------------------------------------------
 
   // The DM flavor of the message action sheet: reactions + Reply + Copy.
@@ -9938,6 +10506,8 @@ export function messagesFeature(ctx) {
     if (!peer) { ui.msgView = 'home'; return homeView(); }
     const thread = threads.get(peer) || new Map();
     const msgs = [...thread.values()].sort((a, b) => a.rumor.created_at - b.rumor.created_at);
+    // a first message may go by White Noise: have their KeyPackage looked up before Send
+    if (!msgs.some((m) => !m.mine)) whiteNoise().then((c) => c && c.lookup(peer)).catch(() => {});
     // Looking at the thread is reading it — including anything that lands while
     // it's still open, since every arrival repaints us.
     markRead(dmRead(peer), newestFrom(msgs, (m) => !m.mine));
@@ -10323,11 +10893,14 @@ export function messagesFeature(ctx) {
     if (ui.msgView === 'notifs') return notifView();
     if (ui.msgView === 'room') return roomView();
     if (ui.msgView === 'dm') return dmView();
+    if (ui.msgView === 'grp') return wnView();
     return homeView();
   }
 
   return {
     id: 'messages',
+    // group-chat state is device state in IndexedDB: it goes with the account
+    wipeCache(bases) { import('../marmot-store.js').then((m) => { for (const b of bases) m.wipeMarmot(b); }).catch(() => {}); },
     nostrSettingsCards() { return [followHistoryCard(), moderationCard()]; },
     // The app came back after being backgrounded. A phone freezes a hidden
     // tab: the relay sockets are cut and every post made in the meantime is
@@ -10613,6 +11186,12 @@ export function messagesFeature(ctx) {
         document.documentElement.style.removeProperty('--chat-viewport-height');
       });
       startDMs();
+      // Group chats: load this identity's groups once the boot rush is over.
+      // A seed-derived identity signs silently, so it also becomes invitable
+      // here; a login signer is only asked when Chat is opened.
+      setTimeout(() => {
+        whiteNoise().then((c) => { if (c && !hook('nostrLoginIdentity')) { wnReadied = true; c.ready().catch(() => {}); } }).catch(() => {});
+      }, 3000);
       // Communities are built from CACHE ONLY at boot (subscribe:false) — the
       // unread dot reads the last-known messages, but none of the gift-wrap
       // verify/decrypt runs until the user opens Chat (homeView subscribes
@@ -10637,6 +11216,9 @@ export function messagesFeature(ctx) {
       rooms.clear();
       threads.clear();
       pendingDirect.clear();
+      if (wn) { try { wn.stop(); } catch {} }
+      wn = null; wnLoading = null; wnReadied = false;
+      wnFolds.clear(); wnReach.clear(); wnReactOf.clear();
       seenWraps.clear(); wrapLog = null; // the next account must decrypt wraps this one couldn't
       clearTimeout(drainTimer);
       pendingWraps.clear();

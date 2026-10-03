@@ -144,7 +144,8 @@ try {
   await click('button', 'Join');
   check('the group opens', !!await waitText('2 members'));
   wn(['messages', 'send', gid, 'hello from white noise'], alice);
-  const arrived = !!await waitText('hello from white noise');
+  // on public relays a dropped socket is only noticed by the watchdog's next pass
+  const arrived = !!await waitText('hello from white noise', SITE ? 120000 : 20000);
   check('their message arrives', arrived);
   if (!arrived && process.env.DEBUG) {
     const chat = (wn(['chats', 'list'], alice).chats || []).find((c) => c.group_id === gid) || {};

@@ -150,6 +150,7 @@ On load and on a timer the wallet reconciles against its data source; a manual
 | `src/swap.js` | Boltz submarine/reverse swap engine |
 | `src/silentpay.js` / `src/sp-worker.js` | BIP-352 math + its Web Worker |
 | `src/nostr.js` | NIP-44 state sync, NIP-17 DMs, profiles |
+| `src/mls.js` / `src/marmot.js` / `src/marmot-client.js` | White Noise group chats: native-JS MLS (RFC 9420, one ciphersuite), the Marmot layer over it, and the per-device client (IndexedDB state, relay traffic) |
 | `src/electrum.js` / `src/scan.js` / `src/qr.js` | Electrum transport, camera QR scanner, QR rendering |
 | `src/app.js` | UI controller (vanilla DOM) + feature registry |
 | `build.js` / `dev.js` | Bun bundler → inlined `index.html` + PWA sidecars; dev server with regtest proxies |

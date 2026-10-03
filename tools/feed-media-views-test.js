@@ -203,6 +203,10 @@ try {
     const v = document.querySelectorAll('.mp-slide')[2].querySelector('video');
     return (v.getAttribute('poster') || '').startsWith('blob:') || (/#t=/.test(v.getAttribute('src') || '') && v.readyState >= 2); }, 5000));
   await shot('heavy');
+  await page.keyboard.press('ArrowUp'); await sleep(1200); await page.keyboard.press('ArrowDown'); await sleep(1500);
+  check('away and back, it still shows its picture', await waitFor(() => {
+    const v = document.querySelectorAll('.mp-slide')[2].querySelector('video');
+    return (v.getAttribute('poster') || '').startsWith('blob:') || (/#t=/.test(v.getAttribute('src') || '') && v.readyState >= 2); }, 5000));
   await page.evaluate(() => document.querySelectorAll('.mp-slide')[2].querySelector('.vid-heavy').click());
   check('a tap plays it', await waitFor(() => { const v = document.querySelectorAll('.media-pager video')[2]; return !v.paused && v.currentTime > 0; }, 6000));
   check('...without showing the overlay', !(await pagerState()).show);

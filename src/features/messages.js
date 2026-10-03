@@ -9917,6 +9917,16 @@ export function messagesFeature(ctx) {
           }) }, h('span', { class: 'i', html: I_ZAP }), h('span', { class: 'n' })))));
     slide._ev = ev;
     if (video) {
+      // readable pixels, so its frame can be kept; a host without CORS gets
+      // the same source again, plainly
+      media.crossOrigin = 'anonymous';
+      media.addEventListener('error', () => {
+        if (!media.hasAttribute('crossorigin') || !media.getAttribute('src')) return;
+        const src = media.getAttribute('src');
+        media.removeAttribute('crossorigin');
+        media.setAttribute('src', src);
+        if (pager && pager.cur === slide && !slide.querySelector('.vid-heavy')) media.play().catch(() => {});
+      });
       media.muted = !pagerLoud;
       media.addEventListener('click', () => {}); // a tap is the pager's (overlay), not the player's
     }
@@ -9961,17 +9971,20 @@ export function messagesFeature(ctx) {
     probeVideo(url).then(() => {
       if (!pager || pager.cur !== slide) return;
       if (videoHeavy(url)) {
-        if (slide.querySelector('.vid-heavy')) return;
         // under the cover, a picture of what it is: the kept frame, else the
         // first frame itself (only the start of the file, when it leads with
-        // its index or is served in ranges)
+        // its index or is served in ranges) — again on every return, since
+        // a slide left behind lets go of its file
         slidePoster(slide);
         const d = videoInfo.get(url) || {};
         if (!videoThumbs.has(url) && (d.faststart || d.ranges || !d.probed)) {
-          v.preload = 'metadata';
-          v.addEventListener('loadeddata', () => setTimeout(() => keepVideoThumb(v, url), 150), { once: true });
-          v.setAttribute('src', url + '#t=0.1');
+          if (!v.getAttribute('src')) {
+            v.preload = 'metadata';
+            v.addEventListener('loadeddata', () => setTimeout(() => keepVideoThumb(v, url), 150), { once: true });
+            v.setAttribute('src', url + '#t=0.1');
+          }
         } else pagerRelease(slide);
+        if (slide.querySelector('.vid-heavy')) return;
         slide.append(h('button', { class: 'vid-heavy', type: 'button', 'aria-label': t('videoTapToPlay'), onClick: (e) => {
           e.stopPropagation();
           tappedClips.add(url);
@@ -9994,6 +10007,8 @@ export function messagesFeature(ctx) {
     const v = slide.querySelector('video.mp-media');
     if (/#t=[\d.]+$/.test(v.getAttribute('src') || '')) v.setAttribute('src', v.getAttribute('data-src')); // the still's src: from the start now
     v.preload = 'auto';
+    const url = v.getAttribute('data-src');
+    if (!videoThumbs.has(url)) v.addEventListener('loadeddata', () => setTimeout(() => keepVideoThumb(v, url), 150), { once: true });
     pagerAttach(slide);
     v.muted = !pagerLoud;
     v.play().catch((err) => {

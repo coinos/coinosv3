@@ -191,6 +191,27 @@ try {
     check('his reply lands in the same thread', !!await waitText('hey, bob here'));
     await say('second message');
     check('a reply goes back the same way', !!await until(() => JSON.stringify(wn(['messages', 'list', dmGid, '--limit', '20'], bob)).includes('second message')));
+
+    console.log('\n[the route can be pinned by hand]');
+    const pill = () => page.evaluate(() => document.querySelector('.route-pill')?.textContent || '');
+    check('the thread says which way it sends', /White Noise/.test(await pill()), await pill());
+    const wrapsBefore = (await relayQuery({ kinds: [1059], '#p': [bob] })).length;
+    await page.click('.route-pill');
+    await sleep(250);
+    await click('.msg-sheet-item', 'Nostr DM');
+    await sleep(300);
+    check('the pill follows the pin', /Nostr DM/.test(await pill()), await pill());
+    await say('this one by dm');
+    check('a pinned Nostr DM goes out as a gift wrap', !!await until(async () => (await relayQuery({ kinds: [1059], '#p': [bob] })).length > wrapsBefore, 15000));
+    await sleep(1500);
+    check('and not into the White Noise chat', !JSON.stringify(wn(['messages', 'list', dmGid, '--limit', '20'], bob)).includes('this one by dm'));
+    await page.click('.route-pill');
+    await sleep(250);
+    await click('.msg-sheet-item', 'Automatic');
+    await sleep(300);
+    check('automatic follows their last message again', /White Noise/.test(await pill()), await pill());
+    await say('back on auto');
+    check('and sends by White Noise', !!await until(() => JSON.stringify(wn(['messages', 'list', dmGid, '--limit', '20'], bob)).includes('back on auto')));
   }
   await page.screenshot({ path: shot('marmot-dm.png') });
 
@@ -237,6 +258,7 @@ try {
   await click('button', 'Open');
   await say('plain old dm');
   check('the message shows', !!await waitText('plain old dm'));
+  check('no route choice where there is only one way', !(await page.$('.route-pill')));
   check('a gift wrap went to their inbox', !!await until(async () => (await relayQuery({ kinds: [1059], '#p': [stranger] })).length > 0, 15000));
   check('no group was founded for it', (await relayQuery({ kinds: [1059], '#p': [stranger] })).length <= 1);
 } catch (e) { console.log(e); ok = false; }

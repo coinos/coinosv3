@@ -3056,19 +3056,58 @@ export function messagesFeature(ctx) {
   // their last message came. A first message goes by White Noise only to
   // someone whose KeyPackage was published by another app: a coinos wallet
   // reads NIP-17 on every device it has, where an MLS group reaches just the
-  // one device whose KeyPackage was picked.
+  // one device whose KeyPackage was picked. A route pinned by hand in the
+  // thread header (st().route) overrides all of that.
+  const wnTheirs = (peer) => {
+    let theirs = null;
+    for (const m of threads.get(peer)?.values() || [])
+      if (!m.mine && (!theirs || m.rumor.created_at > theirs.rumor.created_at)) theirs = m;
+    return theirs;
+  };
+  const routePref = (peer) => (st().route || {})[peer] || 'auto';
   async function wnRoute(peer) {
     const c = await whiteNoise();
     if (!c) return null;
     await c.load();
+    const pref = routePref(peer);
+    if (pref === 'nip17') return null;
     const g = wnDirect(peer);
-    let theirs = null;
-    for (const m of threads.get(peer)?.values() || [])
-      if (!m.mine && (!theirs || m.rumor.created_at > theirs.rumor.created_at)) theirs = m;
+    const lookup = () => Promise.race([c.lookup(peer), new Promise((r) => setTimeout(() => r(null), 3500))]);
+    if (pref === 'wn') return g || ((await lookup()) ? 'new' : null);
+    const theirs = wnTheirs(peer);
     if (g) return theirs && !theirs.wn ? null : g;
     if (theirs) return null;
-    const cand = await Promise.race([c.lookup(peer), new Promise((r) => setTimeout(() => r(null), 3500))]);
+    const cand = await lookup();
     return cand && cand.client !== 'coinos' ? 'new' : null;
+  }
+
+  // The same decision without waiting, for the thread header: which way the
+  // next message will go and what was pinned — or null when there is nothing
+  // to choose (they are not on White Noise, or only through another coinos
+  // wallet, where NIP-17 is simply the better road).
+  const wnCands = new Map(); // peer -> { at, cand } : their KeyPackage, as last looked up
+  function wnKnow(peer) {
+    const hit = wnCands.get(peer);
+    if (hit && Date.now() - hit.at < 10 * 60_000) return;
+    wnCands.set(peer, { at: Date.now(), cand: hit ? hit.cand : undefined });
+    whiteNoise().then((c) => (c ? c.lookup(peer) : null)).then((cand) => {
+      wnCands.set(peer, { at: Date.now(), cand: cand || null });
+      scheduleRepaint();
+    }).catch(() => {});
+  }
+  function routeChoice(peer) {
+    if (!wn) return null;
+    const g = wnDirect(peer), cand = (wnCands.get(peer) || {}).cand;
+    if (!g && !(cand && cand.client !== 'coinos')) return null;
+    const pref = routePref(peer), theirs = wnTheirs(peer);
+    const auto = g ? (theirs && !theirs.wn ? 'nip17' : 'wn') : (theirs ? 'nip17' : 'wn');
+    return { pref, now: pref === 'auto' ? auto : pref };
+  }
+  function setRoute(peer, pref) {
+    const s = st();
+    s.route ||= {};
+    if (pref === 'auto') delete s.route[peer]; else s.route[peer] = pref;
+    save(s);
   }
 
   async function sendWnDirect(peer, road, text) {
@@ -10508,6 +10547,28 @@ export function messagesFeature(ctx) {
         })));
   }
 
+  // How messages to this person travel: automatic unless pinned.
+  function routeSheet(peer, choice) {
+    const close = () => { ui.msgRoutePick = false; render(); };
+    const item = (pref, label, hint) => h('button', {
+      class: 'msg-sheet-item', 'aria-pressed': String(choice.pref === pref),
+      onClick: () => { setRoute(peer, pref); close(); },
+    },
+      h('span', { class: 'msg-sheet-ico' }, choice.pref === pref ? '✓' : ''),
+      h('span', { class: 'col', style: 'gap:1px;text-align:left' },
+        h('span', {}, label),
+        h('span', { class: 'muted small' }, hint)));
+    return h('div', {
+      class: 'confirm-pop-backdrop',
+      onClick: (e) => { if (e.target === e.currentTarget) close(); },
+    },
+      h('div', { class: 'card col msg-sheet' },
+        h('div', { class: 'muted small', style: 'padding:4px 10px 6px' }, t('msgRouteTitle')),
+        item('auto', t('msgRouteAuto'), t('msgRouteAutoHint')),
+        item('wn', t('msgRouteWn'), t('msgRouteWnHint')),
+        item('nip17', t('msgRouteDm'), t('msgRouteDmHint'))));
+  }
+
   function dmView() {
     startDMs();
     const peer = ui.msgPeer;
@@ -10515,7 +10576,8 @@ export function messagesFeature(ctx) {
     const thread = threads.get(peer) || new Map();
     const msgs = [...thread.values()].sort((a, b) => a.rumor.created_at - b.rumor.created_at);
     // a first message may go by White Noise: have their KeyPackage looked up before Send
-    if (!msgs.some((m) => !m.mine)) whiteNoise().then((c) => c && c.lookup(peer)).catch(() => {});
+    wnKnow(peer);
+    const choice = routeChoice(peer);
     // Looking at the thread is reading it — including anything that lands while
     // it's still open, since every arrival repaints us.
     markRead(dmRead(peer), newestFrom(msgs, (m) => !m.mine));
@@ -10555,11 +10617,17 @@ export function messagesFeature(ctx) {
     };
     return h('div', { class: 'card col chat-card chat-page' },
       h('div', { class: 'row chat-head gap6', style: 'align-items:center' },
-        backBtn(() => { ui.msgView = 'home'; ui.msgReplyTo = null; ui.msgSheet = null; render(); }),
+        backBtn(() => { ui.msgView = 'home'; ui.msgReplyTo = null; ui.msgSheet = null; ui.msgRoutePick = false; render(); }),
         avatar(peer),
         h('div', { class: 'col clickable', style: 'gap:2px;min-width:0', onClick: () => openProfile(peer) },
           h('div', { class: 'chat-title' }, displayName(peer)),
-          h('div', { class: 'muted small' }, t('msgDmEncrypted')))),
+          h('div', { class: 'muted small' }, t('msgDmEncrypted'))),
+        // Only where there is a choice: this person can be reached two ways.
+        // The pill says which way the next message goes; tapping it pins one.
+        choice ? h('button', {
+          class: 'btn-sm route-pill', style: 'margin-left:auto;flex-shrink:0', title: t('msgRouteTitle'), 'aria-haspopup': 'true',
+          onClick: () => { ui.msgRoutePick = !ui.msgRoutePick; render(); },
+        }, t(choice.now === 'wn' ? 'msgRouteWn' : 'msgRouteDm'), ' ▾') : null),
       h('div', {
         class: 'chat-log',
         onScroll: (e) => {
@@ -10586,7 +10654,8 @@ export function messagesFeature(ctx) {
         : [h('div', { class: 'muted small', style: 'text-align:center;padding:24px 0' }, t('msgNoDmsYet'))])),
       dmReplyBar(),
       composer(t('msgDmPlaceholder'), () => sendDM(peer), null, 'dm:' + peer, (f) => sendDMFile(peer, f)),
-      ui.msgSheet ? dmSheet(peer) : null);
+      ui.msgSheet ? dmSheet(peer) : null,
+      choice && ui.msgRoutePick ? routeSheet(peer, choice) : null);
   }
 
   // ---- notifications: what happened to your posts --------------------------
@@ -11226,7 +11295,7 @@ export function messagesFeature(ctx) {
       pendingDirect.clear();
       if (wn) { try { wn.stop(); } catch {} }
       wn = null; wnLoading = null; wnReadied = false;
-      wnFolds.clear(); wnReach.clear(); wnReactOf.clear();
+      wnFolds.clear(); wnReach.clear(); wnReactOf.clear(); wnCands.clear();
       seenWraps.clear(); wrapLog = null; // the next account must decrypt wraps this one couldn't
       clearTimeout(drainTimer);
       pendingWraps.clear();

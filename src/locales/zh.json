@@ -912,5 +912,8 @@
   "videoTapToPlay": "点按播放",
   "videoLargeTitle": "视频",
   "videoLargeToggle": "自动播放大视频",
-  "videoLargeHelp": "超过 {mb} MB 或高于 1080p 的视频会等你点按再播放，以免动态耗尽流量。在慢速或省流量连接下，上限更低。"
+  "videoLargeHelp": "超过 {mb} MB 或高于 1080p 的视频会等你点按再播放，以免动态耗尽流量。在慢速或省流量连接下，上限更低。",
+  "arkLnRenewing": "没有发送任何款项。{sats} sats 正在续期，在续期于比特币网络确认之前无法使用：通常约十分钟，有时一小时或更久。请到时再试。",
+  "arkLnShort": "余额不足：这笔付款连同手续费需要 {need} sats，可用 {have} sats。",
+  "arkCoinsRenewLock": "续期中的币在该轮交易于比特币网络确认之前无法使用：通常约十分钟，有时一小时或更久。把所有币都续期，期间就没有可用于付款的余额。"
 }

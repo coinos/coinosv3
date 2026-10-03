@@ -111,6 +111,33 @@ export function lnSendFee(amountSat, fees, inputs, tip) {
   return Math.max(fees.minFeeSat || 0, (fees.baseFeeSat || 0) + ppmFee);
 }
 
+// Why the spendable coins can't cover a payment, so the wallet can say so
+// instead of "Payment failed". Coins a renewal took are 'pending' until its
+// round's transaction confirms on-chain — ten minutes, or an hour — which is
+// nothing like the seconds an in-flight payment or a revocation holds a coin
+// for. (A user renewed their whole balance from the coins page, tried to pay
+// three minutes later, and was told only that the payment failed.)
+//   'settling' — money held by another payment frees itself shortly: wait
+//   'renewing' — the balance would cover it, but a renewal holds it
+//   'short'    — there isn't enough, whatever is pending
+export function lnShortfall(vtxos, actions, amountSat) {
+  const live = (actions || []).filter((a) => !['done', 'failed'].includes(a.step));
+  const idsOf = (a) => [...(a.inputIds || []), ...(a.vtxoId ? [a.vtxoId] : [])];
+  const renewIds = new Set(live.filter((a) => a.type === 'refresh').flatMap(idsOf));
+  // coins on their way OUT (to Savings, or a unilateral exit) are pending
+  // too, and are never coming back to pay with
+  const leavingIds = new Set(live.filter((a) => a.type === 'offboard' || a.type === 'exit').flatMap(idsOf));
+  const sum = (list) => list.reduce((n, v) => n + v.amountSat, 0);
+  const pending = (vtxos || []).filter((v) => v.state === 'pending' && !leavingIds.has(v.id));
+  const spendableSat = sum((vtxos || []).filter((v) => v.state === 'spendable'));
+  const renewingSat = sum(pending.filter((v) => renewIds.has(v.id)));
+  const settlingSat = sum(pending.filter((v) => !renewIds.has(v.id)));
+  const kind = settlingSat > 0 && spendableSat + settlingSat >= amountSat ? 'settling'
+    : renewingSat > 0 && spendableSat + settlingSat + renewingSat >= amountSat ? 'renewing'
+      : 'short';
+  return { kind, spendableSat, renewingSat, settlingSat };
+}
+
 export const lnReceiveFee = (amountSat, fees) =>
   (fees.baseFeeSat || 0) + Math.ceil((amountSat * (fees.ppm || 0)) / 1_000_000);
 

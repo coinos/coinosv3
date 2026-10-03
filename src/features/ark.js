@@ -9,7 +9,7 @@ import { sha256 } from '@noble/hashes/sha256';
 import { ArkManager } from '../ark/manager.js';
 import { loadBg, saveBg, buildBg, disarmSiblingRecords } from '../nwc-bg.js';
 import { boardFee, p2trAddress } from '../ark/board.js';
-import { maybeBolt11, maybeLnInvoice, lnSendFee } from '../ark/lightning.js';
+import { maybeBolt11, maybeLnInvoice, lnSendFee, lnShortfall } from '../ark/lightning.js';
 import { decodeVtxo, getVtxoStatus, VTXO_STATE_SPENT, concatBytes, vtxoBytesFromStr, vtxoBytesToHex, decodeAddress, arkIdFromServerPubkey, getArkInfo } from '../ark/proto.js';
 import { arkStore } from '../ark/store.js';
 import { signedExitTxs, exitTxVsizes, buildBumpChild, buildExitClaim, submitPackage } from '../ark/exit.js';
@@ -1062,8 +1062,8 @@ export function arkFeature(ctx) {
       }
     }
     if (fee == null) {
-      const pendingCover = mgr.vtxos().some((v) => v.state === 'pending' && v.amountSat >= p.amountSat);
-      if (pendingCover) {
+      const why = lnShortfall(mgr.vtxos(), mgr.state.actions, p.amountSat);
+      if (why.kind === 'settling') {
         p.status = 'fundsPending';
         render();
         mgr.resumePending().catch(() => {}); // nudge whatever holds them
@@ -1072,9 +1072,16 @@ export function arkFeature(ctx) {
         }, 4000);
         return;
       }
-      // can't cover once fees are in
+      // Say why. A renewal holds its coins until the round confirms on-chain
+      // (not seconds: no spinner for that); otherwise there simply isn't
+      // enough once the fee is in — and that is not "Payment failed".
       ui.arkLnPay = null;
-      ui.sendError = t('arkLnPayFailed');
+      ui.sendError = why.kind === 'renewing'
+        ? t('arkLnRenewing', { sats: fmtSats(why.renewingSat) })
+        : t('arkLnShort', {
+            need: fmtSats(p.amountSat + lnSendFee(p.amountSat, mgr.info.lnSendFees, spendables, tip) + routing),
+            have: fmtSats(why.spendableSat),
+          });
       render();
       return;
     }
@@ -2412,7 +2419,10 @@ export function arkFeature(ctx) {
           !selCoins.length ? t('arkCoinsRenewNone')
             : selCoins.length < spend.length
               ? t('arkCoinsRenewSome', { n: selCoins.length, fee: selFee > 0 ? fmtSats(selFee) + ' sats' : t('arkDepthFree') })
-              : selFee > 0 ? t('arkCoinsRenewNowFee', { fee: fmtSats(selFee) + ' sats' }) : t('arkDepthRenewBtn'))),
+              : selFee > 0 ? t('arkCoinsRenewNowFee', { fee: fmtSats(selFee) + ' sats' }) : t('arkDepthRenewBtn')),
+        // said before the tap: a renewal takes its coins out of reach until
+        // the round's transaction confirms, and by default it takes them all
+        !spend.length ? null : h('div', { class: 'notice info small ark-renew-lock' }, t('arkCoinsRenewLock'))),
       h('div', { class: 'card col', style: 'gap:8px' },
         h('h4', { style: 'margin:0' }, t('arkCoinsCoopTitle')),
         h('p', { class: 'small muted', style: 'margin:0' }, t('arkCoopDesc')),

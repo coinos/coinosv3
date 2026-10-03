@@ -248,5 +248,8 @@
   "videoTapToPlay": "Chạm để phát",
   "videoLargeTitle": "Video",
   "videoLargeToggle": "Tự động phát video lớn",
-  "videoLargeHelp": "Video trên {mb} MB hoặc cao hơn 1080p sẽ chờ bạn chạm, để bảng tin không ngốn dữ liệu. Giới hạn thấp hơn khi kết nối chậm hoặc tiết kiệm dữ liệu."
+  "videoLargeHelp": "Video trên {mb} MB hoặc cao hơn 1080p sẽ chờ bạn chạm, để bảng tin không ngốn dữ liệu. Giới hạn thấp hơn khi kết nối chậm hoặc tiết kiệm dữ liệu.",
+  "arkLnRenewing": "Chưa gửi gì cả. {sats} sats đang được gia hạn và không thể chi tiêu cho đến khi việc gia hạn được xác nhận trên mạng Bitcoin: thường khoảng mười phút, đôi khi một giờ hoặc hơn. Hãy thử lại sau.",
+  "arkLnShort": "Không đủ số dư: khoản thanh toán này cần {need} sats gồm cả phí, và hiện có {have}.",
+  "arkCoinsRenewLock": "Coin đang gia hạn không thể chi tiêu cho đến khi giao dịch của vòng được xác nhận trên mạng Bitcoin: thường khoảng mười phút, đôi khi một giờ hoặc hơn. Gia hạn mọi coin nghĩa là trong lúc đó không còn gì để thanh toán."
 }

@@ -912,5 +912,8 @@
   "videoTapToPlay": "Toca para reproducir",
   "videoLargeTitle": "Vídeos",
   "videoLargeToggle": "Reproducir vídeos grandes automáticamente",
-  "videoLargeHelp": "Los vídeos de más de {mb} MB o por encima de 1080p esperan a que los toques, para que el feed no se coma tus datos. El límite es menor con una conexión lenta o en ahorro de datos."
+  "videoLargeHelp": "Los vídeos de más de {mb} MB o por encima de 1080p esperan a que los toques, para que el feed no se coma tus datos. El límite es menor con una conexión lenta o en ahorro de datos.",
+  "arkLnRenewing": "No se envió nada. {sats} sats se están renovando y no pueden gastarse hasta que la renovación se confirme en la red Bitcoin: normalmente unos diez minutos, a veces una hora o más. Inténtalo entonces.",
+  "arkLnShort": "No hay suficiente en Gastos: este pago necesita {need} sats con su comisión, y hay {have} disponibles.",
+  "arkCoinsRenewLock": "Las monedas en renovación no pueden gastarse hasta que la transacción de la ronda se confirme en la red Bitcoin: normalmente unos diez minutos, a veces una hora o más. Renovar todas las monedas no deja nada con que pagar mientras tanto."
 }

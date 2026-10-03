@@ -911,5 +911,8 @@
   "videoTapToPlay": "Oynatmak için dokun",
   "videoLargeTitle": "Videolar",
   "videoLargeToggle": "Büyük videoları otomatik oynat",
-  "videoLargeHelp": "{mb} MB’den büyük veya 1080p’nin üzerindeki videolar, akış verini tüketmesin diye dokunmanı bekler. Yavaş ya da veri tasarruflu bağlantıda sınır daha düşüktür."
+  "videoLargeHelp": "{mb} MB’den büyük veya 1080p’nin üzerindeki videolar, akış verini tüketmesin diye dokunmanı bekler. Yavaş ya da veri tasarruflu bağlantıda sınır daha düşüktür.",
+  "arkLnRenewing": "Hiçbir şey gönderilmedi. {sats} sats yenileniyor ve yenileme Bitcoin ağında onaylanana kadar harcanamaz: genellikle on dakika kadar, bazen bir saat veya daha fazla. Sonra tekrar dene.",
+  "arkLnShort": "Yeterli bakiye yok: bu ödeme ücretiyle birlikte {need} sats gerektiriyor, kullanılabilir olan {have}.",
+  "arkCoinsRenewLock": "Yenilenen coinler, turun işlemi Bitcoin ağında onaylanana kadar harcanamaz: genellikle on dakika kadar, bazen bir saat veya daha fazla. Tüm coinleri yenilemek, bu sürede ödeme yapacak bir şey bırakmaz."
 }

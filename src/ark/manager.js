@@ -33,6 +33,7 @@ import {
   requestLightningPayHtlcRevocation, startLightningReceive, checkLightningReceive,
   prepareLightningReceiveClaim, claimLightningReceive, cancelLightningReceive,
   lightningReceiveAttestation,
+  lnShortfall,
 } from './lightning.js';
 import {
   boardFee, p2trAddress, buildBoard, requestBoardCosign,
@@ -868,8 +869,11 @@ export class ArkManager {
     const expiredSat = this.state.vtxos
       .filter((v) => v.state === 'spendable' && this._expired(v, tip))
       .reduce((n, v) => n + v.amountSat, 0);
-    return expiredSat
-      ? `insufficient ark balance (${expiredSat} sat expired and unusable)`
+    if (expiredSat) return `insufficient ark balance (${expiredSat} sat expired and unusable)`;
+    // coins a renewal took stay unspendable until its round confirms on-chain
+    const renewing = lnShortfall(this.state.vtxos, this.state.actions, Infinity).renewingSat;
+    return renewing
+      ? `insufficient ark balance (${renewing} sat are being renewed and can't be spent until the renewal confirms on-chain)`
       : 'insufficient ark balance';
   }
 

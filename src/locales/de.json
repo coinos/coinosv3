@@ -912,5 +912,8 @@
   "videoTapToPlay": "Zum Abspielen tippen",
   "videoLargeTitle": "Videos",
   "videoLargeToggle": "Große Videos automatisch abspielen",
-  "videoLargeHelp": "Videos über {mb} MB oder über 1080p warten auf einen Tipp, damit der Feed nicht dein Datenvolumen frisst. Bei langsamer Verbindung oder Datensparmodus ist die Grenze niedriger."
+  "videoLargeHelp": "Videos über {mb} MB oder über 1080p warten auf einen Tipp, damit der Feed nicht dein Datenvolumen frisst. Bei langsamer Verbindung oder Datensparmodus ist die Grenze niedriger.",
+  "arkLnRenewing": "Es wurde nichts gesendet. {sats} Sats werden gerade erneuert und können erst ausgegeben werden, wenn die Erneuerung im Bitcoin-Netzwerk bestätigt ist: meist etwa zehn Minuten, manchmal eine Stunde oder länger. Versuche es dann erneut.",
+  "arkLnShort": "Nicht genug im Ausgabenkonto: Diese Zahlung braucht mit Gebühr {need} Sats, verfügbar sind {have}.",
+  "arkCoinsRenewLock": "Coins in Erneuerung können erst ausgegeben werden, wenn die Transaktion der Runde im Bitcoin-Netzwerk bestätigt ist: meist etwa zehn Minuten, manchmal eine Stunde oder länger. Wer alle Coins erneuert, kann in der Zwischenzeit nichts bezahlen."
 }

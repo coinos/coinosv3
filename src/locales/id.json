@@ -248,5 +248,8 @@
   "videoTapToPlay": "Ketuk untuk memutar",
   "videoLargeTitle": "Video",
   "videoLargeToggle": "Putar otomatis video besar",
-  "videoLargeHelp": "Video di atas {mb} MB atau lebih dari 1080p menunggu ketukan, agar feed tidak menghabiskan kuota. Batasnya lebih rendah di koneksi lambat atau mode hemat data."
+  "videoLargeHelp": "Video di atas {mb} MB atau lebih dari 1080p menunggu ketukan, agar feed tidak menghabiskan kuota. Batasnya lebih rendah di koneksi lambat atau mode hemat data.",
+  "arkLnRenewing": "Tidak ada yang terkirim. {sats} sats sedang diperbarui dan tidak bisa dibelanjakan sampai pembaruan terkonfirmasi di jaringan Bitcoin: biasanya sekitar sepuluh menit, kadang satu jam atau lebih. Coba lagi nanti.",
+  "arkLnShort": "Saldo tidak cukup: pembayaran ini butuh {need} sats termasuk biayanya, dan yang tersedia {have}.",
+  "arkCoinsRenewLock": "Koin yang sedang diperbarui tidak bisa dibelanjakan sampai transaksi ronde terkonfirmasi di jaringan Bitcoin: biasanya sekitar sepuluh menit, kadang satu jam atau lebih. Memperbarui semua koin berarti tidak ada yang bisa dipakai membayar untuk sementara."
 }
